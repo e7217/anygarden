@@ -296,6 +296,7 @@ class TestAskPeerPostsAtOnce:
 
 class TestFanIn:
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
     async def test_caller_reply_becomes_a_draft_and_the_caller_is_woken_with_answers(
         self, ws_env
     ) -> None:
@@ -354,6 +355,7 @@ class TestFanIn:
             assert needle in wake.content
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
     async def test_deadline_times_out_silent_peers_and_still_wakes(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
@@ -444,6 +446,7 @@ class TestFanIn:
         assert len(groups) == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
     async def test_a_group_is_woken_only_once(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
@@ -494,6 +497,56 @@ class TestFanIn:
         async with sf() as db:
             wake_turn = await db.get(AgentTurn, group.wake_request_id)
         assert wake_turn.thread_root_id == root["id"]
+
+
+async def _bind_open_turn_to_task(sf, room, participant_id: str, status: str) -> str:
+    """Make the caller's current turn a task turn (an execution worker or a
+    promoted general task asking a peer mid-task)."""
+    from anygarden.db.models import Task
+
+    turn = await _open_turn(sf, participant_id)
+    async with sf() as db:
+        task = Task(room_id=room.id, title="write the notes", status=status,
+                    assignee_participant_id=participant_id)
+        db.add(task)
+        await db.flush()
+        (await db.get(AgentTurn, turn.request_id)).task_id = task.id
+        await db.commit()
+        return task.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("COL-06")
+@pytest.mark.parametrize(("status", "inherits"), [("in_progress", True), ("done", False)])
+async def test_wake_turn_keeps_the_callers_open_task(ws_env, status, inherits) -> None:
+    """A task turn that asks a peer must resume on the same task, or the
+    resumed turn cannot report the task done and it stays in_progress
+    forever (benchmark DL-03 team, 2026-10-12). A task already finished
+    while waiting is not re-bound."""
+    app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+    sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+    peer_token = await _add_token(sf, peer_pid)
+    with TestClient(app) as client:
+        trigger = _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 문서 작성")
+        task_id = await _bind_open_turn_to_task(sf, room, sender_pid, "in_progress")
+        _ask_peer(client, sender_token, room.id, [(peer_pid, "검토해 줘")])
+        caller_proof = await _proof(sf, sender_pid)
+        _agent_send(client, room.id, sender_token, "초안 완료", caller_proof)
+        await _wait_turn_state(sf, caller_proof["request_id"], "completed")
+        if status != "in_progress":
+            from anygarden.db.models import Task
+
+            async with sf() as db:
+                (await db.get(Task, task_id)).status = status
+                await db.commit()
+        _agent_send(client, room.id, peer_token, "검토 끝",
+                    await _proof(sf, peer_pid), thread_root_id=trigger["id"])
+        assert await dispatch_peer_ask_groups(sf, app.state.connection_manager) == 1
+
+    group = await _group(sf)
+    async with sf() as db:
+        wake_turn = await db.get(AgentTurn, group.wake_request_id)
+    assert wake_turn.task_id == (task_id if inherits else None)
 
 
 class _FakeManager:
@@ -738,3 +791,48 @@ class TestReviewFixes:
             # The failed claim rolled back and is retried on the next tick.
             assert (await db.get(PeerAskGroup, "bad-group")).state == "ready"
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("COL-06")
+async def test_three_peer_ask_wakes_the_caller_once_with_every_outcome(ws_env) -> None:
+    """Asking three peers wakes the caller exactly once, after every peer
+    has answered or timed out, with all three outcomes in one message."""
+    app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+    sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+    second_pid = await _add_running_agent(sf, room, "agent01")
+    third_pid = await _add_running_agent(sf, room, "agent02")
+    peer_token = await _add_token(sf, peer_pid)
+    second_token = await _add_token(sf, second_pid)
+
+    with TestClient(app) as client:
+        trigger = _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+        _ask_peer(client, sender_token, room.id, [
+            (peer_pid, "디스크"), (second_pid, "메모리"), (third_pid, "네트워크"),
+        ])
+        _agent_send(client, room.id, sender_token, "초안", await _proof(sf, sender_pid))
+        _agent_send(client, room.id, peer_token, "디스크 OK",
+                    await _proof(sf, peer_pid), thread_root_id=trigger["id"])
+        _agent_send(client, room.id, second_token, "메모리 OK",
+                    await _proof(sf, second_pid), thread_root_id=trigger["id"])
+        # The third peer is still silent: no wake yet.
+        assert await dispatch_peer_ask_groups(sf, None) == 0
+        async with sf() as db:
+            group = (await db.scalars(select(PeerAskGroup))).one()
+            group.deadline_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await db.commit()
+        assert await dispatch_peer_ask_groups(sf, None) == 1
+        assert await dispatch_peer_ask_groups(sf, None) == 0
+
+    targets = await _targets(sf)
+    assert targets[third_pid].state == "timeout"
+    async with sf() as db:
+        group = (await db.scalars(select(PeerAskGroup))).one()
+        wakes = (await db.scalars(select(AgentTurn).where(
+            AgentTurn.target_participant_id == sender_pid,
+        ))).all()
+        wake = await db.get(Message, (await db.get(AgentTurn, group.wake_request_id)).trigger_message_id)
+    assert group.state == "woken"
+    assert len(wakes) == 2  # the original turn and exactly one wake
+    for needle in ("디스크 OK", "메모리 OK", "timeout (deadline)"):
+        assert needle in wake.content

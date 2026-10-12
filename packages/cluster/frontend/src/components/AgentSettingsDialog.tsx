@@ -27,6 +27,7 @@ import PresenceDot from '@/components/PresenceDot'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile, AttachedSkill, SkillPreview, EngineCatalog } from '@/hooks/useAgents'
 import OverviewPanel from '@/components/agent-settings/OverviewPanel'
+import type { EngineChange } from '@/components/agent-settings/EngineChangeDialog'
 import ModelConnectionPanel, { type ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
@@ -77,6 +78,10 @@ interface Props {
    *  know about (e.g. ``echo`` dev-only); OverviewPanel hides the
    *  dropdowns in that case. */
   fetchEngineCatalog?: (engine: string) => Promise<EngineCatalog | null>
+  /** #769 — in-place engine switch; the Overview "Change" button is hidden
+   *  unless both are provided and another engine is available. */
+  changeAgentEngine?: (id: string, change: EngineChange) => Promise<Agent>
+  availableEngines?: string[]
   /** Fired when Rooms panel mutates so the caller can refresh its
    *  own derived state (e.g. comma-joined room names in a machine
    *  detail view). */
@@ -157,6 +162,8 @@ export default function AgentSettingsDialog({
   fetchAttachedSkills,
   fetchSkillPreview,
   fetchEngineCatalog,
+  changeAgentEngine,
+  availableEngines,
   onRoomsChange,
   onDelete,
   contextWindowOptOut,
@@ -298,6 +305,8 @@ export default function AgentSettingsDialog({
                   agent={agent}
                   updateAgent={updateAgent}
                   fetchEngineCatalog={fetchEngineCatalog}
+                  changeAgentEngine={changeAgentEngine}
+                  availableEngines={availableEngines}
                   connectionState={connectionState}
                   recentTurn={
                     <RecentTurnSummary

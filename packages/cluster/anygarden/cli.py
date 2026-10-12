@@ -414,7 +414,8 @@ def start_node(
         cert, key = peer_dir / "peer-cert.pem", peer_dir / "peer-key.pem"
         if not (cert.exists() and key.exists()):
             raise click.ClickException(
-                f"--peer-port requires peer credentials; create them first under {peer_dir} "
+                f"--peer-port requires peer credentials under {peer_dir}; create them with "
+                f"`anygarden federation init-credentials --data-dir {data_dir}` "
                 "(explicit local setup, startup never generates or rotates them)"
             )
         config.peer_listen_port = peer_port
@@ -484,3 +485,120 @@ def stop_local_node(data_dir: Path, timeout: float) -> None:
     except (NodeOwnershipError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo("AnyGarden node stopped; local process cleanup confirmed")
+
+
+@dispatch.group(name="federation")
+def federation_group() -> None:
+    """Federation (peer) setup for an integrated node."""
+
+
+@federation_group.command(name="init-credentials")
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=lambda: Path.home() / ".anygarden",
+    show_default="~/.anygarden",
+)
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="ANYGARDEN_* .env file (honours ANYGARDEN_PEER_CREDENTIALS_DIR)",
+)
+@click.option(
+    "--node-id",
+    default=None,
+    help="Node UUID (default: existing certificate, then node-identity.json, else new)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Replace an existing pair (new key and fingerprint; peers must re-pin)",
+)
+def federation_init_credentials(
+    data_dir: Path, config_path: str | None, node_id: str | None, force: bool
+) -> None:
+    """Create the peer-cert.pem / peer-key.pem pair `start --peer-port` loads."""
+    import json
+    import os
+    import tempfile
+    from uuid import UUID
+
+    from anygarden.config import AnygardenSettings
+    from anygarden.federation.certificates import (
+        create_credentials,
+        inspect_certificate,
+    )
+    from anygarden.federation.errors import PeerError
+
+    data_dir = data_dir.absolute()
+    if data_dir.is_symlink():
+        raise click.ClickException("Node data directory must not be a symlink")
+    # Resolve the directory exactly as `start` and app startup do.
+    config = AnygardenSettings(_env_file=config_path or str(data_dir / "config.env"))
+    peer_dir = (config.peer_credentials_dir or (data_dir / "peer")).absolute()
+    if peer_dir.is_symlink():
+        raise click.ClickException(
+            f"Peer credential directory must not be a symlink: {peer_dir}"
+        )
+    cert_path, key_path = peer_dir / "peer-cert.pem", peer_dir / "peer-key.pem"
+    existing = [p for p in (cert_path, key_path) if p.exists() or p.is_symlink()]
+    if existing and not force:
+        raise click.ClickException(
+            f"Peer credentials already exist under {peer_dir}; refusing to overwrite. "
+            "Pass --force to replace them (peers must re-pin the new fingerprint)."
+        )
+
+    if node_id is None and force and cert_path.is_file():
+        try:  # keep the node identity across a forced key rotation
+            node_id = inspect_certificate(cert_path.read_text()).node_id
+        except (PeerError, OSError, UnicodeError):
+            node_id = None
+    if node_id is None:
+        identity_path = data_dir / "node-identity.json"
+        if identity_path.is_file():
+            try:
+                node_id = str(json.loads(identity_path.read_text())["node_id"])
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise click.ClickException(
+                    f"Cannot read node_id from {identity_path}; pass --node-id"
+                ) from exc
+    if node_id is None:
+        from uuid import uuid4
+
+        node_id = str(uuid4())
+    try:
+        node_id = str(UUID(node_id))
+    except ValueError as exc:
+        raise click.ClickException(f"--node-id must be a UUID: {node_id!r}") from exc
+
+    try:
+        if not existing:
+            cert_path, key_path = create_credentials(peer_dir, node_id)
+        else:
+            # Generate beside the old pair, then swap in, so a failed
+            # generation never leaves the node with no or half a pair.
+            staging = Path(tempfile.mkdtemp(prefix=".init-", dir=peer_dir))
+            try:
+                new_cert, new_key = create_credentials(staging, node_id)
+                os.replace(new_key, key_path)
+                os.replace(new_cert, cert_path)
+            finally:
+                for leftover in staging.iterdir():
+                    leftover.unlink()
+                staging.rmdir()
+    except PeerError as exc:
+        raise click.ClickException(
+            f"Cannot create peer credentials: {exc.code}"
+        ) from exc
+
+    identity = inspect_certificate(cert_path.read_text())
+    click.echo(f"Wrote certificate: {cert_path}")
+    click.echo(f"Wrote private key: {key_path} (mode 0600)")
+    click.echo(f"Node ID: {identity.node_id}")
+    click.echo(f"Certificate fingerprint (SHA-256): {identity.fingerprint}")
+    click.echo(
+        "Share the node ID and fingerprint with peers out of band; never share the key. "
+        "The certificate is valid for 90 days."
+    )

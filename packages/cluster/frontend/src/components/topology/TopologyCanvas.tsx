@@ -25,6 +25,7 @@ import { AgentNode } from './nodes/AgentNode'
 import { RoomNode } from './nodes/RoomNode'
 import { UserNode } from './nodes/UserNode'
 import { ProjectGroup } from './nodes/ProjectGroup'
+import { PeerNode } from './nodes/PeerNode'
 import { RelationEdge } from './edges/RelationEdge'
 import { useLocale } from '@/i18n/LocaleProvider'
 
@@ -34,6 +35,7 @@ const nodeTypes: NodeTypes = {
   room: RoomNode,
   user: UserNode,
   project: ProjectGroup,
+  peer: PeerNode,
 }
 
 const edgeTypes: EdgeTypes = {

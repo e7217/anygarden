@@ -52,14 +52,24 @@ jobs:
 
       - name: Test agent
         working-directory: packages/agent
-        run: uv run pytest -x
+        run: uv run pytest -x --junitxml=${{ github.workspace }}/junit/agent.xml
 
       - name: Test cluster
         working-directory: packages/cluster
         # ~2,600 tests; one worker per logical CPU (#753). ``-n auto``
         # counts physical cores when psutil is installed, which gives
         # only 2 workers on the 4-vCPU runner.
-        run: uv run pytest -x -n logical
+        run: uv run pytest -x -n logical --junitxml=${{ github.workspace }}/junit/cluster.xml
+
+      # Requirement IDs travel in the JUnit files (``@pytest.mark.req``);
+      # the ``requirements`` job joins them with the frontend results.
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-python
+          path: junit/
+          if-no-files-found: ignore
 
   test-windows:
     name: Test (Windows native)
@@ -121,7 +131,7 @@ jobs:
 
       - name: Test frontend (Vitest)
         working-directory: packages/cluster/frontend
-        run: npm test
+        run: npm test -- --reporter=default --reporter=junit --outputFile.junit=${{ github.workspace }}/junit/vitest.xml
 
       - name: Install Playwright Chromium
         working-directory: packages/cluster/frontend
@@ -129,7 +139,17 @@ jobs:
 
       - name: Test frontend browser E2E
         working-directory: packages/cluster/frontend
-        run: npm run test:e2e
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: ${{ github.workspace }}/junit/e2e.xml
+        run: npm run test:e2e -- --reporter=github,junit
+
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-frontend
+          path: junit/
+          if-no-files-found: ignore
 
       - name: Upload browser E2E artifacts
         if: failure()
@@ -142,3 +162,27 @@ jobs:
       - name: Build (typecheck + bundle)
         working-directory: packages/cluster/frontend
         run: npm run build
+
+  # Every requirement in docs/requirements.md must be verified by a passing
+  # test in the layer it declares (pytest / vitest / e2e), or be declared
+  # ``build`` or a known ``gap``. A new requirement without a test, a test
+  # tagged with an unknown ID, or a failing tagged test fails this job.
+  requirements:
+    name: Requirement coverage
+    needs: [test-linux, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JUnit results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: junit-*
+          path: junit
+          merge-multiple: true
+
+      - name: Check requirement coverage
+        run: |
+          set -o pipefail
+          python3 scripts/req_report.py junit/*.xml --spec docs/requirements.md --require-coverage \
+            | tee -a "$GITHUB_STEP_SUMMARY"

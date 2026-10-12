@@ -310,6 +310,7 @@ const copy = {
   'topology.kindAgent': ['Agent', '에이전트'],
   'topology.kindRoom': ['Room', '방'],
   'topology.kindProject': ['Project', '프로젝트'],
+  'topology.kindPeer': ['Federation peer', '연합 피어'],
   'topology.detail': ['{{kind}} detail', '{{kind}} 상세'],
   'topology.closeDetail': ['Close detail', '상세 닫기'],
   'topology.status': ['Status', '상태'],
@@ -356,6 +357,17 @@ const copy = {
   'topology.typing': ['typing', '입력 중'],
   'topology.userNode': ['User {{name}}{{admin}}', '사용자 {{name}}{{admin}}'],
   'topology.adminSuffix': [' (admin)', ' (관리자)'],
+  'topology.peerNode': ['Federation peer {{name}}, trust {{state}}', '연합 피어 {{name}}, 신뢰 상태 {{state}}'],
+  'topology.peerStateActive': ['Trusted', '신뢰됨'],
+  'topology.peerStatePending': ['Pending', '대기 중'],
+  'topology.peerStateRevoked': ['Revoked', '취소됨'],
+  'topology.peerSummaryOne': ['{{state}} · {{count}} shared channel', '{{state}} · 공유 채널 {{count}}개'],
+  'topology.peerSummaryMany': ['{{state}} · {{count}} shared channels', '{{state}} · 공유 채널 {{count}}개'],
+  'topology.peerNodeId': ['Node ID', '노드 ID'],
+  'topology.trustState': ['Trust state', '신뢰 상태'],
+  'topology.certificateEpoch': ['Certificate epoch', '인증서 epoch'],
+  'topology.stateChangedAt': ['Trust last changed', '신뢰 상태 변경 시각'],
+  'topology.sharedChannels': ['Shared channels', '공유 채널'],
 } as const
 
 type FederationMessageKey = keyof typeof copy

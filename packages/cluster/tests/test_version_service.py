@@ -45,6 +45,7 @@ async def test_fetch_pypi_latest_success() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("SYS-02")
 async def test_fetch_pypi_latest_404_returns_none() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404)
@@ -54,6 +55,7 @@ async def test_fetch_pypi_latest_404_returns_none() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("SYS-02")
 async def test_fetch_pypi_latest_network_error_returns_none() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("boom")
@@ -63,6 +65,7 @@ async def test_fetch_pypi_latest_network_error_returns_none() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("SYS-02")
 async def test_fetch_pypi_latest_malformed_json_returns_none() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"unexpected": "shape"})

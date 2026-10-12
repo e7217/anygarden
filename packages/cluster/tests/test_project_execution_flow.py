@@ -472,7 +472,7 @@ async def test_worker_question_reaches_operating_room_and_answer_resumes_task(ha
     assert twice.status_code == 409
 
 
-@pytest.mark.req("INB-01", "INB-02", "INB-03")
+@pytest.mark.req("INB-01", "INB-02", "INB-03", "EXE-09")
 async def test_inbox_lists_open_question_for_members_only(harness):
     _, _, question = await _ask(harness)
 
@@ -485,6 +485,7 @@ async def test_inbox_lists_open_question_for_members_only(harness):
     assert len(ids) == len(set(ids))
     # Items that need the user's action come before informational ones.
     first_info = next((i for i, it in enumerate(items) if it["type"] == "task"), len(items))
+    assert first_info < len(items), "an informational task item must be present to order against"
     assert ids.index(f"question:{question['id']}") < first_info
 
     outsider = await harness.client.get("/api/v1/inbox", headers=harness.user("outsider"))
@@ -882,6 +883,45 @@ async def test_unsupported_limits_and_actions_are_refused_at_begin(harness):
     assert "send_email" in error
 
 
+def _release_args(harness, execution: dict) -> dict:
+    return dict(
+        execution_id=execution["execution_id"],
+        parent_task_id=execution["root_task_id"],
+        target_room_id=harness.ids["releaser_room"],
+        assignee_participant_id=harness.ids["releaser_pid"],
+        delegation_key="notes", title="Write release notes",
+        spec="Write the notes.", role="release",
+    )
+
+
+@pytest.mark.req("EXE-17")
+async def test_release_role_needs_an_external_action_grant(harness):
+    """A release task can only finish through an approved managed action, so
+    delegating one in an internal-only execution is refused up front instead
+    of leaving a task that can never complete (benchmark DL-01, 2026-10-12)."""
+    flow = await harness.begin_and_delegate(objective="Write the release notes")
+
+    error = await harness.tool_error(
+        flow["lead_turn"], "delegate_project_task", **_release_args(harness, flow["execution"])
+    )
+
+    assert "managed_submission" in error and "'work'" in error
+
+
+@pytest.mark.req("EXE-17")
+async def test_release_role_is_accepted_with_a_submission_grant(harness):
+    flow = await harness.begin_and_delegate(
+        objective="Write and submit the release notes",
+        allowed_actions=["internal_work", "managed_submission"],
+    )
+
+    accepted = await harness.tool(
+        flow["lead_turn"], "delegate_project_task", **_release_args(harness, flow["execution"])
+    )
+
+    assert accepted["task_id"]
+
+
 async def test_only_the_rooms_representative_can_begin_an_execution(harness):
     """#802 — the operating lead is the room's representative agent."""
     await harness.user_request("Fix the login bug")
@@ -1000,3 +1040,400 @@ async def test_rejection_wakes_the_lead_with_the_reason(harness, monkeypatch):
     action = next(t for t in tasks.json() if t["id"] == ready["action_task"])
     assert (action["status"], action["error"]) == ("blocked", "APPROVAL_REJECTED")
     assert portal.requests == []
+
+
+# -- EXE-21: a worker's deliberate block returns control to the lead ----------
+
+
+@pytest.mark.req("EXE-21")
+async def test_worker_block_wakes_the_lead_once_with_the_public_reason(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    await harness.end_turn(flow["lead_turn"])
+    worker_turn = await harness.deliver("worker")
+    raw = "Need the v2.4 change list; none was provided."
+    await harness.tool(worker_turn, "mark_task_status", task_id=task_id,
+                       status="blocked", error=raw)
+
+    # The lead is woken with the closed public reason, never the free text.
+    lead_turn = await harness.deliver("lead")
+    notice = json.dumps(lead_turn.frame, ensure_ascii=False)
+    assert task_id in notice
+    assert "TASK_BLOCKED" in notice
+    assert "change list" not in notice
+    await harness.end_turn(lead_turn)
+
+    # The same block delivered again wakes nobody a second time.
+    await harness.tool_error_or_ok(worker_turn, "mark_task_status", task_id=task_id,
+                                   status="blocked", error=raw)
+    before = len(harness.sockets["lead"].frames)
+    await deliver_pending_outbox(harness.sessions, harness.manager, app=harness.app)
+    assert not [f for f in harness.sockets["lead"].frames[before:]
+                if f.get("metadata", {}).get("turn_lease")]
+    async with harness.sessions() as db:
+        notices = (await db.scalars(select(Message).where(
+            Message.room_id == harness.ids["lead_room"],
+            Message.content.contains(f"delegated task {task_id}")))).all()
+    assert len(notices) == 1
+    assert "change list" not in notices[0].content
+
+    # The user still sees the blocked task in the inbox.
+    inbox = await harness.client.get("/api/v1/inbox", headers=harness.user())
+    inbox_task = next(i["task"] for i in inbox.json()["items"]
+                      if i.get("task", {}).get("id") == task_id)
+    assert inbox_task["error"] == "TASK_BLOCKED"
+
+
+# -- EXE-08 redelivered completion · EXE-10 automatic recovery ----------------
+
+
+@pytest.mark.req("EXE-08")
+async def test_redelivered_completion_changes_nothing(harness):
+    from anygarden.db.models import TaskResult
+
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    await harness.end_turn(flow["lead_turn"])
+    worker_turn = await harness.deliver("worker")
+    done = {"task_id": task_id, "status": "done", "result_markdown": "Fixed: emails normalized."}
+    await harness.tool(worker_turn, "mark_task_status", **done)
+
+    async def snapshot():
+        async with harness.sessions() as db:
+            task = await db.get(Task, task_id, populate_existing=True)
+            results = (await db.scalars(select(TaskResult).where(
+                TaskResult.task_id == task_id))).all()
+            reports = await db.scalar(select(func.count()).select_from(Message).where(
+                Message.content.contains(f"delegated task {task_id}")))
+            return (task.status, task.result_version, task.result_markdown,
+                    [(r.version, r.result_sha256) for r in results], reports)
+
+    before = await snapshot()
+    assert before[0] == "done" and before[1] == 1 and len(before[3]) == 1
+
+    # The transport delivers the same completion again, then a conflicting one.
+    await harness.tool_error_or_ok(worker_turn, "mark_task_status", **done)
+    await harness.tool_error_or_ok(
+        worker_turn, "mark_task_status", **{**done, "result_markdown": "Something else"})
+    assert await snapshot() == before
+
+    # The lead is woken once with the original result, not with each replay.
+    lead_turn = await harness.deliver("lead")
+    assert "Fixed: emails normalized." in json.dumps(lead_turn.frame)
+    assert "Something else" not in json.dumps(lead_turn.frame)
+    await harness.end_turn(lead_turn)
+    before_frames = len(harness.sockets["lead"].frames)
+    await deliver_pending_outbox(harness.sessions, harness.manager, app=harness.app)
+    assert not [f for f in harness.sockets["lead"].frames[before_frames:]
+                if f.get("metadata", {}).get("turn_lease")]
+    assert await snapshot() == before
+
+
+@pytest.mark.req("EXE-10")
+async def test_transient_failure_is_retried_then_exhaustion_is_reported(harness):
+    from datetime import UTC, datetime, timedelta
+
+    from anygarden.db.models import AgentTurnOutbox
+    from anygarden.turns.service import recover_stalled_turns
+
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    await harness.end_turn(flow["lead_turn"])
+
+    async def fail_transiently(turn: Turn) -> None:
+        async with harness.sessions() as db:
+            assert await record_lifecycle(db, agent_id=harness.ids["worker"], frame=LifecycleFrame(
+                request_id=turn.request_id, room_id=harness.ids["worker_room"],
+                turn_attempt=turn.attempt, turn_generation=GENERATION, turn_lease=turn.lease,
+                event="handler_finished", outcome="failed",
+                local_execution_id=turn.local_execution_id, native_process_state="finished",
+                native_outcome="failed", native_reason_code="MODEL_TRANSIENT_FAILURE",
+                native_transient=True,
+            ))
+            await db.commit()
+
+    # A transient model failure is retried automatically for the same task.
+    first = await harness.deliver("worker")
+    await fail_transiently(first)
+    recovered = await recover_stalled_turns(harness.sessions, harness.manager)
+    assert recovered.redispatched == 1
+    async with harness.sessions() as db:
+        # Let the retry backoff elapse.
+        outbox = (await db.scalars(select(AgentTurnOutbox).where(
+            AgentTurnOutbox.turn_id == first.request_id,
+            AgentTurnOutbox.state == "pending"))).one()
+        assert outbox.available_at > datetime.now(UTC)
+        outbox.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
+    retried = await harness.deliver("worker")
+    assert retried.request_id == first.request_id
+    assert retried.attempt != first.attempt
+    assert retried.frame["metadata"]["task_assignment"]["task_id"] == task_id
+
+    # Past the retry limit the task stops with a public reason ...
+    await fail_transiently(retried)
+    tasks = await harness.client.get(
+        f"/api/v1/rooms/{harness.ids['worker_room']}/tasks", headers=harness.user())
+    row = next(t for t in tasks.json() if t["id"] == task_id)
+    assert row["status"] == "failed"
+    recovery = row["recovery"]
+    assert row["error"] == recovery["reason_code"] == "MODEL_TRANSIENT_FAILURE"
+    assert recovery["retry_count"] == recovery["max_retries"] == 1
+    assert recovery["attempt_count"] == 2
+    assert (recovery["state"], recovery["can_retry"]) == ("failed", False)
+
+    # ... and the lead is woken to report why the work stopped.
+    lead_turn = await harness.deliver("lead")
+    notice = json.dumps(lead_turn.frame)
+    assert task_id in notice
+    assert "MODEL_TRANSIENT_FAILURE" in notice
+    assert "retry limit is exhausted" in notice
+
+
+@pytest.mark.req("INB-01")
+async def test_task_progress_and_completion_share_one_inbox_item(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+
+    async def task_items() -> list[dict]:
+        inbox = await harness.client.get("/api/v1/inbox", headers=harness.user())
+        assert inbox.status_code == 200, inbox.text
+        return [i for i in inbox.json()["items"]
+                if i["type"] == "task" and i["task_id"] == task_id]
+
+    running = await task_items()
+    assert len(running) == 1
+    assert running[0]["task"]["status"] == "in_progress"
+
+    await harness.tool(
+        worker_turn, "mark_task_status", task_id=task_id, status="done",
+        result_markdown="Fixed: emails are lower-cased before comparison.",
+    )
+    finished = await task_items()
+    assert len(finished) == 1
+    assert finished[0]["id"] == running[0]["id"]
+    assert finished[0]["task"]["status"] == "done"
+    assert "lower-cased" in finished[0]["task"]["result_markdown"]
+
+
+@pytest.mark.req("EXE-16")
+async def test_failed_turn_without_terminal_receipt_cannot_be_retried(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+    # The runtime reports failure but no terminal receipt proving the native
+    # process finished, so a retry could duplicate unknown side effects.
+    async with harness.sessions() as db:
+        assert await record_lifecycle(db, agent_id=harness.ids["worker"], frame=LifecycleFrame(
+            request_id=worker_turn.request_id, room_id=harness.ids["worker_room"],
+            turn_attempt=worker_turn.attempt, turn_generation=GENERATION,
+            turn_lease=worker_turn.lease, event="handler_finished", outcome="failed",
+        ))
+        await db.commit()
+
+    resp = await harness.client.post(
+        f"/api/v1/execution-tasks/{task_id}/retry",
+        json={
+            "operation_id": str(uuid4()),
+            "expected_input_revision": 1,
+            "expected_request_id": worker_turn.request_id,
+            "expected_attempt": worker_turn.attempt,
+        },
+        headers=harness.user(),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "PROCESS_OUTCOME_UNKNOWN" in resp.text
+    before = len(harness.sockets["worker"].frames)
+    await deliver_pending_outbox(harness.sessions, harness.manager, app=harness.app)
+    assert not [f for f in harness.sockets["worker"].frames[before:]
+                if f.get("metadata", {}).get("turn_lease")]
+
+
+# -- EXE-21: the lead resumes a worker-blocked task with guidance -------------
+
+_BLOCK_TEXT = "Need the v2.4 change list; none was provided."
+
+
+async def _block_then_wake_lead(harness: Harness) -> dict:
+    """Worker blocks its sealed required task; the lead is woken once."""
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    execution_id = flow["execution"]["execution_id"]
+    await harness.tool(flow["lead_turn"], "seal_project_plan",
+                       execution_id=execution_id, required_task_ids=[task_id])
+    await harness.end_turn(flow["lead_turn"])
+    worker_turn = await harness.deliver("worker")
+    await harness.tool(worker_turn, "mark_task_status", task_id=task_id,
+                       status="blocked", error=_BLOCK_TEXT)
+    lead_turn = await harness.deliver("lead")
+    return {**flow, "task_id": task_id, "execution_id": execution_id,
+            "worker_turn": worker_turn, "lead_turn": lead_turn}
+
+
+async def _worker_task_turns(harness: Harness, task_id: str) -> list[AgentTurn]:
+    async with harness.sessions() as db:
+        return list((await db.scalars(select(AgentTurn).where(
+            AgentTurn.task_id == task_id,
+            AgentTurn.target_participant_id == harness.ids["worker_pid"],
+        ))).all())
+
+
+async def _no_turn_delivered(harness: Harness, agent: str) -> bool:
+    before = len(harness.sockets[agent].frames)
+    await deliver_pending_outbox(harness.sessions, harness.manager, app=harness.app)
+    return not [f for f in harness.sockets[agent].frames[before:]
+                if f.get("metadata", {}).get("turn_lease")]
+
+
+@pytest.mark.req("EXE-21")
+async def test_lead_resumes_blocked_task_with_guidance_and_finishes(harness):
+    flow = await _block_then_wake_lead(harness)
+    task_id, lead_turn = flow["task_id"], flow["lead_turn"]
+    # The wake notice names the way to continue the same task.
+    assert "resume_project_task" in json.dumps(lead_turn.frame, ensure_ascii=False)
+    await harness.end_turn(flow["worker_turn"])
+    turns_before = await _worker_task_turns(harness, task_id)
+
+    guidance = "Use the v2.4 tag diff in the repository as the change list."
+    resumed = await harness.tool(
+        lead_turn, "resume_project_task", execution_id=flow["execution_id"],
+        task_id=task_id, guidance=guidance,
+    )
+    assert resumed["task_id"] == task_id
+    assert resumed["status"] == "in_progress"
+    assert resumed["resume_count"] == 1
+
+    async with harness.sessions() as db:
+        task = await db.get(Task, task_id)
+        assert task.error is None
+        assert guidance in task.spec
+        assert "Login fails for accounts with uppercase emails." in task.spec
+        assert "change list; none was provided" not in task.spec
+    # Exactly one new turn for the assignee, bound to the task.
+    assert len(await _worker_task_turns(harness, task_id)) == len(turns_before) + 1
+    worker_turn = await harness.deliver("worker")
+    assert worker_turn.frame["metadata"]["task_assignment"]["task_id"] == task_id
+    assert await _no_turn_delivered(harness, "worker")
+
+    # The resumed worker finishes; the lead collects and completes.
+    await harness.tool(worker_turn, "mark_task_status", task_id=task_id, status="done",
+                       result_markdown="Fixed using the v2.4 tag diff.")
+    await harness.end_turn(lead_turn)
+    collect = await harness.deliver("lead")
+    assert "Fixed using the v2.4 tag diff." in json.dumps(collect.frame)
+    completed = await harness.tool(
+        collect, "complete_project_execution", execution_id=flow["execution_id"],
+        summary="Login bug fixed with the v2.4 change list.",
+    )
+    assert completed["status"] == "completed"
+
+
+@pytest.mark.req("EXE-21")
+async def test_resume_refuses_a_task_that_is_not_worker_blocked(harness):
+    flow = await harness.begin_and_delegate()
+    execution = flow["execution"]
+    task_id = flow["delegated"]["task_id"]
+    # In progress: nothing to resume.
+    text = await harness.tool_error(
+        flow["lead_turn"], "resume_project_task", execution_id=execution["execution_id"],
+        task_id=task_id, guidance="Keep going.",
+    )
+    assert "TASK_NOT_BLOCKED" in text
+    # Blocked only by an unmet prerequisite: resumes by itself, not by the lead.
+    dependent = await harness.tool(
+        flow["lead_turn"], "delegate_project_task",
+        execution_id=execution["execution_id"], parent_task_id=execution["root_task_id"],
+        target_room_id=harness.ids["releaser_room"],
+        assignee_participant_id=harness.ids["releaser_pid"],
+        delegation_key="write-changelog", title="Write the changelog entry",
+        spec="Describe the login fix for users.", depends_on=[task_id],
+    )
+    assert dependent["status"] == "blocked"
+    text = await harness.tool_error(
+        flow["lead_turn"], "resume_project_task", execution_id=execution["execution_id"],
+        task_id=dependent["task_id"], guidance="Start now.",
+    )
+    assert "TASK_WAITING_FOR_PREREQUISITES" in text
+    # Empty guidance is refused.
+    text = await harness.tool_error(
+        flow["lead_turn"], "resume_project_task", execution_id=execution["execution_id"],
+        task_id=task_id, guidance="   ",
+    )
+    assert "RESUME_INPUT_INVALID" in text
+
+
+@pytest.mark.req("EXE-21")
+async def test_only_the_lead_can_resume_a_blocked_task(harness):
+    flow = await _block_then_wake_lead(harness)
+    # The blocking worker's own turn is not the execution's lead turn.
+    text = await harness.tool_error(
+        flow["worker_turn"], "resume_project_task", execution_id=flow["execution_id"],
+        task_id=flow["task_id"], guidance="I will continue myself.",
+    )
+    assert "EXECUTION_LEAD_REQUIRED" in text
+    async with harness.sessions() as db:
+        task = await db.get(Task, flow["task_id"])
+        assert task.status == "blocked"
+        assert "I will continue myself." not in task.spec
+
+
+@pytest.mark.req("EXE-21")
+async def test_resume_replay_is_idempotent(harness):
+    flow = await _block_then_wake_lead(harness)
+    task_id, lead_turn = flow["task_id"], flow["lead_turn"]
+    await harness.end_turn(flow["worker_turn"])
+    args = {"execution_id": flow["execution_id"], "task_id": task_id,
+            "guidance": "Use the v2.4 tag diff as the change list."}
+    first = await harness.tool(lead_turn, "resume_project_task", **args)
+    replay = await harness.tool(lead_turn, "resume_project_task", **args)
+    assert replay == first
+
+    from anygarden.db.models import ProjectExecutionEvent
+
+    async with harness.sessions() as db:
+        task = await db.get(Task, task_id)
+        assert task.spec.count(args["guidance"]) == 1
+        events = (await db.scalars(select(ProjectExecutionEvent).where(
+            ProjectExecutionEvent.task_id == task_id,
+            ProjectExecutionEvent.event_type == "task_resumed_by_lead"))).all()
+        assert len(events) == 1
+        assert "change list; none was provided" not in json.dumps(events[0].details)
+    await harness.deliver("worker")
+    assert await _no_turn_delivered(harness, "worker")
+    # Different guidance for a task that is already running is not a replay.
+    text = await harness.tool_error(
+        lead_turn, "resume_project_task", **{**args, "guidance": "Something else."})
+    assert "TASK_NOT_BLOCKED" in text
+
+
+@pytest.mark.req("EXE-21")
+async def test_resume_is_capped_per_task(harness):
+    flow = await _block_then_wake_lead(harness)
+    task_id, lead_turn = flow["task_id"], flow["lead_turn"]
+    worker_turn = flow["worker_turn"]
+    for n in (1, 2):
+        await harness.end_turn(worker_turn)
+        resumed = await harness.tool(
+            lead_turn, "resume_project_task", execution_id=flow["execution_id"],
+            task_id=task_id, guidance=f"Guidance round {n}.",
+        )
+        assert resumed["resume_count"] == n
+        await harness.end_turn(lead_turn)
+        worker_turn = await harness.deliver("worker")
+        await harness.tool(worker_turn, "mark_task_status", task_id=task_id,
+                           status="blocked", error=f"Still stuck {n}.")
+        # Each new block after a resume wakes the lead again.
+        lead_turn = await harness.deliver("lead")
+        notice = json.dumps(lead_turn.frame, ensure_ascii=False)
+        assert task_id in notice and "TASK_BLOCKED" in notice
+        assert "Still stuck" not in notice
+
+    await harness.end_turn(worker_turn)
+    text = await harness.tool_error(
+        lead_turn, "resume_project_task", execution_id=flow["execution_id"],
+        task_id=task_id, guidance="One more try.",
+    )
+    assert "TASK_RESUME_LIMIT" in text
+    async with harness.sessions() as db:
+        assert (await db.get(Task, task_id)).status == "blocked"

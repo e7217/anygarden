@@ -110,3 +110,30 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+
+
+async def test_reaction_events_reach_the_real_broadcast_path(react_env):
+    """The connection manager serializes every frame with
+    ``model_dump_json``; a plain dict raised after the commit and turned
+    each reaction request into a 500 on a running server."""
+    import json
+
+    sent: list[dict] = []
+
+    class _Recorder:
+        async def broadcast(self, room_id, frame, **_):
+            sent.append({"room": room_id, **json.loads(frame.model_dump_json())})
+
+    env = react_env
+    env["app"].state.connection_manager = _Recorder()
+    headers = {"Authorization": f"Bearer {_token(env['config'], env['member'], 'm@x.test')}"}
+    url = f"/api/v1/rooms/{env['room']}/messages/{env['message']}/reactions"
+    async with AsyncClient(transport=ASGITransport(app=env["app"]), base_url="http://t") as c:
+        assert (await c.post(url, headers=headers, json={"emoji": "👍"})).status_code == 201
+        assert (await c.delete(f"{url}/👍", headers=headers)).status_code == 204
+
+    assert [(e["type"], e["action"], e["emoji"]) for e in sent] == [
+        ("reaction", "added", "👍"),
+        ("reaction", "removed", "👍"),
+    ]
+    assert all(e["room_id"] == env["room"] and e["message_id"] == env["message"] for e in sent)

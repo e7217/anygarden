@@ -1,0 +1,186 @@
+{
+  "schema": 1,
+  "suite": "core",
+  "suite_version": 1,
+  "commit": "0d7d6b82a9a232c323933df05ab34fb177b021b6-dirty",
+  "started_at": "2026-10-12T04:34:48.722929+00:00",
+  "engine": {
+    "engine": "codex-cli",
+    "model": "gpt-6.1-sol",
+    "permission_level": "standard"
+  },
+  "k": 3,
+  "runs": [
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 21,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T04:34:48.723014+00:00",
+        "until": "2026-10-12T04:35:54.283484+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 88127,
+          "completion_tokens": 308,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 20,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T04:34:48.723383+00:00",
+        "until": "2026-10-12T04:35:54.190713+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21341,
+          "completion_tokens": 114,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 20,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T04:34:48.723563+00:00",
+        "until": "2026-10-12T04:35:54.190388+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21323,
+          "completion_tokens": 137,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    }
+  ],
+  "finished_at": "2026-10-12T04:35:54.551819+00:00"
+}

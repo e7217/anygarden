@@ -50,6 +50,7 @@ class TestEngineSessionStore:
 
 class TestCodexAdapterPersistsSessions:
     @pytest.mark.asyncio
+    @pytest.mark.req("ENG-06")
     async def test_start_restores_persisted_thread_ids(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -64,6 +65,7 @@ class TestCodexAdapterPersistsSessions:
         assert adapter._room_thread_ids == {scoped_key: "thread-abc"}
 
     @pytest.mark.asyncio
+    @pytest.mark.req("ENG-06")
     async def test_turn_persists_thread_id_and_survives_respawn(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

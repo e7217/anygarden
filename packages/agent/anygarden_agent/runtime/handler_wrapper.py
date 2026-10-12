@@ -497,6 +497,9 @@ class RoomHandlerSupervisor:
             try:
                 engine_task = asyncio.create_task(run_engine())
                 self._engine_tasks[turn_key] = engine_task
+                if turn_key in self._cancelled_turns:
+                    # A stop raced the lifecycle awaits above.
+                    engine_task.cancel()
                 raw = await asyncio.wait_for(
                     engine_task, timeout=self._timeout
                 )

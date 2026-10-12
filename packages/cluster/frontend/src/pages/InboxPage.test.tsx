@@ -96,3 +96,25 @@ describe('inbox summary and details', () => {
     expect(screen.getByText('This item is unavailable or you no longer have access.')).toBeVisible()
   })
 })
+
+describe('inbox grouping', () => {
+  it('shows a task as one item from progress through completion [INB-01]', () => {
+    mocks.items = [task()]
+    const view = setup()
+    expect(screen.getAllByTestId('inbox-item-task:t')).toHaveLength(1)
+    expect(within(screen.getByRole('region', { name: 'In progress' })).getByTestId('inbox-item-task:t')).toBeInTheDocument()
+    mocks.items = [task({ status: 'done', updated_at: '2026-10-01T02:00:00Z', task: { ...task().task!, status: 'done', result_version: 1, result_markdown: 'Report reviewed' } })]
+    view.rerender(<MemoryRouter><InboxPage /></MemoryRouter>)
+    expect(screen.getAllByTestId('inbox-item-task:t')).toHaveLength(1)
+    expect(within(screen.getByRole('region', { name: 'Results and previous items' })).getByTestId('inbox-item-task:t')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'In progress' })).toBeNull()
+  })
+  it('lists open questions above newer informational items [INB-02]', () => {
+    mocks.items = [task({ updated_at: '2026-10-02T00:00:00Z' }), question()]
+    setup()
+    const open = screen.getByTestId('inbox-item-question:q')
+    const info = screen.getByTestId('inbox-item-task:t')
+    expect(within(screen.getByRole('region', { name: 'Needs attention' })).getByTestId('inbox-item-question:q')).toBe(open)
+    expect(open.compareDocumentPosition(info) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})

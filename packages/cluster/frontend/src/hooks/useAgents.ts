@@ -312,6 +312,27 @@ export function useAgents() {
     return updated;
   }, [fetchAgents]);
 
+  // #769 — switch the engine in place. Separate endpoint from ``updateAgent``
+  // because the server resets engine-specific settings and restarts the agent.
+  const changeAgentEngine = useCallback(async (
+    id: string,
+    change: { engine: string; provider: string | null; model: string | null },
+  ) => {
+    const resp = await apiFetch(`/api/v1/agents/${id}/engine`, {
+      method: 'PUT',
+      body: JSON.stringify(change),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(typeof body.detail === 'string' ? body.detail : 'Failed to change engine');
+    }
+    const updated = await resp.json() as Agent;
+    mutationRevision.current += 1;
+    setAgents(previous => previous.map(agent => agent.id === id ? updated : agent));
+    void fetchAgents().catch(() => {});
+    return updated;
+  }, [fetchAgents]);
+
   const fetchAgentFiles = useCallback(async (id: string): Promise<AgentFile[]> => {
     const resp = await apiFetch(`/api/v1/agents/${id}/files`);
     if (!resp.ok) {
@@ -439,6 +460,7 @@ export function useAgents() {
     removeAgentFromRoom,
     fetchAgents,
     updateAgent,
+    changeAgentEngine,
     fetchAgentFiles,
     upsertAgentFile,
     deleteAgentFile,

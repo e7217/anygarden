@@ -476,6 +476,7 @@ async def test_no_request_id_skips_user_metadata():
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-01")
 async def test_tracked_empty_response_is_failed_and_notifies():
     """#422 — a *tracked* turn (request_id present = user-triggered) that
     returns '' is a silent failure, not a no-reply. It surfaces as
@@ -498,6 +499,7 @@ async def test_tracked_empty_response_is_failed_and_notifies():
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-01")
 async def test_proactive_empty_response_stays_silent_ok():
     """A proactive/untracked turn (request_id is None) that returns ''
     keeps the legitimate no-reply semantics: no send, outcome ok. Only
@@ -580,6 +582,7 @@ async def test_proactive_nonempty_does_not_mark_or_count():
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-08")
 async def test_queued_followups_run_in_order_after_first_completes():
     # While a turn runs, follow-ups are deferred (outcome=queued, no
     # notice) and then drained FIFO by the lock holder after the first
@@ -632,6 +635,7 @@ async def test_queued_followups_run_in_order_after_first_completes():
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-08")
 async def test_serialization_invariant_no_two_runs_concurrent():
     # The hard invariant: exactly one turn executes per room at a time,
     # even with queued follow-ups draining. A counter tracks concurrent
@@ -980,3 +984,38 @@ async def test_queued_attempts_keep_immutable_response_and_lifecycle_proof():
     assert [send[2]["turn_lease"] for send in client.sends] == ["old", "new"]
     finished = [e for e in client.lifecycle_events if e["event"] == "handler_finished" and e["outcome"] == "ok"]
     assert [e["turn_lease"] for e in finished] == ["old", "new"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("ENG-05")
+@pytest.mark.parametrize("delegation_id", [None, "delegated-1"])
+async def test_cancelled_turn_is_not_retried_and_delegation_gets_notice(
+    monkeypatch, delegation_id
+):
+    """A cancelled turn is never retried, even with retries enabled. A plain
+    room turn stays silent; a delegated turn leaves the cancel notice."""
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_MAX_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    calls = 0
+
+    async def cancelled_engine():
+        nonlocal calls
+        calls += 1
+        raise EngineCancelledError(EngineTurn(None))
+
+    await sup.dispatch("r1", "req-1", cancelled_engine, delegation_id=delegation_id)
+
+    assert calls == 1
+    outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    assert outcomes == ["cancelled"]
+    if delegation_id is None:
+        assert client.sends == []
+    else:
+        assert [s[1] for s in client.sends] == [hw._CANCELLED_NOTICE]
+        assert client.sends[0][2]["delegation_outcome"] == "cancelled"

@@ -112,6 +112,7 @@ async def env():
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("NODE-02")
 async def test_no_machine_stamps_reason_and_releases_placement(env) -> None:
     # engine with no supporting online machine
     aid = await env["make_agent"]("nonexistent-engine")
@@ -315,4 +316,39 @@ async def test_reactive_notice_posts_and_debounces(env) -> None:
         env["factory"], manager, env["room_id"], [responder2]
     )
     assert len(manager.broadcasts) == 2
+    _UNAVAIL_NOTICE_SEEN.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("AGT-09")
+async def test_quota_exhausted_notice_shows_reason_in_room(env) -> None:
+    """A quota-exhausted responder gets an in-room system notice naming
+    the agent and the usage-limit reason, persisted with its code."""
+    from datetime import datetime, timezone
+
+    from anygarden.agent_availability import QUOTA_EXHAUSTED
+    from anygarden.db.models import Message
+    from anygarden.ws.handler import (
+        _UNAVAIL_NOTICE_SEEN,
+        _notify_unavailable_responders,
+    )
+
+    _UNAVAIL_NOTICE_SEEN.clear()
+    manager = _FakeManager()
+    responder = {
+        "agent_id": "ag-quota", "name": "Quill",
+        "code": QUOTA_EXHAUSTED, "detail": {"until": "2026-09-18T13:00:00Z"},
+        "since": datetime(2026, 9, 18, tzinfo=timezone.utc),
+    }
+    await _notify_unavailable_responders(
+        env["factory"], manager, env["room_id"], [responder]
+    )
+    assert len(manager.broadcasts) == 1
+    content = manager.broadcasts[0][1].content
+    assert "Quill" in content and "사용량 한도" in content
+    async with env["factory"]() as db:
+        stored = (await db.execute(
+            select(Message).where(Message.room_id == env["room_id"])
+        )).scalars().all()
+    assert [m.extra_metadata["unavailable_code"] for m in stored] == [QUOTA_EXHAUSTED]
     _UNAVAIL_NOTICE_SEEN.clear()

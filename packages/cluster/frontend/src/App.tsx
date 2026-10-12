@@ -30,6 +30,7 @@ const AdminSkillsPage = lazy(() => import('@/pages/AdminSkillsPage'))
 const AdminSystemPage = lazy(() => import('@/pages/AdminSystemPage'))
 const AdminMCPTemplatesPage = lazy(() => import('@/pages/AdminMCPTemplatesPage'))
 const AdminUsagePage = lazy(() => import('@/pages/AdminUsagePage'))
+const AdminBudgetsPage = lazy(() => import('@/pages/AdminBudgetsPage'))
 const AdminFederationPage = lazy(() => import('@/pages/AdminFederationPage'))
 
 /** Full-viewport placeholder, matching the route-level loading states. */
@@ -117,6 +118,7 @@ export default function App() {
                 admin-scoped on the backend. */}
             <Route path="/admin/federation" element={<AdminRoute><AdminFederationPage /></AdminRoute>} />
             <Route path="/admin/usage" element={<AdminRoute><AdminUsagePage /></AdminRoute>} />
+            <Route path="/admin/budgets" element={<AdminRoute><AdminBudgetsPage /></AdminRoute>} />
             <Route path="/admin/llm-gateway/*" element={<AdminRoute><Navigate to="/admin/usage" replace /></AdminRoute>} />
             <Route
               path="/topology"

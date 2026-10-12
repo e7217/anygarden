@@ -68,6 +68,8 @@ interface RoomHeaderProps {
   onEditRoom?: () => void
   onManageInvites?: () => void
   onStopAllAgents?: () => void
+  /** ROOM-05 — forwarded to RoomSettingsMenu; undefined hides it. */
+  onLeaveRoom?: () => void
   onDeleteRoom?: () => void
   onOpenSidebar?: () => void
   onToggleParticipants?: () => void
@@ -139,6 +141,7 @@ export default function RoomHeader({
   onEditRoom,
   onManageInvites,
   onStopAllAgents,
+  onLeaveRoom,
   onDeleteRoom,
   onOpenSidebar,
   onToggleParticipants,
@@ -344,6 +347,7 @@ export default function RoomHeader({
           onShowArtifacts={onShowArtifacts}
           onShowRoomActivity={onShowRoomActivity}
           onStopAllAgents={onStopAllAgents}
+          onLeaveRoom={onLeaveRoom}
           onDeleteRoom={onDeleteRoom}
         />
         {rightRailSlot}

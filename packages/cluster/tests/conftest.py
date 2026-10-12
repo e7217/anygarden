@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from typing import AsyncIterator
 
 import pytest
 import pytest_asyncio
+import structlog
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
@@ -17,6 +19,9 @@ from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.fts import create_message_fts
 from anygarden.db.models import Base
+
+# SYS-06 — never let a test app start the background PyPI update check.
+os.environ.setdefault("ANYGARDEN_UPDATE_CHECK_INTERVAL_HOURS", "0")
 
 
 @event.listens_for(Engine, "connect")
@@ -33,6 +38,19 @@ def _skip_sqlite_fsync(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA synchronous=OFF")
     cursor.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_structlog():
+    """Undo any app's ``configure_logging`` after each test.
+
+    Booting an app runs ``structlog.configure`` process-wide, including a
+    level filter (many tests boot with ``log_level="WARNING"``). Left in
+    place, it silently drops INFO events for later tests in the same
+    worker, so ``capture_logs`` assertions passed or failed by test order.
+    """
+    yield
+    structlog.reset_defaults()
 
 
 @pytest.fixture()

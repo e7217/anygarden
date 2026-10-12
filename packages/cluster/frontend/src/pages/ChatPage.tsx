@@ -30,6 +30,7 @@ import { useRoomParticipants } from '@/hooks/useRoomParticipants'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
+import { leaveRoom } from '@/lib/roomMembership'
 import { MessageSquare, Menu, Plus } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
 import { useLocale } from '@/i18n/LocaleProvider'
@@ -412,6 +413,39 @@ function LocalChatPage() {
     [selectedRoom, refreshParticipants, notify, t],
   )
 
+  // ROOM-05 — leave the room yourself. The server closes this room's
+  // sockets for us, so navigate away and refresh the sidebar directly.
+  const handleLeaveRoom = useCallback(async () => {
+    if (!selectedRoom || !currentRoom) return
+    const ok = await confirm({
+      title: t('chat.leaveRoomTitle', { name: currentRoom.name }),
+      description: t('chat.leaveRoomDescription'),
+      confirmLabel: t('chat.leaveRoomConfirm'),
+      destructive: true,
+    })
+    if (!ok) return
+    try {
+      const result = await leaveRoom(selectedRoom)
+      if (result.ok) {
+        window.dispatchEvent(
+          new CustomEvent('anygarden:rooms:invalidate', {
+            detail: { type: 'room_membership_changed', action: 'removed', room_id: selectedRoom },
+          }),
+        )
+        navigate('/')
+        return
+      }
+      notify({
+        message: result.reason === 'last_admin'
+          ? t('chat.leaveRoomLastAdmin')
+          : result.detail ?? t('chat.failedLeaveRoom', { status: result.status }),
+        tone: 'error',
+      })
+    } catch (err) {
+      notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
+    }
+  }, [selectedRoom, currentRoom, navigate, t, confirm, notify])
+
   const handleDeleteRoom = useCallback(async () => {
     if (!selectedRoom || !currentRoom) return
     const ok = await confirm({
@@ -459,6 +493,40 @@ function LocalChatPage() {
     window.addEventListener('anygarden:room:deleted', onDeleted)
     return () => window.removeEventListener('anygarden:room:deleted', onDeleted)
   }, [selectedRoom, navigate])
+
+  // #772 — stopping every agent is disruptive, so confirm first and
+  // report what actually happened (the endpoint returns partial results).
+  const handleStopAllAgents = useCallback(async () => {
+    if (!selectedRoom || !currentRoom) return
+    const ok = await confirm({
+      title: t('chat.stopAllAgentsTitle', { name: currentRoom.name }),
+      description: t('chat.stopAllAgentsDescription'),
+      confirmLabel: t('chat.stopAllAgents'),
+      destructive: true,
+    })
+    if (!ok) return
+    try {
+      const resp = await apiFetch(`/api/v1/rooms/${selectedRoom}/stop-agents`, {
+        method: 'POST',
+      })
+      if (!resp.ok) {
+        notify({ message: t('chat.stopAllAgentsFailed', { status: resp.status }), tone: 'error' })
+        return
+      }
+      const body = (await resp.json()) as { count: number; failed?: unknown[] }
+      const failed = body.failed?.length ?? 0
+      if (failed > 0) {
+        notify({
+          message: t('chat.stopAllAgentsPartial', { stopped: body.count, failed }),
+          tone: 'error',
+        })
+      } else {
+        notify({ message: t('chat.stopAllAgentsDone', { count: body.count }), tone: 'success' })
+      }
+    } catch (err) {
+      notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
+    }
+  }, [selectedRoom, currentRoom, confirm, notify, t])
 
   const handleSetRepresentative = useCallback(async (agentId: string | null) => {
     if (!selectedRoom) return
@@ -574,10 +642,8 @@ function LocalChatPage() {
                         return undefined
                       })()
                 }
-                onStopAllAgents={user?.is_admin ? async () => {
-                  if (!selectedRoom) return
-                  await apiFetch(`/api/v1/rooms/${selectedRoom}/stop-agents`, { method: 'POST' })
-                } : undefined}
+                onStopAllAgents={user?.is_admin ? handleStopAllAgents : undefined}
+                onLeaveRoom={!isDm && myParticipantId ? handleLeaveRoom : undefined}
                 onDeleteRoom={canRemoveParticipants ? handleDeleteRoom : undefined}
                 onOpenSidebar={() => setSidebarOpen(true)}
                 onToggleParticipants={

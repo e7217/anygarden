@@ -89,6 +89,20 @@ PROJECT_TOOL_SCHEMAS = [
             "assignee_participant_id", "delegation_key", "title", "spec"],
     ),
     _tool(
+        "resume_project_task",
+        "Continue a required delegated task that its worker blocked (TASK_BLOCKED). "
+        "Appends your guidance to the same task's assignment, clears the block and wakes "
+        "the same assignee once with a new turn bound to that task; the sealed plan is kept. "
+        "Re-delegating with the same delegation_key only replays the blocked task, so use "
+        "this instead. Give concrete guidance that resolves why the worker stopped. "
+        "Not for tasks waiting on prerequisites, user answers or approvals, and limited "
+        "to a few resumes per task: past the limit ask the user or stop. Repeating the "
+        "same call is idempotent. End this turn after resuming; the result wakes you.",
+        {"execution_id": _string, "task_id": _string,
+         "guidance": {**_string, "maxLength": 20000}},
+        ["execution_id", "task_id", "guidance"],
+    ),
+    _tool(
         "seal_project_plan",
         "Seal the required task manifest after delegating every required stage. "
         "The execution cannot complete until all these tasks succeed with recorded "
@@ -336,6 +350,10 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
                     "room_id": task.room_id, "assignee_participant_id": task.assignee_participant_id,
                     "status": task.status, "input_revision": task.input_revision,
                 }
+            elif name == "resume_project_task":
+                from anygarden.project_executions.resumes import resume_blocked_task
+
+                payload = await resume_blocked_task(db, agent_id=agent_id, proof=proof, **arguments)
             elif name == "seal_project_plan":
                 execution = await service.seal_plan(db, agent_id=agent_id, proof=proof, **arguments)
                 payload = execution_payload(execution)
@@ -433,7 +451,8 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
 
             await apply_queued_usage_denials(request.app,
                 denials=dict(db.info.pop("project_execution_usage_denials", {})))
-        if name == "read_project_artifact" and isinstance(exc, service.ExecutionConflict):
+        if name in {"read_project_artifact", "resume_project_task"} and isinstance(
+                exc, service.ExecutionConflict):
             return {"content": [{"type": "text", "text": f"{exc.code}: {exc.detail}"}],
                     "structuredContent": {"code": exc.code, "detail": exc.detail}, "isError": True}
         return {"content": [{"type": "text", "text": str(exc)}], "isError": True}

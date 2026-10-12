@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Agent, Machine, Participant, Project, Room, User
 from anygarden.dependencies import forbid_guest, get_db
+from anygarden.federation.models import Peer, PeerGrant
 
 router = APIRouter(prefix="/api/v1/graph", tags=["graph"])
 
@@ -35,8 +36,8 @@ router = APIRouter(prefix="/api/v1/graph", tags=["graph"])
 # ── Pydantic response schemas ───────────────────────────────────────
 
 
-NodeKind = Literal["user", "machine", "agent", "room", "project"]
-EdgeKind = Literal["owns", "places", "participates", "parent_of"]
+NodeKind = Literal["user", "machine", "agent", "room", "project", "peer"]
+EdgeKind = Literal["owns", "places", "participates", "parent_of", "federates"]
 ScopeKind = Literal["personal", "global", "auto"]
 
 
@@ -83,6 +84,10 @@ def _rid(room_id: str) -> str:
 
 def _pid(project_id: str) -> str:
     return f"p_{project_id}"
+
+
+def _fid(peer_node_id: str) -> str:
+    return f"f_{peer_node_id}"
 
 
 # ── Scope resolution ────────────────────────────────────────────────
@@ -267,6 +272,85 @@ async def _build_global_graph(
         known_room_ids=known_room_ids,
     )
 
+    peer_nodes, peer_edges = await _build_peer_slice(db, known_room_ids)
+    nodes.extend(peer_nodes)
+    edges.extend(peer_edges)
+
+    return nodes, edges
+
+
+def _as_aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+async def _build_peer_slice(
+    db: AsyncSession, known_room_ids: set[str]
+) -> tuple[list[NodeOut], list[EdgeOut]]:
+    """FED-09 — federation peers as ``peer`` nodes + ``federates`` edges.
+
+    Global (admin) scope only: peer trust is managed exclusively through
+    the admin federation API, so personal slices never include it. Only
+    the trust state is surfaced — certificate PEM, fingerprint and
+    endpoint stay out of the payload. Edges are drawn for active,
+    unexpired grants on visible local rooms of non-revoked peers, so a
+    revoked peer remains visible as a node but holds no live channel.
+    """
+    peers = (await db.execute(select(Peer).order_by(Peer.node_id))).scalars().all()
+    if not peers:
+        return [], []
+    grants = (
+        await db.execute(select(PeerGrant).where(PeerGrant.active.is_(True)))
+    ).scalars().all()
+    now = datetime.now(UTC)
+    peer_state = {p.node_id: p.state for p in peers}
+
+    edges: list[EdgeOut] = []
+    channels_by_peer: dict[str, set[str]] = {}
+    for g in sorted(grants, key=lambda g: (g.peer_node_id, g.channel_id)):
+        if peer_state.get(g.peer_node_id) in (None, "revoked"):
+            continue
+        if g.channel_id not in known_room_ids:
+            continue
+        expires = _as_aware(g.expires_at)
+        if expires is not None and expires <= now:
+            continue
+        seen = channels_by_peer.setdefault(g.peer_node_id, set())
+        if g.channel_id in seen:
+            continue
+        seen.add(g.channel_id)
+        edges.append(
+            EdgeOut(
+                id=f"efd{len(edges) + 1}",
+                source=_fid(g.peer_node_id),
+                target=_rid(g.channel_id),
+                kind="federates",
+                data={"role": g.role, "capabilities": list(g.capabilities or [])},
+            )
+        )
+
+    nodes = [
+        NodeOut(
+            id=_fid(p.node_id),
+            kind="peer",
+            label=p.node_id,
+            data={
+                "node_id": p.node_id,
+                "state": p.state,
+                "certificate_epoch": p.epoch,
+                # No liveness tracking exists for peers; this is the last
+                # trust-state change (approve / revoke / rotate).
+                "state_changed_at": (
+                    _as_aware(p.updated_at).isoformat()
+                    if p.updated_at is not None
+                    else None
+                ),
+                "channel_count": len(channels_by_peer.get(p.node_id, ())),
+            },
+        )
+        for p in peers
+    ]
     return nodes, edges
 
 

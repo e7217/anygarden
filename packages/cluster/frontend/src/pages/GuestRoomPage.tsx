@@ -196,6 +196,8 @@ export default function GuestRoomPage() {
           typingUsers={typingUsers}
           typingStages={typingStages}
               typingProgress={typingProgress}
+          // ENG-09 — turn cancellation is for registered room members.
+          canCancelTurns={false}
         />
         <MessageInput
           onSend={send}

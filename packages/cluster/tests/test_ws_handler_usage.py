@@ -41,6 +41,7 @@ async def _make_room(db, room_id: str) -> str:
     return room_id
 
 
+@pytest.mark.req("USE-03")
 class TestFrameCarriesUsage:
     def test_true_when_tokens_present(self) -> None:
         frame = LifecycleFrame(
@@ -83,6 +84,7 @@ class TestFrameCarriesUsage:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("USE-03")
 async def test_token_frame_writes_usage_row_with_cost(db, engine):
     agent = await _make_agent(db)
     await _make_room(db, "room-1")
@@ -122,6 +124,7 @@ async def test_token_frame_writes_usage_row_with_cost(db, engine):
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("USE-03")
 async def test_codex_frame_writes_row_with_null_cost(db, engine):
     # codex/gemini report tokens but no cost → cost_usd NULL, row still
     # written (better than 0 rows for occurrence/latency/tokens).
@@ -153,6 +156,7 @@ async def test_codex_frame_writes_row_with_null_cost(db, engine):
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("USE-03")
 async def test_all_none_frame_writes_no_row(db, engine):
     # The guard short-circuits: an engine_call_finished frame with no
     # token data and no model is the openhands / bare-str shape, so no

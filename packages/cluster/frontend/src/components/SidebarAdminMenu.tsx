@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import {
-  BookOpen, Network, Package, Plug, Server, Settings, Share2, Waypoints,
+  BookOpen, Gauge, Network, Package, Plug, Server, Settings, Share2, Waypoints,
 } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
@@ -17,6 +17,7 @@ const links: { labelKey: MessageKey; path: string; icon: typeof Server; children
   { labelKey: 'navigation.skills', path: '/admin/skills', icon: BookOpen },
   { labelKey: 'navigation.mcpServers', path: '/admin/mcp-templates', icon: Plug },
   { labelKey: 'navigation.usage', path: '/admin/usage', icon: Waypoints, children: true },
+  { labelKey: 'navigation.budgets', path: '/admin/budgets', icon: Gauge },
   { labelKey: 'navigation.federation', path: '/admin/federation', icon: Network, children: true, experimental: true },
   { labelKey: 'navigation.topology', path: '/topology', icon: Share2, experimental: true },
 ]

@@ -345,6 +345,7 @@ async def test_resolve_wake_only_when_all_blockers_cleared(db, monkeypatch) -> N
     assert await _blocker_count(db, task_id=b.id) == 0
 
 
+@pytest.mark.req("EXE-01")
 @pytest.mark.asyncio
 async def test_failed_prerequisite_keeps_dependent_blocked(db, monkeypatch) -> None:
     """A failed analysis provides no accepted input for the dependent."""
@@ -377,8 +378,16 @@ async def test_failed_prerequisite_keeps_dependent_blocked(db, monkeypatch) -> N
     assert injected == []
     assert await _blocker_count(db, task_id=b.id) == 1
     assert a.id in b.error
+    # Even if the dependent is made claimable, the failed prerequisite still
+    # prevents claiming it.
+    b.status = "todo"
+    await db.flush()
+    result = await claim_task(db, agent_id=agent_b.id, arguments={"task_id": b.id})
+    assert result["isError"]
+    assert b.status == "todo"
 
 
+@pytest.mark.req("EXE-14")
 @pytest.mark.asyncio
 async def test_successful_results_are_preserved_and_delivered_on_final_wake(db, engine) -> None:
     from hashlib import sha256
@@ -419,6 +428,7 @@ async def test_successful_results_are_preserved_and_delivered_on_final_wake(db, 
         assert restored.status == "todo"
 
 
+@pytest.mark.req("EXE-01")
 @pytest.mark.asyncio
 async def test_pending_prerequisite_prevents_claim_and_premature_completion(db) -> None:
     room = await _room(db)

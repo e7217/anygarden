@@ -223,7 +223,7 @@ test.describe('thread composer contract', () => {
     expect(frame.thread_root_id).toBeUndefined()
   })
 
-  test('the panel composer addresses the top-level root', async ({ page }) => {
+  test('the panel composer addresses the top-level root [MSG-05]', async ({ page }) => {
     await openRoom(page)
     await threadTrigger(page).click()
 
@@ -238,7 +238,7 @@ test.describe('thread composer contract', () => {
     expect(frame.thread_root_id).toBe(ROOT_ID)
   })
 
-  test('the inline composer addresses the same root', async ({ page }) => {
+  test('the inline composer addresses the same root [MSG-05]', async ({ page }) => {
     await openRoom(page)
     await page.getByTestId('thread-mode-toggle').click()
     await threadTrigger(page).click()

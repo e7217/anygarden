@@ -204,10 +204,12 @@ async def test_usage_aggregates_cost_usd_nullable_safe(env) -> None:
         (" 2H ", 2),
     ],
 )
+@pytest.mark.req("USE-02")
 def test_usage_window_contract(window, hours):
     assert _parse_window(window) == hours
 
 
+@pytest.mark.req("USE-01")
 async def test_usage_admin_only_and_retired_routes_absent(env):
     from anygarden.db.models import Base
     from cryptography.fernet import Fernet

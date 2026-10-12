@@ -424,6 +424,7 @@ def healthz_app():
     return app
 
 
+@pytest.mark.req("SYS-03")
 class TestHealthzDependencyCheck:
     """#445 — healthz가 실제 의존성 상태를 반영하는지 검증."""
 
@@ -475,3 +476,22 @@ class TestHealthzDependencyCheck:
         body = resp.json()
         assert body["status"] == "degraded"
         assert body["components"]["orphan_sweeper"] == "unhealthy"
+
+    @pytest.mark.asyncio
+    async def test_db_unreachable_returns_503(self, healthz_app) -> None:
+        """DB 핑 실패 ⇒ 크리티컬 다운 ⇒ 503 + status=unhealthy."""
+
+        class _BrokenSession:
+            async def __aenter__(self):
+                raise ConnectionError("db down")
+
+            async def __aexit__(self, *exc) -> None:
+                return None
+
+        healthz_app.state.session_factory = lambda: _BrokenSession()
+        tc = TestClient(healthz_app)
+        resp = tc.get("/healthz")
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["status"] == "unhealthy"
+        assert body["components"]["db"] == "unhealthy"

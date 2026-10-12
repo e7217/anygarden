@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from anygarden_agent.cli import _compose_identity_header, _with_identity
 from anygarden_agent.coordination.pending_context import (
     format_context_line,
@@ -78,6 +80,7 @@ class _RosterAdapter(EngineAdapter):
 
 
 class TestAssembleUserContentSenderLabel:
+    @pytest.mark.req("COL-09")
     def test_addressed_message_prefixed_with_sender(self) -> None:
         adapter = _RosterAdapter({"r1": ROSTER})
         out = adapter.assemble_user_content("r1", "hello", sender_participant_id="pid-hu")
@@ -96,6 +99,7 @@ class TestAssembleUserContentSenderLabel:
 
 
 class TestIdentityHeader:
+    @pytest.mark.req("COL-09")
     def test_header_contains_name(self) -> None:
         header = _compose_identity_header("테스트에이전트01")
         assert header is not None

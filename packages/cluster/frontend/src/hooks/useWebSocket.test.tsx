@@ -202,7 +202,7 @@ const chatMessage = (room: string, seq: number, content = room): ChatMessage => 
 })
 
 describe('useWebSocket room history isolation', () => {
-  it('ignores delayed A history after A → B → A and preserves the current reconnect cursor', async () => {
+  it('ignores delayed A history after A → B → A and preserves the current reconnect cursor [MSG-04]', async () => {
     const oldA = deferred<Response>()
     const newA = deferred<Response>()
     vi.mocked(fetch)
@@ -223,7 +223,7 @@ describe('useWebSocket room history isolation', () => {
     expect(sockets[3].url).toContain('/ws/rooms/A?since_seq=7')
   })
 
-  it('keeps live messages when the initial history body arrives later', async () => {
+  it('keeps live messages when the initial history body arrives later [MSG-04]', async () => {
     const body = deferred<ChatMessage[]>()
     vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: () => body.promise } as Response)
     const { result } = renderHook(() => useWebSocket('A'))
@@ -235,7 +235,7 @@ describe('useWebSocket room history isolation', () => {
     expect(sockets[1].url).toContain('since_seq=8')
   })
 
-  it('deduplicates live and historical copies while retaining newer live contents', async () => {
+  it('deduplicates live and historical copies while retaining newer live contents [MSG-04]', async () => {
     const history = deferred<Response>()
     vi.mocked(fetch).mockReturnValueOnce(history.promise)
     const { result } = renderHook(() => useWebSocket('A'))

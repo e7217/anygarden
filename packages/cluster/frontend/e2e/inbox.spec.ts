@@ -10,7 +10,7 @@ const question = {
     can_answer: true, is_current: true, input_revision: 1, created_at: '2026-10-01T00:00:00Z' },
 }
 for (const width of [375, 1440]) {
-  test(`inbox disclosure preserves drafts and links at ${width}px`, async ({ page }) => {
+  test(`inbox disclosure preserves drafts and links at ${width}px [INB-05]`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await page.addInitScript(() => {
       localStorage.setItem('anygarden_token', 'test-token')
@@ -46,5 +46,42 @@ for (const width of [375, 1440]) {
     await page.goto('/inbox?item=question%3Aq')
     await expect(item).toHaveAttribute('open', '')
     await expect(input).toBeVisible()
+    // The answer card links back to the originating request.
+    await item.getByRole('link', { name: 'Choose display name' }).click()
+    await expect(page).toHaveURL(/\/rooms\/room$/)
   })
 }
+
+test('pending questions survive a reload and a new sign-in [INB-04]', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem('anygarden_token')) localStorage.setItem('anygarden_token', 'first-session')
+    localStorage.setItem('anygarden_locale', 'en')
+  })
+  const inboxTokens: string[] = []
+  await page.route('**/api/v1/**', async route => {
+    const path = new URL(route.request().url()).pathname
+    let body: unknown = []
+    if (path === '/api/v1/auth/me') body = { id: 'user', email: 'review@example.test', is_admin: true }
+    if (path === '/api/v1/inbox') {
+      inboxTokens.push(route.request().headers()['authorization'] ?? '')
+      body = { items: [question], projects: [{ id: 'p', name: 'Project' }] }
+    }
+    if (path === '/api/v1/projects') body = [{ id: 'p', name: 'Project' }]
+    if (path === '/api/v1/system/version') body = { version: 'test' }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+  })
+  const item = page.getByTestId('inbox-item-question:q')
+  const attention = page.getByRole('region', { name: 'Needs attention' })
+  await page.goto('/inbox')
+  await expect(attention.getByTestId('inbox-item-question:q')).toBeVisible()
+
+  await page.reload()
+  await expect(attention.getByTestId('inbox-item-question:q')).toBeVisible()
+
+  // Signing in again replaces the session token; the open question is still waiting.
+  await page.evaluate(() => localStorage.setItem('anygarden_token', 'second-session'))
+  await page.reload()
+  await expect(attention.getByTestId('inbox-item-question:q')).toBeVisible()
+  await expect(item).toContainText('Choose display name')
+  expect(inboxTokens.at(-1)).toContain('second-session')
+})

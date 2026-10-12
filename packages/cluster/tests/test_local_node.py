@@ -51,6 +51,7 @@ def offline(monkeypatch):
     )
 
 
+@pytest.mark.req("NODE-03")
 def test_owner_identity_is_stable_and_second_process_cannot_start(tmp_path):
     owner = NodeOwner(tmp_path)
     owner.acquire()
@@ -98,6 +99,7 @@ def test_stop_request_targets_owner_nonce_not_pid(tmp_path):
 
 
 @pytest.mark.parametrize("args", [["--workers", "2"], ["--reload"]])
+@pytest.mark.req("NODE-04")
 def test_cli_rejects_unsupported_modes_before_creating_state(tmp_path, args):
     result = CliRunner().invoke(
         dispatch, ["start", "--data-dir", str(tmp_path / "node"), *args]
@@ -106,6 +108,7 @@ def test_cli_rejects_unsupported_modes_before_creating_state(tmp_path, args):
     assert not (tmp_path / "node").exists()
 
 
+@pytest.mark.req("NODE-04")
 def test_worker_environment_rejected_before_ownership(tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_CONCURRENCY", "2")
     result = CliRunner().invoke(
@@ -333,6 +336,7 @@ async def test_cleanup_failure_keeps_recovery_required(tmp_path, monkeypatch):
         NodeOwner(tmp_path).acquire()
 
 
+@pytest.mark.req("NODE-09")
 async def test_shutdown_waits_for_inflight_spawn_and_kills_its_process(
     tmp_path, monkeypatch
 ):
@@ -415,6 +419,7 @@ async def test_shutdown_waits_for_inflight_spawn_and_kills_its_process(
 
 
 @pytest.mark.parametrize("cleanup_failure", [None, "backend", "server"])
+@pytest.mark.req("NODE-03")
 def test_real_cli_start_stop_and_restart_without_network_daemon(
     tmp_path, cleanup_failure
 ):
@@ -708,6 +713,7 @@ async def test_integrated_agent_process_inherits_only_explicit_environment(
         owner.release(clean=True)
 
 
+@pytest.mark.req("FED-06")
 def test_peer_port_without_credentials_is_refused_before_startup(tmp_path):
     """--peer-port is explicit opt-in and fails closed without credentials."""
     from click.testing import CliRunner
@@ -814,6 +820,7 @@ def test_real_cli_peer_listener_lifecycle_with_stop(tmp_path):
         socket.create_connection(("127.0.0.1", peer_port), timeout=0.5)
 
 
+@pytest.mark.req("FED-06")
 def test_invalid_credentials_with_peer_port_fail_startup(tmp_path):
     """Requested listener + unusable credentials aborts boot, not silence."""
     import os
@@ -927,3 +934,207 @@ async def test_integrated_mode_stays_silent_about_disabled_local_execution(
         for entry in entries
         if entry["event"] == "startup.local_execution_disabled"
     ]
+
+
+def _bare_backend(tmp_path):
+    """Backend whose loops can run without a database or registration."""
+    owner = NodeOwner(tmp_path / "node")
+    owner.acquire()
+    shutdown = []
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=node_config(tmp_path / "node"),
+            node_shutdown_callback=lambda: shutdown.append(True),
+        )
+    )
+    return LocalExecutionBackend(app, owner), owner, shutdown
+
+
+@pytest.mark.asyncio
+async def test_transient_frame_error_does_not_shut_down_node(tmp_path, monkeypatch):
+    """#772: one frame failing on a locked DB must not stop the whole node."""
+    from sqlalchemy.exc import OperationalError
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    handled = []
+
+    async def handle(frame):
+        if frame["n"] == 1:
+            raise OperationalError("UPDATE agents", {}, Exception("database is locked"))
+        handled.append(frame["n"])
+
+    monkeypatch.setattr(backend.daemon, "_handle", handle)
+    task = asyncio.create_task(backend._consume())
+    try:
+        for n in (1, 2):
+            backend.queue.put_nowait({"type": "sync_desired_state", "n": n})
+        await asyncio.wait_for(backend.queue.join(), 2)
+        assert handled == [2]
+        assert backend.failed is False
+        assert shutdown == []
+        assert not task.done()
+    finally:
+        backend.queue.put_nowait(None)
+        await asyncio.wait_for(task, 2)
+        owner.release(clean=True)
+
+
+@pytest.mark.asyncio
+async def test_ownership_error_in_frame_still_shuts_down_node(tmp_path, monkeypatch):
+    backend, owner, shutdown = _bare_backend(tmp_path)
+
+    async def handle(frame):
+        raise NodeOwnershipError("mapping mismatch")
+
+    monkeypatch.setattr(backend.daemon, "_handle", handle)
+    task = asyncio.create_task(backend._consume())
+    backend.queue.put_nowait({"type": "sync_desired_state"})
+    with pytest.raises(NodeOwnershipError):
+        await asyncio.wait_for(task, 2)
+    assert backend.failed is True
+    assert shutdown == [True]
+    owner.release(clean=True)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_survives_transient_errors(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    calls = []
+
+    async def ensure_registered():
+        calls.append(True)
+        if len(calls) <= 2:
+            raise OperationalError("SELECT", {}, Exception("database is locked"))
+
+    monkeypatch.setattr(backend, "ensure_registered", ensure_registered)
+    monkeypatch.setattr(backend, "MAX_MAINTENANCE_FAILURES", 3)
+    task = asyncio.create_task(backend._maintain())
+    try:
+        while len(calls) < 4:
+            await asyncio.sleep(0.05)
+        assert backend.failed is False
+        assert shutdown == []
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        owner.release(clean=True)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_gives_up_after_consecutive_failures(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+
+    async def ensure_registered():
+        raise OperationalError("SELECT", {}, Exception("disk I/O error"))
+
+    monkeypatch.setattr(backend, "ensure_registered", ensure_registered)
+    monkeypatch.setattr(backend, "MAX_MAINTENANCE_FAILURES", 3)
+    with pytest.raises(OperationalError):
+        await asyncio.wait_for(backend._maintain(), 5)
+    assert backend.failed is True
+    assert shutdown == [True]
+    owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-09")
+async def test_node_stops_running_agents_and_shuts_down_without_lock_contention(
+    tmp_path, monkeypatch
+):
+    """#772: on a file DB, stopping running agents and then shutting the node
+    down cleans every agent up; a lock error never ends the node early."""
+    from sqlalchemy import select
+
+    from anygarden.db.models import Machine
+
+    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'node.db'}")
+    factory = build_session_factory(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    owner = NodeOwner(tmp_path / "node")
+    owner.acquire()
+    bus = MachineBus()
+    lifecycle = AgentLifecycle(db_factory=factory, machine_bus=bus)
+    shutdown = []
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=node_config(tmp_path / "node"),
+            session_factory=factory,
+            machine_bus=bus,
+            agent_lifecycle=lifecycle,
+            node_shutdown_callback=lambda: shutdown.append(True),
+        )
+    )
+    backend = LocalExecutionBackend(app, owner)
+    spawner = backend.daemon._spawner
+    spawned, killed = [], []
+
+    async def fake_spawn(manifest):
+        spawned.append(manifest.agent_id)
+        spawner._agents[manifest.agent_id] = RunningAgent(
+            agent_id=manifest.agent_id, pid=99999999, engine="echo",
+            started_at=1.0, proc=None,
+        )
+        return SpawnResult(success=True, agent_id=manifest.agent_id, pid=99999999)
+
+    async def fake_kill(agent_id):
+        killed.append(agent_id)
+        spawner._agents.pop(agent_id, None)
+        return {"success": True}
+
+    monkeypatch.setattr(spawner, "spawn", fake_spawn)
+    monkeypatch.setattr(spawner, "kill", fake_kill)
+    monkeypatch.setattr(
+        "anygarden.machine.daemon.connect",
+        lambda *a, **kw: pytest.fail("daemon network connect"),
+    )
+    async with factory() as db:
+        user = User(email="admin@test.local", password_hash="x", is_admin=True)
+        project = Project(name="local")
+        db.add_all([user, project])
+        await db.flush()
+        room = Room(project_id=project.id, name="local")
+        agents = [Agent(name=f"fake-{n}", engine="echo") for n in range(3)]
+        db.add_all([room, *agents])
+        await db.flush()
+        db.add_all(
+            Participant(room_id=room.id, agent_id=a.id, role="member") for a in agents
+        )
+        agent_ids = [a.id for a in agents]
+        await db.commit()
+    closed = False
+    try:
+        await backend.start()
+        await asyncio.gather(*(lifecycle.request_start(a) for a in agent_ids))
+        for _ in range(200):
+            if len(spawned) == 3 and not backend.daemon._spawn_tasks:
+                break
+            await asyncio.sleep(0.01)
+        assert sorted(spawned) == sorted(agent_ids)
+
+        # Stop two running agents at once while the node keeps writing state.
+        await asyncio.gather(*(lifecycle.request_stop(a) for a in agent_ids[:2]))
+        await asyncio.wait_for(backend.queue.join(), 5)
+        assert sorted(killed) == sorted(agent_ids[:2])
+        assert backend.failed is False and shutdown == []
+
+        # Shutting the node down cleans up the agent still running.
+        await asyncio.wait_for(backend.close(), 10)
+        closed = True
+        assert sorted(killed) == sorted(agent_ids)
+        assert not spawner.list_running()
+        assert backend.failed is False and shutdown == []
+        async with factory() as db:
+            machine = await db.get(Machine, owner.identity["machine_id"])
+            assert machine.status == "offline"
+            stopped = await db.scalars(select(Agent).where(Agent.id.in_(agent_ids[:2])))
+            assert {a.desired_state for a in stopped} == {"stopped"}
+    finally:
+        if not closed:
+            await backend.close()
+        owner.release(clean=True)
+        await engine.dispose()

@@ -32,6 +32,7 @@ setup_room = _fixture.setup_room
 
 @pytest.mark.parametrize("runtime", ["codex-cli", "pi-cli"])
 @pytest.mark.parametrize("outcome", ["ok", "failed", "timeout", "cancel"])
+@pytest.mark.req("USE-03")
 async def test_room_measurement_reaches_ledger_and_budget(
     db, engine, setup_room, monkeypatch, runtime, outcome
 ):

@@ -274,6 +274,7 @@ async def test_room_direct_endpoint_http(
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-06")
 async def test_room_resume_restart_and_thread_scope(setup_room, monkeypatch):
     client = await client_for("codex-cli", monkeypatch)
     await client._message_handlers[0](message("one"))
@@ -525,6 +526,7 @@ async def test_codex_unlisted_version_executes_room_turn(setup_room, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-07")
 async def test_pi_without_managed_install_or_opt_in_refuses_to_start(
     setup_room, monkeypatch
 ):
@@ -535,6 +537,7 @@ async def test_pi_without_managed_install_or_opt_in_refuses_to_start(
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-07")
 async def test_pi_path_opt_in_uses_path(setup_room, monkeypatch):
     monkeypatch.delenv("ANYGARDEN_PI_EXECUTABLE")
     monkeypatch.setenv("ANYGARDEN_PI_USE_PATH", "1")

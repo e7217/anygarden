@@ -784,6 +784,7 @@ class TestGetRunning:
 class TestKill:
     """Tests for killing agent processes."""
 
+    @pytest.mark.req("NODE-06")
     async def test_kill_terminates_tree(
         self, spawner: Spawner, spawn_msg: SpawnManifest
     ) -> None:

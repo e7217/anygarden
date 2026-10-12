@@ -11,6 +11,7 @@ RETIRED = ["claude-code", "gemini-cli", "openhands", "claude_code", "gemini_cli"
 
 
 @pytest.mark.parametrize("engine_name", RETIRED)
+@pytest.mark.req("AGT-01")
 async def test_retired_configuration_preserved_and_execution_blocked(
     agents_env, engine_name
 ):
@@ -91,3 +92,5 @@ async def test_retired_configuration_preserved_and_execution_blocked(
         "/api/v1/agents", headers=headers, json=dict(name="new", engine=engine_name)
     )
     assert created.status_code == 422
+    # The rejection carries migration guidance, not a bare validation error.
+    assert "codex-cli or pi-cli" in created.text

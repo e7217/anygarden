@@ -272,3 +272,18 @@ class TestCheckPeerAsk:
 
         assert caller.turn is None
         assert await since_turn_start(db, caller) == []
+
+
+@pytest.mark.req("COL-05")
+def test_default_budget_allows_eight_peer_handoffs_per_user_turn() -> None:
+    """The app-wide default caps one user turn at 8 peer handoffs; a new
+    user turn (``reset``) restores the full allowance."""
+    budget = PeerHandoffBudget()
+    for _ in range(8):
+        assert budget.would_block("r") is False
+        assert budget.consume("r") is True
+    assert budget.remaining("r") == 0
+    assert budget.would_block("r") is True
+    assert budget.consume("r") is False
+    budget.reset("r")
+    assert budget.remaining("r") == 8

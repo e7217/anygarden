@@ -405,6 +405,7 @@ class TestRoomCRUD:
             assert data["user_id"] == other_id
             assert data["role"] == "member"
 
+    @pytest.mark.req("ROOM-06")
     @pytest.mark.asyncio
     async def test_add_participant_duplicate_returns_409(self, room_env) -> None:
         """Re-adding a user already in the room must 409, not create a
@@ -423,6 +424,17 @@ class TestRoomCRUD:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 409, resp.text
+
+        async with app.state.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Participant).where(
+                        Participant.room_id == room.id,
+                        Participant.user_id == user.id,
+                    )
+                )
+            ).scalars().all()
+        assert len(rows) == 1
 
     @pytest.mark.asyncio
     async def test_add_participant_notifies_user(self, room_env) -> None:
@@ -976,6 +988,76 @@ class TestSubRoom:
             assert data["name"] == "sub-thread"
             assert data["parent_room_id"] == room.id
 
+    @pytest.mark.req("ROOM-03")
+    @pytest.mark.asyncio
+    async def test_sub_room_gets_parent_participants_and_rejects_outsiders(
+        self, room_env
+    ) -> None:
+        """Members picked from the parent room are copied into the new
+        sub-room (same user/agent ids); a participant id that is not in the
+        parent room is refused."""
+        app = room_env["app"]
+        room = room_env["room"]
+        creator = room_env["participant"]
+        headers = {"Authorization": f"Bearer {room_env['token']}"}
+
+        async with app.state.session_factory() as db:
+            peer = User(email="peer@anygarden.io", password_hash="x")
+            agent = Agent(name="sub-bot", engine="codex")
+            other_room = Room(project_id=room.project_id, name="elsewhere")
+            db.add_all([peer, agent, other_room])
+            await db.flush()
+            peer_part = Participant(room_id=room.id, user_id=peer.id, role="member")
+            agent_part = Participant(room_id=room.id, agent_id=agent.id, role="member")
+            stranger = Participant(room_id=other_room.id, user_id=peer.id, role="member")
+            db.add_all([peer_part, agent_part, stranger])
+            await db.commit()
+            peer_id, agent_id = peer.id, agent.id
+            peer_part_id, agent_part_id, stranger_id = (
+                peer_part.id,
+                agent_part.id,
+                stranger.id,
+            )
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/v1/rooms/{room.id}/sub-rooms",
+                json={
+                    "name": "sub",
+                    "participants": [peer_part_id, agent_part_id],
+                    "creator_participant_id": creator.id,
+                },
+                headers=headers,
+            )
+            assert resp.status_code == 201, resp.text
+            child_id = resp.json()["id"]
+
+            bad = await client.post(
+                f"/api/v1/rooms/{room.id}/sub-rooms",
+                json={
+                    "name": "sub-bad",
+                    "participants": [stranger_id],
+                    "creator_participant_id": creator.id,
+                },
+                headers=headers,
+            )
+            assert bad.status_code == 403
+            assert "not in parent room" in bad.json()["detail"]
+
+        async with app.state.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Participant).where(Participant.room_id == child_id)
+                )
+            ).scalars().all()
+        members = {(p.user_id, p.agent_id): p.role for p in rows}
+        assert members == {
+            (room_env["user"].id, None): "owner",
+            (peer_id, None): "member",
+            (None, agent_id): "member",
+        }
+
 
 class TestRepresentativeAgent:
     """Tests for PUT /api/v1/rooms/{room_id}/representative."""
@@ -1072,6 +1154,7 @@ class TestRepresentativeAgent:
             assert resp.status_code == 200
             assert resp.json()["representative_agent_id"] is None
 
+    @pytest.mark.req("ROOM-07")
     @pytest.mark.asyncio
     async def test_set_representative_non_participant_fails(self, rep_env) -> None:
         """Setting a non-participant agent as representative returns 400."""
@@ -1761,6 +1844,7 @@ class TestRemoveParticipant:
             assert resp.status_code == 400
             assert "leave-room" in resp.json()["detail"]
 
+    @pytest.mark.req("ROOM-05")
     @pytest.mark.asyncio
     async def test_removing_last_admin_returns_409(self, config: AnygardenSettings) -> None:
         """Removing the only admin/owner of a room returns 409."""

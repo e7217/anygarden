@@ -15,7 +15,7 @@ function Harness() {
     <FilterPanel
       filter={DEFAULT_FILTER}
       onChange={() => {}}
-      counts={{ user: 1, machine: 1, agent: 1, room: 1, project: 0 }}
+      counts={{ user: 1, machine: 1, agent: 1, room: 1, project: 0, peer: 0 }}
       knownEngines={['codex']}
       knownStates={['running']}
     />

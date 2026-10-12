@@ -1,4 +1,4 @@
-.PHONY: install setup test lint clean dev release-agent release-cluster
+.PHONY: install setup test lint clean dev release-agent release-cluster req-report bench-report
 
 install:                ## Install all packages (workspace)
 	uv sync --all-packages --all-extras
@@ -10,6 +10,15 @@ setup:                  ## One-time dev setup: install + activate git hooks
 
 test:                   ## Run tests across all packages
 	uv run pytest packages/
+
+req-report:             ## Requirement coverage from pytest JUnit (frontend layers need CI's vitest/e2e JUnit)
+	mkdir -p .tmp/junit
+	cd packages/agent && uv run pytest -q --junitxml=../../.tmp/junit/agent.xml
+	cd packages/cluster && uv run pytest -q -n logical --junitxml=../../.tmp/junit/cluster.xml
+	python3 scripts/req_report.py .tmp/junit/*.xml --spec docs/requirements.md
+
+bench-report:           ## Trend report from committed live benchmark results
+	uv run python -m benchmarks.runner report
 
 lint:                   ## Run ruff across all packages
 	uv run ruff check packages/

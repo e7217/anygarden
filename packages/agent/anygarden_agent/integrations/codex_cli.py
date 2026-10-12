@@ -144,6 +144,8 @@ _OPERATING_LEAD_WORKFLOW = (
     "도구가 실제 작업을 만들고 입력 자료를 전달합니다. 텍스트 /delegate는 실행이 아닙니다. "
     "모든 필수 담당 작업을 만든 뒤 seal_project_plan으로 계획을 확정하고 담당 결과를 기다리세요. "
     "재개된 실행은 get_project_execution으로 실제 결과를 읽고 필요한 후속 작업을 이어가세요. "
+    "담당자가 작업을 막으면(TASK_BLOCKED) resume_project_task에 구체적 지침을 담아 같은 작업을 "
+    "이어가게 하거나, 사용자에게 묻거나, 중단하세요. "
     "미완료 작업을 완료로 보고하지 말고, 모든 필수 결과를 검토한 뒤 "
     "complete_project_execution으로 최종 결과·산출물·검증 근거·제한사항·다음 행동을 보고하세요."
 )

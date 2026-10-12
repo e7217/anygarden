@@ -787,6 +787,24 @@ async def mark_task_status(
             from anygarden.project_executions.service import reconcile_execution
 
             await reconcile_execution(db, task=task)
+    elif status == "blocked" and task.execution_id is not None:
+        # EXE-21: a worker that deliberately blocks its execution task hands
+        # control back to the lead once (idempotent per outcome event), with
+        # only the public reason, so it can re-delegate, ask, or stop. The
+        # block itself and the user's inbox item stand even if the lead
+        # cannot be woken right now.
+        from anygarden.project_executions.service import (
+            ExecutionConflict,
+            reconcile_execution,
+        )
+
+        blocked_task_id = task.id
+        try:
+            async with db.begin_nested():
+                await reconcile_execution(db, task=task)
+        except ExecutionConflict as exc:
+            log.warning("mark_task_status.blocked_lead_wake_skipped task=%s code=%s",
+                        blocked_task_id, getattr(exc, "code", type(exc).__name__))
 
     deleted = False
     if task.goal_id is not None and status in TERMINAL_STATUSES:

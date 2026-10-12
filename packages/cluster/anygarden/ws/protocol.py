@@ -79,6 +79,23 @@ class TurnStopOut(BaseModel):
     reason: str = Field(min_length=1, max_length=128)
 
 
+class TurnCancelOut(BaseModel):
+    """ENG-09 — stop a general (non-execution) turn's in-flight engine call.
+
+    A separate frame from ``turn_stop`` so execution stops keep their exact
+    receipt contract; agents that predate it simply ignore the unknown type.
+    The server has already made the turn terminal; no receipt is expected.
+    """
+    model_config = {"extra": "forbid"}
+    type: Literal["turn_cancel"] = "turn_cancel"
+    agent_id: str
+    room_id: str
+    request_id: str = Field(min_length=1, max_length=128)
+    attempt: int = Field(ge=1, strict=True)
+    generation: int = Field(ge=0, strict=True)
+    reason: str = Field(min_length=1, max_length=128)
+
+
 class TurnStopResultFrame(BaseModel):
     """Process receipt only; contains neither leases nor native session handles."""
     model_config = {"extra": "forbid"}
@@ -272,6 +289,30 @@ class MessageOut(BaseModel):
     seq: int
     created_at: datetime
     metadata: Optional[dict[str, Any]] = None
+
+
+class ReactionOut(BaseModel):
+    """D-1 — a reaction receipt. Deliberately not a ``message`` frame, so
+    reaction events never reach agent wake paths."""
+
+    type: Literal["reaction"] = "reaction"
+    room_id: str
+    message_id: str
+    participant_id: str
+    emoji: str
+    action: Literal["added", "removed"]
+
+
+class MessageUpdatedOut(MessageOut):
+    """MSG-08 — an existing message was edited or soft-deleted in place.
+
+    Carries the full current row (same seq as before) so other tabs replace
+    their copy. Deliberately a distinct type from ``message``: agent runtimes
+    and wake paths only act on ``message`` frames, so an edit never starts a
+    turn or re-routes mentions.
+    """
+
+    type: Literal["message_updated"] = "message_updated"  # type: ignore[assignment]
 
 
 class RoomCreatedOut(BaseModel):
@@ -522,7 +563,10 @@ OutgoingFrame = (
     ExecutionControlOut
     | TurnStartPermitOut
     | TurnStopOut
+    | TurnCancelOut
     | MessageOut
+    | MessageUpdatedOut
+    | ReactionOut
     | RoomCreatedOut
     | JoinRoomOut
     | RoomDeletedOut

@@ -458,6 +458,7 @@ class TestAgentEveryone:
     therefore held to the same depth/budget as any other peer ask."""
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-03")
     async def test_agent_everyone_is_a_peer_query_excluding_itself(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
@@ -477,6 +478,7 @@ class TestAgentEveryone:
         assert sender_pid not in {m["id"] for m in meta["mentions"]}
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-03")
     async def test_second_agent_everyone_in_same_turn_is_redundant(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, _sender_pid, _peer_pid = await _seed_sender_and_peer(sf, room)
@@ -545,6 +547,7 @@ class TestPeerCallHop:
         assert "peer_blocked" not in meta
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-04")
     async def test_called_peer_calling_on_is_depth_blocked(self, ws_env) -> None:
         """The called peer's own call is hop 2, even without a turn proof."""
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
@@ -564,11 +567,14 @@ class TestPeerCallHop:
         meta = msg.get("metadata") or {}
         assert meta.get("peer_blocked") is True
         assert meta.get("peer_depth") == 2
+        assert "mentions" not in meta
+        assert f"<@user:{third_pid}>" not in msg["content"]
         assert meta.get("peer_call_undelivered") == [
             {"participant_id": third_pid, "reason": "limit_reached"}
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-05")
     async def test_total_cap_counts_heads(self, ws_env) -> None:
         from anygarden.orchestration.rules import PeerHandoffBudget
 
@@ -648,6 +654,7 @@ class TestThreadReplySafetyNet:
     budget caps entirely."""
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-04")
     async def test_hop2_agent_thread_mention_is_depth_blocked(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
@@ -675,6 +682,7 @@ class TestThreadReplySafetyNet:
         assert third_pid not in await _turn_targets(sf, msg["id"])
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-05")
     async def test_thread_mention_consumes_turn_budget(self, ws_env) -> None:
         from anygarden.orchestration.rules import PeerHandoffBudget
 

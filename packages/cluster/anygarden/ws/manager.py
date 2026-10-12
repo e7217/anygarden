@@ -253,6 +253,31 @@ class ConnectionManager:
             await self.unsubscribe(sub.participant_id, websocket=sub.ws)
         return len({sub.participant_id for sub in subs})
 
+    async def revoke_participant(
+        self,
+        participant_id: str,
+        *,
+        code: int = 4003,
+        reason: str = "Room membership ended",
+    ) -> int:
+        """Close every socket of *participant_id* (ROOM-05 leave).
+
+        A participant row is room-scoped, so this only drops that one
+        room's sessions (every tab). Returns the number of sockets closed.
+        """
+
+        async with self._lock:
+            subs = list(self._by_participant.get(participant_id, []))
+
+        for sub in subs:
+            try:
+                await sub.ws.close(code=code, reason=reason)
+            except Exception:  # noqa: BLE001 — best-effort socket revocation
+                pass
+        for sub in subs:
+            await self.unsubscribe(sub.participant_id, websocket=sub.ws)
+        return len(subs)
+
     async def revoke_invite(
         self,
         invite_id: str,

@@ -102,6 +102,7 @@ def _auth(token: str) -> dict[str, str]:
 
 
 class TestCreateInvite:
+    @pytest.mark.req("AUTH-05")
     @pytest.mark.asyncio
     async def test_owner_can_create(self, env) -> None:
         transport = ASGITransport(app=env["app"])
@@ -159,6 +160,7 @@ class TestCreateInvite:
             )
             assert resp.status_code == 403
 
+    @pytest.mark.req("AUTH-09")
     @pytest.mark.asyncio
     async def test_outsider_cannot_create(self, env) -> None:
         transport = ASGITransport(app=env["app"])
@@ -184,6 +186,7 @@ class TestCreateInvite:
             )
             assert resp.status_code == 404
 
+    @pytest.mark.req("AUTH-09")
     @pytest.mark.asyncio
     async def test_unknown_room_hidden_from_non_admin(self, env) -> None:
         """Authz runs before existence — non-members never learn
@@ -327,6 +330,7 @@ class TestCreateInvite:
 
 
 class TestListInvites:
+    @pytest.mark.req("AUTH-05")
     @pytest.mark.asyncio
     async def test_owner_sees_room_invites_only(self, env) -> None:
         async with env["session_factory"]() as db:

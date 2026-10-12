@@ -179,7 +179,8 @@ class AgentUpdate(BaseModel):
     Keeping the update surface narrow intentionally — engine change
     and restart_policy change are not supported here because both
     affect a running agent's process model and deserve explicit
-    lifecycle events rather than a silent PUT.
+    lifecycle events rather than a silent PUT. Engine changes go
+    through ``PUT /agents/{id}/engine`` (#769).
     """
 
     name: OptionalAgentName = None
@@ -235,6 +236,19 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=200)
     description_set: bool = False
 
+
+
+class AgentEngineChange(BaseModel):
+    """#769 — body for ``PUT /agents/{id}/engine``.
+
+    Kept apart from :class:`AgentUpdate` so an engine switch is an explicit
+    lifecycle event: provider/model are re-chosen for the new engine and the
+    old engine's reasoning and direct-endpoint settings are reset.
+    """
+
+    engine: str
+    provider: Optional[ProviderName] = None
+    model: Optional[str] = Field(default=None, min_length=1, max_length=256)
 
 class UnavailableReasonOut(BaseModel):
     """#516 — why an agent can't respond, for the admin UI.
@@ -413,7 +427,7 @@ async def _validated_create_machine(
     """Validate a selected machine before creating any agent or room rows."""
     if body.machine_id is None:
         return None
-    from anygarden.db.models import Machine, MachineEngine
+    from anygarden.db.models import Machine
     from anygarden.engines.pi_auth import CAPABILITY as PI_AUTH_CAPABILITY
     from anygarden.scheduler.placement import (
         NoSuitableMachineError,
@@ -426,21 +440,12 @@ async def _validated_create_machine(
     bus = request.app.state.machine_bus
     if machine.status != "online" or not bus.is_connected(machine.id):
         raise HTTPException(409, "Selected machine must be online and connected")
-    supports_engine = await db.scalar(
-        select(MachineEngine.id).where(
-            MachineEngine.machine_id == machine.id,
-            MachineEngine.engine == body.engine,
-        )
-    )
-    if supports_engine is None:
-        raise HTTPException(409, "Selected machine does not support this engine")
     capabilities = (
         {"direct_endpoint_v1"} if body.endpoint is not None
         else {PI_AUTH_CAPABILITY} if body.engine == "pi-cli"
         else set()
     )
-    if not capabilities.issubset(set(machine.control_capabilities or [])):
-        raise HTTPException(409, "Selected machine needs an update for this model connection")
+    await _require_machine_supports(db, machine, body.engine, capabilities)
     try:
         await reserve_machine_for(
             body.engine, db, bus,
@@ -450,6 +455,24 @@ async def _validated_create_machine(
     except NoSuitableMachineError:
         raise HTTPException(409, "Selected machine has no capacity for another agent") from None
     return machine.id
+
+
+async def _require_machine_supports(
+    db: AsyncSession, machine, engine: str, capabilities: set[str]
+) -> None:
+    """409 unless *machine* runs *engine* and has the control *capabilities*."""
+    from anygarden.db.models import MachineEngine
+
+    supports_engine = await db.scalar(
+        select(MachineEngine.id).where(
+            MachineEngine.machine_id == machine.id,
+            MachineEngine.engine == engine,
+        )
+    )
+    if supports_engine is None:
+        raise HTTPException(409, "Selected machine does not support this engine")
+    if not capabilities.issubset(set(machine.control_capabilities or [])):
+        raise HTTPException(409, "Selected machine needs an update for this model connection")
 
 
 def _validate_reasoning(engine: str, model: str | None, effort: str | None) -> None:
@@ -799,6 +822,81 @@ async def update_agent(
     return _agent_to_out(agent, request.app.state.machine_bus)
 
 
+@router.put("/{agent_id}/engine", response_model=AgentOut)
+async def change_agent_engine(
+    agent_id: str,
+    body: AgentEngineChange,
+    request: Request,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """#769 — switch the agent's engine in place, then restart it.
+
+    Identity, rooms, history, instructions and memory stay attached. The
+    settings that only make sense for the old engine (reasoning effort,
+    direct endpoint) are cleared; the admin re-applies them afterwards in
+    the model-connection settings.
+    """
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if body.engine == agent.engine:
+        raise HTTPException(422, "The agent already uses this engine")
+    if removed_engine_error(body.engine) or get_engine_entry(body.engine) is None:
+        raise HTTPException(422, "Unsupported engine")
+    error = pi_provider_error(body.engine, body.provider)
+    if error:
+        raise HTTPException(422, error)
+    if body.engine != "pi-cli" and body.provider is not None:
+        raise HTTPException(422, "Only Pi agents take a provider")
+
+    from anygarden.engines.pi_auth import CAPABILITY as PI_AUTH_CAPABILITY
+    from anygarden.scheduler.placement import (
+        NoSuitableMachineError,
+        select_machine_for,
+    )
+
+    capabilities = {PI_AUTH_CAPABILITY} if body.engine == "pi-cli" else set()
+    if agent.placed_on_machine_id:
+        machine = await db.get(Machine, agent.placed_on_machine_id)
+        if machine is None:
+            raise HTTPException(409, "The agent's machine is no longer registered")
+        await _require_machine_supports(db, machine, body.engine, capabilities)
+    else:
+        try:
+            await select_machine_for(
+                body.engine,
+                db,
+                request.app.state.machine_bus,
+                required_control_capabilities=capabilities,
+                exclude_agent_id=agent.id,
+            )
+        except NoSuitableMachineError:
+            raise HTTPException(409, "No available machine supports this engine") from None
+
+    previous = agent.engine
+    agent.engine = body.engine
+    agent.provider = body.provider
+    agent.model = body.model
+    agent.reasoning_effort = None
+    agent.base_url = agent.api_protocol = agent.credential_ref = None
+    db.add(
+        ActivityLog(
+            agent_id=agent.id,
+            event_type="agent_engine_changed",
+            details={
+                "from": previous,
+                "to": body.engine,
+                "by_user_id": identity.id if identity.kind == "user" else None,
+            },
+        )
+    )
+    await db.commit()
+    await db.refresh(agent)
+    await request.app.state.agent_lifecycle.bump_generation(agent_id)
+    return _agent_to_out(agent, request.app.state.machine_bus)
+
+
 # ── agent_files CRUD ────────────────────────────────────────────────
 #
 # These endpoints back the admin UI's per-agent file editor: list
@@ -1071,9 +1169,9 @@ async def stop_agent(
         return {"id": agent.id, "actual_state": agent.actual_state}
 
     lifecycle = request.app.state.agent_lifecycle
+    # request_stop commits desired_state/actual_state through its own
+    # session; writing them again here only repeats that write (#772).
     await lifecycle.request_stop(agent.id)
-    agent.desired_state = "stopped"
-    await db.commit()
     await db.refresh(agent)
     return {"id": agent.id, "actual_state": agent.actual_state}
 

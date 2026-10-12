@@ -236,6 +236,7 @@ class TestUpload:
         assert not (shared / env["room"].id / "input.md").exists()
         assert (shared / other_room_id / "input.md").read_bytes() == b"GARDEN-ONLY"
 
+    @pytest.mark.req("WS-06")
     async def test_upload_creates_row_and_disk_file(
         self, client: AsyncClient, shared_files_env
     ) -> None:
@@ -256,6 +257,7 @@ class TestUpload:
         on_disk = env["config"].room_files_dir / env["room"].id / body["id"]
         assert on_disk.read_bytes() == b"# Hello\n"
 
+    @pytest.mark.req("WS-06")
     async def test_upload_fan_out_dispatches_write_frame(
         self, client: AsyncClient, shared_files_env
     ) -> None:
@@ -325,6 +327,7 @@ class TestUpload:
         )
         assert on_disk.read_bytes() == b"v2-newer\n"
 
+    @pytest.mark.req("ROOM-08")
     async def test_upload_413_on_oversize(
         self, client: AsyncClient, shared_files_env
     ) -> None:
@@ -337,6 +340,50 @@ class TestUpload:
             files={"upload": ("big.md", payload, "text/markdown")},
         )
         assert resp.status_code == 413
+        # Nothing was stored for the rejected upload.
+        async with env["session_factory"]() as db:
+            from sqlalchemy import select
+
+            rows = (await db.execute(select(RoomSharedFile))).scalars().all()
+        assert rows == []
+
+    @pytest.mark.req("ROOM-08")
+    async def test_guest_upload_is_forbidden(
+        self, client: AsyncClient, shared_files_env
+    ) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from anygarden.auth.jwt import create_guest_token
+        from anygarden.db.models import RoomInviteLink
+
+        env = shared_files_env
+        async with env["session_factory"]() as db:
+            guest = User(is_anonymous=True, display_name="G")
+            db.add(guest)
+            await db.flush()
+            invite = RoomInviteLink(
+                room_id=env["room"].id,
+                created_by_user_id=env["owner"].id,
+                token_hash="x",
+                lookup_hint="inv_files00",
+            )
+            db.add_all([invite, Participant(room_id=env["room"].id, user_id=guest.id, role="member")])
+            await db.commit()
+            guest_id, invite_id = guest.id, invite.id
+        guest_token = create_guest_token(
+            user_id=guest_id,
+            room_id=env["room"].id,
+            invite_id=invite_id,
+            display_name="G",
+            secret=env["config"].jwt_secret,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        resp = await client.post(
+            f"/api/v1/rooms/{env['room'].id}/files",
+            headers=_auth_headers(guest_token),
+            files={"upload": ("spec.md", b"x", "text/markdown")},
+        )
+        assert resp.status_code == 403
 
 
 class TestList:
@@ -374,6 +421,7 @@ class TestList:
 
 
 class TestDelete:
+    @pytest.mark.req("WS-06")
     async def test_delete_removes_row_disk_and_dispatches_frame(
         self, client: AsyncClient, shared_files_env
     ) -> None:

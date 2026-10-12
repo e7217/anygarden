@@ -143,7 +143,8 @@ Requirements and behavior (PR609/PR615 fail-closed contract):
 
 - Peer credentials must already exist under `<data-dir>/peer/` as
   `peer-cert.pem` + `peer-key.pem`. Startup never generates or rotates them;
-  create them explicitly (see the two-node runbook). Requesting `--peer-port`
+  create them explicitly with `anygarden federation init-credentials --data-dir <data-dir>`
+  (see the two-node runbook). Requesting `--peer-port`
   without both files refuses the start before any boot work.
 - Unusable credential pairs (corrupt, expired, mismatched) abort startup with
   `--peer-port was requested but peer services did not compose` instead of

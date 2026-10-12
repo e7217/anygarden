@@ -40,6 +40,7 @@ class _RaisingCloseWS(_RecordingWS):
         raise RuntimeError("socket already half-closed")
 
 
+@pytest.mark.req("MSG-02")
 @pytest.mark.asyncio
 async def test_second_subscribe_supersedes_first() -> None:
     mgr = ConnectionManager()
@@ -179,6 +180,7 @@ def _message(room_id: str = "room-1"):
     )
 
 
+@pytest.mark.req("MSG-02")
 @pytest.mark.asyncio
 async def test_non_exclusive_sockets_coexist_and_all_receive_broadcasts() -> None:
     mgr = ConnectionManager()
@@ -263,6 +265,7 @@ async def test_send_to_succeeds_if_any_tab_accepts() -> None:
     assert len(live.sent) == 1
 
 
+@pytest.mark.req("ROOM-04")
 @pytest.mark.asyncio
 async def test_revoke_room_closes_every_tab() -> None:
     mgr = ConnectionManager()

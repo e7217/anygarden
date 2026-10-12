@@ -203,6 +203,9 @@ def _validate_policy(allowed_actions: list | None, limits: dict | None) -> None:
                 _reject("INVALID_EXECUTION_LIMIT", f"{key} must be a positive int64")
 
 
+EXTERNAL_RELEASE_OPERATIONS = ("managed_submission", "managed_deployment")
+
+
 def require_execution_operation(execution: ProjectExecution, operation: str) -> None:
     """Authorize a supported managed operation, never a native-engine grant."""
     _active(execution)
@@ -622,6 +625,18 @@ async def delegate_task(
     if role not in INTERNAL_TASK_ROLES:
         _reject("DELEGATION_ROLE_INVALID", "Unsupported execution task role")
     require_execution_operation(execution, role)
+    # A release result needs an approved managed action (see the "result"
+    # check below), and ``allowed_actions`` is fixed at begin. Without an
+    # external grant such a task could never finish, so refuse it now and
+    # let the lead delegate the deliverable as ordinary work.
+    if role == "release" and not any(
+        allows_operation(execution.allowed_actions, op) for op in EXTERNAL_RELEASE_OPERATIONS
+    ):
+        _reject(
+            "DELEGATION_ROLE_INVALID",
+            "A release task needs a managed_submission or managed_deployment grant on the "
+            "execution; delegate an internal deliverable with role 'work'",
+        )
     declared_dependencies = list(dict.fromkeys(depends_on or []))
     if role == "qa":
         depends_on = [*dict.fromkeys([*(depends_on or []), qa_target_task_id])]
@@ -1619,10 +1634,25 @@ async def reconcile_execution(
                 await db.refresh(execution)
                 await db.refresh(task)
                 await db.refresh(result)
+    # A worker's deliberate block carries free text in task.error; the lead
+    # sees only the closed public code (EXE-19/EXE-21), never the raw text.
+    reported_error = task.error
+    if task.status == "blocked":
+        from anygarden.project_executions.recovery import public_task_error
+
+        reported_error = public_task_error(task.status, task.error)
+    # A lead resume (EXE-21) reopens the same task at the same result
+    # version; its later outcome is a new event, not a replay of the earlier.
+    from anygarden.project_executions.resumes import lead_resume_count
+
+    resumes = 0 if failure_details else await lead_resume_count(
+        db, execution_id=execution.id, task_id=task.id, input_revision=task.input_revision,
+    )
     event_key = (
         f"turn:{failure_details['request_id']}:attempt:{failure_details['attempt']}:recovery-report"
         if failure_details else
         f"execution:{execution.id}:outcome:{task.id}:r{task.input_revision}:v{task.result_version}:{task.status}"
+        + (f":resume{resumes}" if resumes else "")
     )
     event = await _event(
         db,
@@ -1634,7 +1664,7 @@ async def reconcile_execution(
             "status": task.status,
             "result_id": result.id if result and not failure_details else None,
             "result_version": task.result_version,
-            "error": failure_details["reason_code"] if failure_details else task.error,
+            "error": failure_details["reason_code"] if failure_details else reported_error,
             **({"recovery": failure_details,
                 "prior_accepted_result_id": result.id if result else None} if failure_details else {}),
         },
@@ -1710,8 +1740,16 @@ async def reconcile_execution(
         )
         if result.verification:
             text += f"QA verification: {result.verification}\n"
-    if task.error and not failure_details:
-        text += f"Unresolved reason: {task.error}\n"
+    if reported_error and not failure_details:
+        text += f"Unresolved reason: {reported_error}\n"
+        if reported_error == "TASK_BLOCKED":
+            text += (
+                "The assignee stopped this task and explained why in its own thread. "
+                "Decide once: continue this same task with resume_project_task(execution_id, "
+                "task_id, guidance) giving the assignee concrete guidance (re-delegating with the "
+                "same delegation_key only replays the blocked task), ask the user for what is "
+                "missing, or stop.\n"
+            )
     if repair is not None:
         text += f"Automatic QA repair state: {repair}\n"
         if repair["phase"] != "not_started":

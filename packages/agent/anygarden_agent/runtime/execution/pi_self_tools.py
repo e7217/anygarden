@@ -34,7 +34,8 @@ TOOL_NAMES = frozenset(
 )
 MAX_RESPONSE_BYTES = 262_144
 PROJECT_TOOL_NAMES = frozenset({
-    "begin_project_execution", "delegate_project_task", "seal_project_plan",
+    "begin_project_execution", "delegate_project_task", "resume_project_task",
+    "seal_project_plan",
     "get_project_execution", "complete_project_execution",
     "request_project_input", "publish_project_artifact", "read_project_artifact",
     "request_project_approval", "execute_approved_project_action",

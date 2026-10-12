@@ -3,13 +3,14 @@
  * Keep these in lock-step with ``packages/cluster/anygarden/api/v1/graph.py``.
  */
 
-export type NodeKind = 'user' | 'machine' | 'agent' | 'room' | 'project'
+export type NodeKind = 'user' | 'machine' | 'agent' | 'room' | 'project' | 'peer'
 
 export type EdgeKind =
   | 'owns'
   | 'places'
   | 'participates'
   | 'parent_of'
+  | 'federates'
 
 export type Scope = 'personal' | 'global' | 'auto'
 
@@ -58,12 +59,23 @@ export interface ProjectNodeData {
   description: string | null
 }
 
+/** FED-09 — federation peer. Credentials never reach the payload. */
+export interface PeerNodeData {
+  node_id: string
+  state: string // "active" | "pending" | "revoked"
+  certificate_epoch: number
+  /** Last trust-state change; peers have no liveness tracking. */
+  state_changed_at: string | null
+  channel_count: number
+}
+
 export type NodeData =
   | UserNodeData
   | MachineNodeData
   | AgentNodeData
   | RoomNodeData
   | ProjectNodeData
+  | PeerNodeData
   | Record<string, unknown>
 
 export interface GraphNode {

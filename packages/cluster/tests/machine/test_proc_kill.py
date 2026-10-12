@@ -48,6 +48,7 @@ def _spawn_tree() -> subprocess.Popen[bytes]:
 
 
 class TestTerminateTree:
+    @pytest.mark.req("NODE-06")
     def test_kills_root_and_children(self) -> None:
         proc, child_pid = _spawn_tree()  # type: ignore[misc]
         try:

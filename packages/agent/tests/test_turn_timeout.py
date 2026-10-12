@@ -31,11 +31,13 @@ def _clean_env(monkeypatch):
 # --- resolve_turn_timeout: per-engine global env > hardcoded default --------
 
 
+@pytest.mark.req("ENG-04")
 def test_hardcoded_defaults_per_engine():
     assert tt.resolve_turn_timeout("codex") == 600.0
     assert tt.resolve_turn_timeout("pi") == 600.0
 
 
+@pytest.mark.req("ENG-04")
 def test_per_engine_env_overrides_default(monkeypatch):
     monkeypatch.setenv("ANYGARDEN_AGENT_PI_TURN_TIMEOUT_SEC", "300")
     assert tt.resolve_turn_timeout("pi") == 300.0
@@ -56,6 +58,7 @@ def test_new_codex_key(monkeypatch):
     assert tt.resolve_turn_timeout("codex") == 900.0
 
 
+@pytest.mark.req("ENG-04")
 def test_per_agent_overrides_everything(monkeypatch):
     # #493 — the engine-agnostic per-agent env wins over the per-engine env.
     monkeypatch.setenv("ANYGARDEN_AGENT_TURN_TIMEOUT_SEC", "450")
@@ -103,6 +106,7 @@ def test_ping_slack_for_large_turn():
 
 
 @pytest.mark.parametrize("turn", [60, 120, 300, 600, 700, 870])
+@pytest.mark.req("ENG-04")
 def test_invariant_turn_lt_ping_le_supervisor(turn):
     ping = tt.resolve_ping_timeout(turn)
     sup = tt.resolve_supervisor_timeout(turn)

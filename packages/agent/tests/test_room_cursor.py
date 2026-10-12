@@ -12,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from anygarden_agent.client import ChatClient
 from anygarden_agent.integrations.base import MessagePolicy, decide_policy
 from anygarden_agent.room_cursor_store import load_cursors, save_cursors
@@ -31,6 +33,7 @@ class TestRoomCursorStore:
     def test_absent_file_is_empty(self, tmp_path: Path) -> None:
         assert load_cursors(tmp_path) == {}
 
+    @pytest.mark.req("MEM-06")
     def test_corrupt_file_is_empty(self, tmp_path: Path) -> None:
         (tmp_path / ".anygarden-room-cursors.json").write_text("{not json")
         assert load_cursors(tmp_path) == {}
@@ -49,6 +52,7 @@ class TestRoomCursorStore:
 
 
 class TestClientCursorPersistence:
+    @pytest.mark.req("MEM-06")
     def test_cursor_survives_a_respawn(self, tmp_path: Path) -> None:
         client = ChatClient(
             "ws://localhost:8000", token="t", agent_name="bot", state_dir=tmp_path

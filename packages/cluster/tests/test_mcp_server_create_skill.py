@@ -191,6 +191,7 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     assert names == {
         "begin_project_execution",
         "delegate_project_task",
+        "resume_project_task",
         "seal_project_plan",
         "get_project_execution",
         "complete_project_execution",

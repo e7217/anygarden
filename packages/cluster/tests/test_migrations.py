@@ -1004,6 +1004,7 @@ class TestEnsureSchemaReady:
     """
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-05")
     async def test_fresh_db_creates_and_stamps(self) -> None:
         """Empty DB → create_all + stamp head → alembic_version=004."""
         from anygarden.app import _ensure_schema_ready
@@ -1209,6 +1210,7 @@ class TestEnsureSchemaReady:
                 pass
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-05")
     async def test_legacy_unstamped_db_refuses_to_boot(self) -> None:
         """Legacy DB with application tables but no alembic_version row
         must raise RuntimeError and MUST NOT get silently stamped.
