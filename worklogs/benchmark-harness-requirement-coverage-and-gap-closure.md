@@ -1,6 +1,6 @@
 # feat(bench): requirement coverage gate, live benchmark runner and gap closure
 
-- Commits: `4afddb5` (harness, coverage, first fixes), merges of `feat/769-agent-engine-change` and `fix/772-stop-agents-lock-node-shutdown`, and the follow-up commit closing the remaining gaps
+- Commits: `4afddb5` (harness, coverage, first fixes), merges `7710569` (#769) and `e406b69` (#772), `b49c7b9` (remaining gaps), `0d7d6b8` (solo deliverable check), `93fb7ae` (first core-suite results)
 - Author: Changyong Um
 - Date: 2026-10-12
 - PR: (not opened yet)
@@ -56,5 +56,9 @@
 ## Result
 
 - 요구사항 124개(EXE-21 추가) 모두 통과 테스트 또는 빌드로 검증되고, `gap`은 0개다
-- 라이브 스모크(codex-cli): S0 solo 통과. DL-01 solo 통과(36초). DL-01 team은 수정 전 15분 정지로 실패했고, 수정 후 1.8분에 통과했다(k=1)
-- 정식 코어 세트 측정(both, k=3)은 아직 하지 않았다
+- 결정적 검증(한 번의 실행): agent 692, cluster 2,886, vitest 861, 빌드, e2e 45(CI=1), 커버리지 게이트 모두 통과
+- 라이브 스모크(codex-cli): DL-01 team은 release 위임 수정 전 15분 정지, 수정 후 1.8분 통과
+- 코어 세트 정식 측정(codex-cli `gpt-6.1-sol`, both, k=3): 10개 시나리오 모두 pass^3, 허위 완료 0%, 30회 실행 동안 응답 유실·멈춘 턴·실패 턴 0
+  - DL-01 solo 첫 측정은 러너 결함(직접 답변을 완료로 보지 않음)으로 `invalid` 판정, 수정 후 3/3
+  - GT-03은 호스트 bwrap 제약으로 `environment` 판정, `trusted`로 3/3
+- 남은 과제: DL-01·02는 solo도 통과해 팀 향상폭을 가르지 못한다(team 토큰 7–11×). 분업이 필요한 산출물 시나리오를 추가해야 한다
