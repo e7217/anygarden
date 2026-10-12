@@ -12,6 +12,7 @@ import secrets
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import pytest
 import pytest_asyncio
 from anygarden.budgets.ledger import (
     clear_observed_cache,
@@ -128,6 +129,7 @@ async def test_observed_coalesces_null_tokens(factory) -> None:
     assert total == 47
 
 
+@pytest.mark.req("USE-04")
 async def test_observed_excludes_status_400_and_above(factory) -> None:
     # The critical self-perpetuation guard: refusal/error rows (incl. the
     # 429s this feature writes) must NOT inflate the observed sum.

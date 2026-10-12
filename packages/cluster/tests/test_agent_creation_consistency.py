@@ -72,6 +72,7 @@ async def test_request_key_is_scoped_to_the_authenticated_creator(agents_env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["pending", "starting", "running", "stopping"])
+@pytest.mark.req("AGT-03")
 async def test_each_live_or_reserved_state_occupies_capacity(agents_env, state):
     env = agents_env
     async with env["factory"]() as db:

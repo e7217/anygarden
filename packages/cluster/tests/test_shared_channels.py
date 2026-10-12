@@ -95,6 +95,7 @@ async def count(node, model):
         return await db.scalar(select(func.count()).select_from(model))
 
 
+@pytest.mark.req("FED-07")
 async def test_durable_concurrent_command_receipt_and_cross_node_projection(channels):
     a, b = channels
     cmd = command(a, b)
@@ -140,6 +141,7 @@ async def test_gap_reordered_replay_lost_ack_and_thread_root(channels):
         assert await a.c.ack(db, root, tls=b.s.identity, seq=1) == {"ack_seq": 2}
 
 
+@pytest.mark.req("FED-07")
 async def test_changed_request_body_and_event_identity_conflicts(channels):
     a, b = channels
     cmd = command(a, b)
@@ -393,6 +395,7 @@ async def human_channels(pair):  # noqa: F811
     return a, b
 
 
+@pytest.mark.req("FED-07")
 async def test_actual_mtls_durable_retry_human_replay_and_local_isolation(
     human_channels, monkeypatch
 ):

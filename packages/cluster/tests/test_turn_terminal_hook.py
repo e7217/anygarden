@@ -342,6 +342,7 @@ async def test_lifecycle_started_does_not_fire(turn_env, hook_calls) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-05")
 async def test_lifecycle_cancelled_fires_once(turn_env, hook_calls) -> None:
     request_id, _, manager = await _create_and_deliver(turn_env)
     metadata = manager.frames[0].metadata

@@ -472,7 +472,7 @@ async def test_worker_question_reaches_operating_room_and_answer_resumes_task(ha
     assert twice.status_code == 409
 
 
-@pytest.mark.req("INB-01", "INB-02", "INB-03")
+@pytest.mark.req("INB-01", "INB-02", "INB-03", "EXE-09")
 async def test_inbox_lists_open_question_for_members_only(harness):
     _, _, question = await _ask(harness)
 
@@ -485,6 +485,7 @@ async def test_inbox_lists_open_question_for_members_only(harness):
     assert len(ids) == len(set(ids))
     # Items that need the user's action come before informational ones.
     first_info = next((i for i, it in enumerate(items) if it["type"] == "task"), len(items))
+    assert first_info < len(items), "an informational task item must be present to order against"
     assert ids.index(f"question:{question['id']}") < first_info
 
     outsider = await harness.client.get("/api/v1/inbox", headers=harness.user("outsider"))
@@ -882,6 +883,45 @@ async def test_unsupported_limits_and_actions_are_refused_at_begin(harness):
     assert "send_email" in error
 
 
+def _release_args(harness, execution: dict) -> dict:
+    return dict(
+        execution_id=execution["execution_id"],
+        parent_task_id=execution["root_task_id"],
+        target_room_id=harness.ids["releaser_room"],
+        assignee_participant_id=harness.ids["releaser_pid"],
+        delegation_key="notes", title="Write release notes",
+        spec="Write the notes.", role="release",
+    )
+
+
+@pytest.mark.req("EXE-17")
+async def test_release_role_needs_an_external_action_grant(harness):
+    """A release task can only finish through an approved managed action, so
+    delegating one in an internal-only execution is refused up front instead
+    of leaving a task that can never complete (benchmark DL-01, 2026-10-12)."""
+    flow = await harness.begin_and_delegate(objective="Write the release notes")
+
+    error = await harness.tool_error(
+        flow["lead_turn"], "delegate_project_task", **_release_args(harness, flow["execution"])
+    )
+
+    assert "managed_submission" in error and "'work'" in error
+
+
+@pytest.mark.req("EXE-17")
+async def test_release_role_is_accepted_with_a_submission_grant(harness):
+    flow = await harness.begin_and_delegate(
+        objective="Write and submit the release notes",
+        allowed_actions=["internal_work", "managed_submission"],
+    )
+
+    accepted = await harness.tool(
+        flow["lead_turn"], "delegate_project_task", **_release_args(harness, flow["execution"])
+    )
+
+    assert accepted["task_id"]
+
+
 async def test_only_the_rooms_representative_can_begin_an_execution(harness):
     """#802 — the operating lead is the room's representative agent."""
     await harness.user_request("Fix the login bug")
@@ -1000,3 +1040,169 @@ async def test_rejection_wakes_the_lead_with_the_reason(harness, monkeypatch):
     action = next(t for t in tasks.json() if t["id"] == ready["action_task"])
     assert (action["status"], action["error"]) == ("blocked", "APPROVAL_REJECTED")
     assert portal.requests == []
+
+
+# -- EXE-08 redelivered completion · EXE-10 automatic recovery ----------------
+
+
+@pytest.mark.req("EXE-08")
+async def test_redelivered_completion_changes_nothing(harness):
+    from anygarden.db.models import TaskResult
+
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    await harness.end_turn(flow["lead_turn"])
+    worker_turn = await harness.deliver("worker")
+    done = {"task_id": task_id, "status": "done", "result_markdown": "Fixed: emails normalized."}
+    await harness.tool(worker_turn, "mark_task_status", **done)
+
+    async def snapshot():
+        async with harness.sessions() as db:
+            task = await db.get(Task, task_id, populate_existing=True)
+            results = (await db.scalars(select(TaskResult).where(
+                TaskResult.task_id == task_id))).all()
+            reports = await db.scalar(select(func.count()).select_from(Message).where(
+                Message.content.contains(f"delegated task {task_id}")))
+            return (task.status, task.result_version, task.result_markdown,
+                    [(r.version, r.result_sha256) for r in results], reports)
+
+    before = await snapshot()
+    assert before[0] == "done" and before[1] == 1 and len(before[3]) == 1
+
+    # The transport delivers the same completion again, then a conflicting one.
+    await harness.tool_error_or_ok(worker_turn, "mark_task_status", **done)
+    await harness.tool_error_or_ok(
+        worker_turn, "mark_task_status", **{**done, "result_markdown": "Something else"})
+    assert await snapshot() == before
+
+    # The lead is woken once with the original result, not with each replay.
+    lead_turn = await harness.deliver("lead")
+    assert "Fixed: emails normalized." in json.dumps(lead_turn.frame)
+    assert "Something else" not in json.dumps(lead_turn.frame)
+    await harness.end_turn(lead_turn)
+    before_frames = len(harness.sockets["lead"].frames)
+    await deliver_pending_outbox(harness.sessions, harness.manager, app=harness.app)
+    assert not [f for f in harness.sockets["lead"].frames[before_frames:]
+                if f.get("metadata", {}).get("turn_lease")]
+    assert await snapshot() == before
+
+
+@pytest.mark.req("EXE-10")
+async def test_transient_failure_is_retried_then_exhaustion_is_reported(harness):
+    from datetime import UTC, datetime, timedelta
+
+    from anygarden.db.models import AgentTurnOutbox
+    from anygarden.turns.service import recover_stalled_turns
+
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    await harness.end_turn(flow["lead_turn"])
+
+    async def fail_transiently(turn: Turn) -> None:
+        async with harness.sessions() as db:
+            assert await record_lifecycle(db, agent_id=harness.ids["worker"], frame=LifecycleFrame(
+                request_id=turn.request_id, room_id=harness.ids["worker_room"],
+                turn_attempt=turn.attempt, turn_generation=GENERATION, turn_lease=turn.lease,
+                event="handler_finished", outcome="failed",
+                local_execution_id=turn.local_execution_id, native_process_state="finished",
+                native_outcome="failed", native_reason_code="MODEL_TRANSIENT_FAILURE",
+                native_transient=True,
+            ))
+            await db.commit()
+
+    # A transient model failure is retried automatically for the same task.
+    first = await harness.deliver("worker")
+    await fail_transiently(first)
+    recovered = await recover_stalled_turns(harness.sessions, harness.manager)
+    assert recovered.redispatched == 1
+    async with harness.sessions() as db:
+        # Let the retry backoff elapse.
+        outbox = (await db.scalars(select(AgentTurnOutbox).where(
+            AgentTurnOutbox.turn_id == first.request_id,
+            AgentTurnOutbox.state == "pending"))).one()
+        assert outbox.available_at > datetime.now(UTC)
+        outbox.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
+    retried = await harness.deliver("worker")
+    assert retried.request_id == first.request_id
+    assert retried.attempt != first.attempt
+    assert retried.frame["metadata"]["task_assignment"]["task_id"] == task_id
+
+    # Past the retry limit the task stops with a public reason ...
+    await fail_transiently(retried)
+    tasks = await harness.client.get(
+        f"/api/v1/rooms/{harness.ids['worker_room']}/tasks", headers=harness.user())
+    row = next(t for t in tasks.json() if t["id"] == task_id)
+    assert row["status"] == "failed"
+    recovery = row["recovery"]
+    assert row["error"] == recovery["reason_code"] == "MODEL_TRANSIENT_FAILURE"
+    assert recovery["retry_count"] == recovery["max_retries"] == 1
+    assert recovery["attempt_count"] == 2
+    assert (recovery["state"], recovery["can_retry"]) == ("failed", False)
+
+    # ... and the lead is woken to report why the work stopped.
+    lead_turn = await harness.deliver("lead")
+    notice = json.dumps(lead_turn.frame)
+    assert task_id in notice
+    assert "MODEL_TRANSIENT_FAILURE" in notice
+    assert "retry limit is exhausted" in notice
+
+
+@pytest.mark.req("INB-01")
+async def test_task_progress_and_completion_share_one_inbox_item(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+
+    async def task_items() -> list[dict]:
+        inbox = await harness.client.get("/api/v1/inbox", headers=harness.user())
+        assert inbox.status_code == 200, inbox.text
+        return [i for i in inbox.json()["items"]
+                if i["type"] == "task" and i["task_id"] == task_id]
+
+    running = await task_items()
+    assert len(running) == 1
+    assert running[0]["task"]["status"] == "in_progress"
+
+    await harness.tool(
+        worker_turn, "mark_task_status", task_id=task_id, status="done",
+        result_markdown="Fixed: emails are lower-cased before comparison.",
+    )
+    finished = await task_items()
+    assert len(finished) == 1
+    assert finished[0]["id"] == running[0]["id"]
+    assert finished[0]["task"]["status"] == "done"
+    assert "lower-cased" in finished[0]["task"]["result_markdown"]
+
+
+@pytest.mark.req("EXE-16")
+async def test_failed_turn_without_terminal_receipt_cannot_be_retried(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+    # The runtime reports failure but no terminal receipt proving the native
+    # process finished, so a retry could duplicate unknown side effects.
+    async with harness.sessions() as db:
+        assert await record_lifecycle(db, agent_id=harness.ids["worker"], frame=LifecycleFrame(
+            request_id=worker_turn.request_id, room_id=harness.ids["worker_room"],
+            turn_attempt=worker_turn.attempt, turn_generation=GENERATION,
+            turn_lease=worker_turn.lease, event="handler_finished", outcome="failed",
+        ))
+        await db.commit()
+
+    resp = await harness.client.post(
+        f"/api/v1/execution-tasks/{task_id}/retry",
+        json={
+            "operation_id": str(uuid4()),
+            "expected_input_revision": 1,
+            "expected_request_id": worker_turn.request_id,
+            "expected_attempt": worker_turn.attempt,
+        },
+        headers=harness.user(),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "PROCESS_OUTCOME_UNKNOWN" in resp.text
+    before = len(harness.sockets["worker"].frames)
+    await deliver_pending_outbox(harness.sessions, harness.manager, app=harness.app)
+    assert not [f for f in harness.sockets["worker"].frames[before:]
+                if f.get("metadata", {}).get("turn_lease")]

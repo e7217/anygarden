@@ -277,6 +277,7 @@ async def test_thread_rest_history_pagination_and_search_identify_root(
     assert search.json()[0]["seq"] == reply["seq"]
 
 
+@pytest.mark.req("MSG-05")
 @pytest.mark.asyncio
 async def test_cross_room_and_reply_parent_are_rejected_without_append(
     thread_env: dict,
@@ -402,6 +403,7 @@ async def test_rest_reply_overwrites_forged_mentions_with_parser_output(
     ]
 
 
+@pytest.mark.req("COL-07")
 def test_thread_reply_agent_scheduling_is_mention_targeted(thread_env: dict) -> None:
     """Room-wide reply fanout creates a turn only for mentioned agents."""
 

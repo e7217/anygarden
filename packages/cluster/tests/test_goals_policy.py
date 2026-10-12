@@ -40,6 +40,7 @@ class TestValidateTriggerConfig:
     def test_cron_iana_timezone_accepted(self):
         validate_trigger_config("cron", {"cron": "0 9 * * *", "timezone": "Asia/Seoul"})
 
+    @pytest.mark.req("EXE-05")
     @pytest.mark.parametrize("name", ["No/Such_Zone", "", None, 9])
     def test_invalid_timezone_rejected(self, name):
         with pytest.raises(InvalidTriggerConfig, match="timezone"):
@@ -48,6 +49,7 @@ class TestValidateTriggerConfig:
     def test_interval_60s_accepted(self):
         validate_trigger_config("interval", {"interval_seconds": 60})
 
+    @pytest.mark.req("EXE-05")
     def test_interval_below_minimum_rejected(self):
         with pytest.raises(InvalidTriggerConfig, match=">= 60"):
             validate_trigger_config("interval", {"interval_seconds": 30})
@@ -190,6 +192,21 @@ class TestFailureCounter:
         assert u.new_count == 1
         assert u.pause is False
 
+    @pytest.mark.req("EXE-04")
+    def test_third_consecutive_failure_pauses(self):
+        assert GOAL_FAILURE_PAUSE_THRESHOLD == 3
+        count = 0
+        for expected_pause in (False, False):
+            u = apply_completion_to_failure_counter(current=count, final_status="failed")
+            assert u.pause is expected_pause
+            count = u.new_count
+        # A success in between breaks the streak.
+        reset = apply_completion_to_failure_counter(current=count, final_status="done")
+        assert (reset.new_count, reset.pause) == (0, False)
+        third = apply_completion_to_failure_counter(current=count, final_status="failed")
+        assert (third.new_count, third.pause) == (3, True)
+
+    @pytest.mark.req("EXE-04")
     def test_threshold_crossing_flags_pause(self):
         threshold = GOAL_FAILURE_PAUSE_THRESHOLD
         u = apply_completion_to_failure_counter(

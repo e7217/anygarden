@@ -10,6 +10,7 @@ from anygarden.auth.dependencies import Identity
 from anygarden.auth.jwt import UserClaims
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
+    ActivityLog,
     Agent,
     Base,
     Machine,
@@ -18,6 +19,7 @@ from anygarden.db.models import (
     Room,
     User,
     WorkspaceAttachment,
+    WorkspaceInvocationAudit,
 )
 from anygarden.machine.daemon import MachineDaemon
 from anygarden.machine.protocol.frames import SystemInfo
@@ -25,8 +27,12 @@ from anygarden.machine.workspace_signing import WorkspaceReceiptSigner
 from anygarden.node.execution import LocalDaemon
 from anygarden.workspaces.router import (
     AttachmentCreate,
+    VerifyBody,
+    approve_global,
     approve_room,
     create_attachment,
+    revoke_attachment,
+    verify_attachment,
     workspace_options,
 )
 from fastapi import HTTPException
@@ -184,6 +190,7 @@ async def test_shipped_remote_and_integrated_daemon_are_reported_unsupported(env
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("WS-04")
 async def test_contract_preserves_only_supported_read_and_rejects_write(env):
     enable_read(env)
     options = await workspace_options(
@@ -222,6 +229,7 @@ async def test_options_reflect_engine_and_permission_restrictions(
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("WS-04")
 async def test_non_global_room_owner_can_approve_without_admin_agent_access(env):
     enable_read(env)
     created = await create_attachment(env.room.id, body(env), env.admin, env.db)
@@ -265,3 +273,83 @@ async def test_expired_and_invalid_catalog_rows_are_not_offered(env):
     assert [entry.workspace_id for entry in options.workspaces] == [
         valid["workspace_id"]
     ]
+
+
+def _verify_request(env, sent: list):
+    async def send(machine_id, frame):
+        sent.append((machine_id, frame))
+        return True
+
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(machine_bus=SimpleNamespace(send=send)))
+    )
+
+
+async def _audit_events(env, attachment_id):
+    rows = await env.db.scalars(
+        select(WorkspaceInvocationAudit)
+        .where(WorkspaceInvocationAudit.attachment_id == attachment_id)
+        .order_by(WorkspaceInvocationAudit.epoch)
+    )
+    return [row.event_type for row in rows]
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("WS-04")
+async def test_verification_requires_room_and_global_approval(env):
+    enable_read(env)
+    # A room owner's request carries only the room approval.
+    created = await create_attachment(env.room.id, body(env), env.owner, env.db)
+    assert created.room_approved_by_user_id == env.owner.id
+    assert created.global_approved_by_user_id is None
+    sent: list = []
+    proof = VerifyBody(consent_proof=f"wcp_{'a' * 64}")
+    with pytest.raises(HTTPException) as failure:
+        await verify_attachment(
+            env.room.id, created.id, proof, _verify_request(env, sent), env.admin, env.db
+        )
+    assert failure.value.status_code == 409
+    assert sent == []  # nothing reaches the machine without both approvals
+    row = await env.db.get(WorkspaceAttachment, created.id)
+    assert row.state == "requested"
+
+    await approve_global(env.room.id, created.id, env.admin, env.db)
+    verified = await verify_attachment(
+        env.room.id, created.id, proof, _verify_request(env, sent), env.admin, env.db
+    )
+    # Server-side checks passed; activation still waits for the machine receipt.
+    assert verified.state == "requested"
+    assert [frame["type"] for _, frame in sent] == ["workspace_attach_request"]
+    assert sent[0][0] == env.machine.id
+    assert "path" not in sent[0][1]
+    assert await _audit_events(env, created.id) == [
+        "attachment_requested",
+        "global_approved",
+        "machine_verification_requested",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("WS-05")
+async def test_manual_revoke_records_audit_and_activity(env):
+    enable_read(env)
+    created = await create_attachment(env.room.id, body(env), env.admin, env.db)
+    revoked = await revoke_attachment(
+        env.room.id, created.id, _verify_request(env, []), env.owner, env.db
+    )
+    assert revoked.state == "revoked"
+    assert await _audit_events(env, created.id) == ["attachment_requested", "revoked"]
+    activity = (
+        await env.db.scalars(
+            select(ActivityLog).where(
+                ActivityLog.event_type == "workspace_attachment_revoked"
+            )
+        )
+    ).one()
+    assert activity.details["workspace_attachment_id"] == created.id
+    assert activity.room_id == env.room.id
+    with pytest.raises(HTTPException) as failure:
+        await revoke_attachment(
+            env.room.id, created.id, _verify_request(env, []), env.member, env.db
+        )
+    assert failure.value.status_code == 403

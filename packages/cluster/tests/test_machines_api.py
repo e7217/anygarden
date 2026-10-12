@@ -136,6 +136,7 @@ class TestMachinesAPI:
         assert "list-machine" in names
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-07")
     async def test_drain_machine(self, machines_env) -> None:
         client = machines_env["client"]
         token = machines_env["token"]
@@ -157,6 +158,7 @@ class TestMachinesAPI:
         assert resp.json()["status"] == "draining"
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-08")
     async def test_revoke_token(self, machines_env) -> None:
         client = machines_env["client"]
         token = machines_env["token"]

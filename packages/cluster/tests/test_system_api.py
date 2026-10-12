@@ -91,6 +91,7 @@ async def test_updates_admin_only(env) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("SYS-01")
 async def test_updates_empty_cache(env) -> None:
     resp = await env["client"].get("/api/v1/system/updates", headers=_auth(env["admin"]))
     assert resp.status_code == 200
@@ -116,6 +117,29 @@ async def test_check_updates_admin_only(env) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("SYS-01")
+async def test_updates_get_never_calls_pypi(env, monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_fetch(package, *, client=None):
+        calls.append(package)
+        return "999.0.0"
+
+    monkeypatch.setattr(version_service, "fetch_pypi_latest", fake_fetch)
+
+    resp = await env["client"].get("/api/v1/system/updates", headers=_auth(env["admin"]))
+    assert resp.status_code == 200
+    assert calls == []  # GET reads the cache only — no outbound call
+
+    resp = await env["client"].post(
+        "/api/v1/system/check-updates", headers=_auth(env["admin"])
+    )
+    assert resp.status_code == 200
+    assert "anygarden" in calls  # only the explicit check reaches PyPI
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("SYS-01")
 async def test_check_updates_populates_cache(env, monkeypatch) -> None:
     async def fake_fetch(package, *, client=None):
         return "999.0.0"  # always newer than the installed version
@@ -139,6 +163,7 @@ async def test_check_updates_populates_cache(env, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("SYS-02")
 async def test_check_updates_records_error_on_failure(env, monkeypatch) -> None:
     async def fake_fetch(package, *, client=None):
         return None  # PyPI unreachable
@@ -152,3 +177,9 @@ async def test_check_updates_records_error_on_failure(env, monkeypatch) -> None:
     ag = next(r for r in resp.json() if r["package"] == "anygarden")
     assert ag["error"] == "unreachable"
     assert ag["update_available"] is False
+
+    # The error is persisted: the cache-only GET still surfaces it.
+    resp2 = await env["client"].get("/api/v1/system/updates", headers=_auth(env["admin"]))
+    assert resp2.status_code == 200
+    ag2 = next(r for r in resp2.json() if r["package"] == "anygarden")
+    assert ag2["error"] == "unreachable"

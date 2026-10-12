@@ -15,6 +15,7 @@ import secrets
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import pytest
 import pytest_asyncio
 from anygarden.budgets.ledger import (
     clear_observed_cache,
@@ -157,6 +158,7 @@ async def _pause_reason(fac, agent_id: str) -> str | None:
 # ── AGENT-scope hard breach → stop + pause + hard incident ─────────────
 
 
+@pytest.mark.req("USE-05")
 async def test_agent_hard_breach_stops_and_records_incident(factory) -> None:
     await _add_usage(factory, prompt=150, agent_id="a1")
     await _add_policy(factory, scope_type="agent", scope_id="a1", ceiling=100)
@@ -296,6 +298,7 @@ async def test_inactive_or_warn_only_policy_does_nothing(factory) -> None:
 # ── Idempotency / dedup ────────────────────────────────────────────────
 
 
+@pytest.mark.req("USE-05")
 async def test_repeated_hard_breach_dedups_incident_and_stop(factory) -> None:
     """Two evaluations over the same window create exactly one incident
     and the second stop call (request_stop re-call) is safe / a no-op."""

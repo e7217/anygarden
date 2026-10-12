@@ -153,6 +153,28 @@ class TestMachineHandler:
             assert result is False
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-08")
+    async def test_authenticate_revoked_token_rejected(self, handler_env) -> None:
+        """A token that was valid stops authenticating once revoked."""
+        from datetime import datetime, timezone
+
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+        token = handler_env["token"]
+        protocols = f"anygarden.v1, bearer.{token}"
+
+        async with factory() as db:
+            assert await _authenticate_machine(db, machine.id, protocols) is True
+            for mt in (await db.execute(
+                select(MachineToken).where(MachineToken.machine_id == machine.id)
+            )).scalars():
+                mt.revoked_at = datetime.now(timezone.utc)
+            await db.commit()
+
+        async with factory() as db:
+            assert await _authenticate_machine(db, machine.id, protocols) is False
+
+    @pytest.mark.asyncio
     async def test_register_sets_online_and_saves_engines(self, handler_env) -> None:
         """A register frame should set machine online and persist engines."""
         factory = handler_env["factory"]

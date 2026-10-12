@@ -72,6 +72,7 @@ async def _turn_targets(sf, trigger_message_id: str) -> set[str]:
 
 class TestMentionedOnlyRootMessage:
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-01")
     async def test_unmentioned_message_wakes_nobody(self, ws_env) -> None:
         env = ws_env
         await _seed_agents(env["session_factory"], env["room"].id, ["A", "B"])
@@ -82,6 +83,7 @@ class TestMentionedOnlyRootMessage:
         assert await _turn_targets(env["session_factory"], out["id"]) == set()
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-03")
     async def test_everyone_wakes_every_agent(self, ws_env) -> None:
         env = ws_env
         pids = await _seed_agents(
@@ -97,6 +99,7 @@ class TestMentionedOnlyRootMessage:
         assert await _turn_targets(env["session_factory"], out["id"]) == set(pids)
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-02")
     async def test_single_mention_wakes_only_that_agent(self, ws_env) -> None:
         env = ws_env
         pa, _pb = await _seed_agents(
@@ -121,6 +124,7 @@ class TestMentionedOnlyRootMessage:
         assert await _turn_targets(env["session_factory"], out["id"]) == {pa}
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-08")
     async def test_one_agent_room_needs_no_mention(self, ws_env) -> None:
         env = ws_env
         (pa,) = await _seed_agents(
@@ -150,6 +154,7 @@ class TestMentionedOnlyRootMessage:
         assert await _turn_targets(env["session_factory"], out["id"]) == set()
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-03")
     async def test_everyone_in_thread_reply_wakes_every_agent(self, ws_env) -> None:
         env = ws_env
         pids = await _seed_agents(
@@ -235,3 +240,24 @@ class TestRoomQueryRepresentative:
                 )
             ).all()
         assert [t.agent_id for t in turns] == [rep_id]
+
+
+class TestDirectMessage:
+    @pytest.mark.asyncio
+    @pytest.mark.req("COL-08")
+    async def test_dm_agent_answers_without_a_mention(self, ws_env) -> None:
+        """A 1:1 DM (one human, one agent) wakes its agent for an
+        unmentioned human message via the sole-agent rule."""
+        env = ws_env
+        async with env["session_factory"]() as db:
+            room = await db.get(Room, env["room"].id)
+            room.is_dm = True
+            await db.commit()
+        (pa,) = await _seed_agents(env["session_factory"], env["room"].id, ["dm-agent"])
+
+        out = _user_send(env["app"], env["room"].id, env["token"], "오늘 일정 정리해 줘")
+
+        assert out["metadata"]["mentions"] == [
+            {"type": "user", "id": pa, "via": "sole_agent"}
+        ]
+        assert await _turn_targets(env["session_factory"], out["id"]) == {pa}

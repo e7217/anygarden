@@ -564,6 +564,39 @@ async def deliver_pending_outbox(
             # process during the drain/kill hand-off.
             if attempt.generation != int(agent.generation or 0):
                 continue
+            # USE-06 — a scope over its hard-stop token ceiling refuses room
+            # work at dispatch, before any frame reaches the engine (the same
+            # check federation runs at accept time). Read-only; with no active
+            # hard-stop policy it returns None and delivery is unchanged.
+            from anygarden.budgets.ledger import invocation_block_in_session
+
+            block = await invocation_block_in_session(
+                db, agent_id=turn.agent_id, room_id=turn.room_id
+            )
+            if block is not None:
+                reason = "budget_hard_stop"
+                await mark_turn_terminal(
+                    db, turn, state="cancelled", reason=reason,
+                    attempt=attempt, attempt_reason=reason,
+                )
+                row.state, row.last_error = "cancelled", reason
+                db.add(
+                    ActivityLog(
+                        agent_id=turn.agent_id,
+                        event_type="turn_cancelled",
+                        request_id=turn.request_id,
+                        room_id=turn.room_id,
+                        details={
+                            "reason": reason,
+                            "attempt": attempt.attempt_number,
+                            "budget_scope_type": block.scope_type,
+                            "budget_scope_id": block.scope_id,
+                            "detail": block.reason,
+                        },
+                    )
+                )
+                await db.commit()
+                continue
             msg = await db.get(Message, turn.trigger_message_id)
             if msg is None:
                 row.state = "cancelled"

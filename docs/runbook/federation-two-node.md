@@ -59,12 +59,13 @@ claim a new deployment verification on separate physical hosts.
    generates or rotates them:
 
    ```sh
-   sudo -u anygarden python - <<'PY'
-   from pathlib import Path
-   from anygarden.federation.certificates import create_credentials
-   create_credentials(Path("/var/lib/anygarden/alpha/peer"), "<node-uuid>")
-   PY
+   sudo -u anygarden anygarden federation init-credentials --data-dir /var/lib/anygarden/alpha
    ```
+
+   It writes `peer/peer-cert.pem` and `peer/peer-key.pem` (key mode 0600),
+   prints the node ID and SHA-256 fingerprint to share with peers, and refuses
+   to overwrite an existing pair unless `--force` is given (which keeps the node
+   ID but changes the fingerprint, so peers must re-pin).
 
    Missing or unusable pairs fail closed: `--peer-port` refuses the start, and
    an unusable pair aborts startup (PR609).

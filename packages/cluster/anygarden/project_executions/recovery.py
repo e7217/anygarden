@@ -60,6 +60,7 @@ _REASON_ALIASES = {
     "generation_interrupted": "PROCESS_LOST", "lease_expired": "LEASE_EXPIRED",
     "agent_not_running": "AGENT_STOPPED", "agent_cancelled": "AGENT_STOPPED",
     "authorization_revoked": "AUTHORIZATION_REVOKED", "retry_exhausted": "RETRY_EXHAUSTED",
+    "budget_hard_stop": "QUOTA_EXHAUSTED",
     "legacy_interrupted": "LEGACY_RETRY_UNSUPPORTED", "EXECUTION_STOP_UNCONFIRMED": "NATIVE_STOP_UNCONFIRMED",
     "EXECUTION_INPUT_SUPERSEDED": "INPUT_SUPERSEDED", "execution_input_superseded": "INPUT_SUPERSEDED",
     "execution_cancelled": "EXECUTION_CANCELLED", "EXECUTION_DEADLINE_REACHED": "EXECUTION_DEADLINE_REACHED",

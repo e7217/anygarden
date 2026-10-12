@@ -15,6 +15,7 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from jose import jwt as jose_jwt
 from sqlalchemy import select
 
 from anygarden.app import create_app
@@ -251,6 +252,7 @@ class TestAcceptGuestInvite:
             )
             assert resp.status_code == 401
 
+    @pytest.mark.req("AUTH-06")
     @pytest.mark.asyncio
     async def test_revoked_invite_rejected(self, env) -> None:
         async with env["session_factory"]() as db:
@@ -270,6 +272,7 @@ class TestAcceptGuestInvite:
             )
             assert resp.status_code == 401
 
+    @pytest.mark.req("AUTH-06")
     @pytest.mark.asyncio
     async def test_expired_invite_rejected(self, env) -> None:
         async with env["session_factory"]() as db:
@@ -289,6 +292,7 @@ class TestAcceptGuestInvite:
             )
             assert resp.status_code == 401
 
+    @pytest.mark.req("AUTH-06")
     @pytest.mark.asyncio
     async def test_max_uses_exhausted_rejected(self, env) -> None:
         async with env["session_factory"]() as db:
@@ -307,6 +311,42 @@ class TestAcceptGuestInvite:
                 json={"token": env["invite_token"], "display_name": "X"},
             )
             assert resp.status_code == 401
+
+    @pytest.mark.req("AUTH-07")
+    @pytest.mark.asyncio
+    async def test_guest_jwt_never_outlives_invite_expiry(self, env) -> None:
+        """The guest JWT's ``exp`` is clamped to the invite's expiry, and
+        to a 24h default when the invite has none."""
+        invite_expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
+        async with env["session_factory"]() as db:
+            inv = await db.get(RoomInviteLink, env["invite"].id)
+            inv.expires_at = invite_expiry
+            await db.commit()
+
+        transport = ASGITransport(app=env["app"])
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/auth/guest",
+                json={"token": env["invite_token"], "display_name": "Short"},
+            )
+        assert resp.status_code == 201
+        exp = jose_jwt.get_unverified_claims(resp.json()["token"])["exp"]
+        # JWT ``exp`` has second resolution.
+        assert exp <= invite_expiry.timestamp() + 1
+
+        async with env["session_factory"]() as db:
+            inv = await db.get(RoomInviteLink, env["invite"].id)
+            inv.expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+            await db.commit()
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/auth/guest",
+                json={"token": env["invite_token"], "display_name": "Long"},
+            )
+        assert resp.status_code == 201
+        exp = jose_jwt.get_unverified_claims(resp.json()["token"])["exp"]
+        cap = datetime.now(timezone.utc) + timedelta(hours=24, seconds=5)
+        assert exp <= cap.timestamp()
 
     @pytest.mark.asyncio
     async def test_issued_token_resolves_to_guest_identity(self, env) -> None:
@@ -418,6 +458,7 @@ class TestForbidGuestGate:
             resp = await client.get("/api/v1/machines", headers=_auth(jwt_token))
             assert resp.status_code == 403
 
+    @pytest.mark.req("AUTH-07")
     @pytest.mark.asyncio
     async def test_guest_cannot_read_other_room_messages(self, env) -> None:
         """Guest JWT is bound to one room. ``GET /rooms/{id}/messages``
@@ -522,6 +563,7 @@ class TestForbidGuestGate:
 
 
 class TestRequireRoomMemberGuestBranch:
+    @pytest.mark.req("AUTH-07")
     @pytest.mark.asyncio
     async def test_guest_cross_room_claim_rejected(self, env) -> None:
         """A guest JWT forged to claim the wrong room must 403 even if

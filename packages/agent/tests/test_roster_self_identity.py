@@ -40,6 +40,7 @@ async def _client_in(room_id: str, pid: str, participants: list[dict]) -> ChatCl
 
 class TestSelfLine:
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-09")
     async def test_self_named_with_id_outside_peer_list(self) -> None:
         client = await _client_in("room-a", "p-self", [ADMIN, SELF, PEER])
         suffix = client.compose_roster_suffix("room-a")
@@ -82,6 +83,7 @@ class TestSelfLine:
         assert client.compose_roster_suffix("room-a") == ""
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-09")
     async def test_self_id_is_per_room(self) -> None:
         """``_my_participant_ids`` is one set across rooms; each room's
         suffix must name the pid that belongs to *that* room."""

@@ -286,6 +286,7 @@ class TestWSEndpoint:
                     ws.receive_text()
                 assert closed.value.code == 1011
 
+    @pytest.mark.req("MSG-02")
     @pytest.mark.asyncio
     async def test_ws_same_user_two_tabs_coexist(self, ws_env) -> None:
         """#731 — a second tab of the same user in the same room must not
@@ -598,6 +599,7 @@ class TestWSEndpoint:
 
 
 class TestSinceSeqRecovery:
+    @pytest.mark.req("MSG-04")
     @pytest.mark.asyncio
     async def test_since_seq_replays_missed_messages(self, ws_env) -> None:
         """Pre-seed messages then connect with since_seq to verify replay."""
@@ -628,6 +630,7 @@ class TestSinceSeqRecovery:
                 assert r1["seq"] == 2
                 assert r2["seq"] == 3
 
+    @pytest.mark.req("MSG-04")
     @pytest.mark.asyncio
     async def test_since_seq_replays_more_than_one_page(self, ws_env) -> None:
         """Item 7 (#445): on-connect replay must page past the
@@ -669,6 +672,48 @@ class TestSinceSeqRecovery:
 
         # Every missed message replayed, ascending, nothing dropped at 50.
         assert len(seqs) == missed
+        assert seqs == list(range(2, missed + 2))
+
+    @pytest.mark.req("MSG-04")
+    @pytest.mark.asyncio
+    async def test_since_seq_replays_ten_thousand_messages(self, ws_env) -> None:
+        """MSG-04 upper bound: a reconnect ``since_seq=N`` replays all of
+        10,000 missed messages, in order, without gaps."""
+        from starlette.testclient import TestClient
+
+        from anygarden.db.models import Message
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+        participant_id = ws_env["participant"].id
+        missed = 10_000
+
+        # Bulk-seed seq 1 (the client's cursor) + 10,000 missed rows.
+        async with ws_env["session_factory"]() as db:
+            db.add_all(
+                Message(
+                    room_id=room_id,
+                    participant_id=participant_id,
+                    content=f"m-{seq}",
+                    seq=seq,
+                )
+                for seq in range(1, missed + 2)
+            )
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}?since_seq=1",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "welcome"
+                seqs = []
+                while len(seqs) < missed:
+                    frame = json.loads(ws.receive_text())
+                    if frame.get("type") == "message":
+                        seqs.append(frame["seq"])
+
         assert seqs == list(range(2, missed + 2))
 
 
@@ -799,6 +844,7 @@ class TestWelcomeAgentId:
                 assert welcome.get("agent_id") == agent.id
 
 
+    @pytest.mark.req("MSG-02")
     @pytest.mark.asyncio
     async def test_agent_second_connection_supersedes_first(self, ws_env) -> None:
         """#79 stays in force for agents (#731 only relaxes it for humans):

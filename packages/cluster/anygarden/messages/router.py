@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
+from anygarden.db.engine import begin_write_transaction
 from anygarden.db.models import Message as MessageRow
 from anygarden.db.models import MessageReaction, Participant
 from anygarden.dependencies import get_current_identity, get_db
@@ -149,6 +150,13 @@ async def _write_message(
     # blocked per #591.
     from anygarden.interactions import InteractionSchemaError, is_interaction_send
 
+    # Take SQLite's writer before reading scope, like the WS send path.
+    # Identity resolution already opened a read transaction on this session;
+    # without ending it first, a concurrent writer's commit turns the later
+    # upgrade into SQLITE_BUSY_SNAPSHOT / a seq collision (a 500).
+    if db.in_transaction():
+        await db.commit()
+    await begin_write_transaction(db)
     allow_shared = is_interaction_send(body.metadata)
     access = await require_capability(
         db,
@@ -202,7 +210,6 @@ async def _write_message(
         metadata["mentions"] = mentions
 
     if allow_shared or any(k in metadata for k in ("interaction", "interaction_resolution")):
-        from anygarden.interactions import LookupError as _Lookup  # noqa: F401
         from anygarden.interactions import process_send
 
         try:

@@ -248,6 +248,7 @@ class TestAgentsAPI:
         assert data["deleted"] is True
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-06")
     async def test_delete_agent_also_removes_dm_room(self, agents_env) -> None:
         """Auto-created DM rooms must not outlive their owning agent.
 
@@ -900,6 +901,7 @@ class TestAgentManifestAPI:
             }
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-07")
     async def test_create_agent_rejects_bad_file_path(self, agents_env) -> None:
         """A manifest with a path outside the whitelist must 400
         BEFORE any row lands in the DB — otherwise the next
@@ -1113,6 +1115,7 @@ class TestAgentManifestAPI:
         assert resp.json()["avatar_value"] is None
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-04")
     async def test_update_agent_avatar_only_does_not_bump_generation(
         self, agents_env
     ) -> None:
@@ -1565,6 +1568,7 @@ class TestAgentManifestAPI:
         assert files[0]["content"] == "v2"
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-07")
     async def test_upsert_agent_file_rejects_bad_path(self, agents_env) -> None:
         client = agents_env["client"]
         token = agents_env["token"]
@@ -1938,6 +1942,7 @@ class TestAgentPermissionLevel:
         assert resp.json()["permission_level"] is None
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-05")
     async def test_invalid_permission_level_rejected(
         self, agents_env, agent_id: str
     ) -> None:
@@ -1954,6 +1959,7 @@ class TestAgentPermissionLevel:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-05")
     async def test_non_admin_cannot_set_permission_level(
         self, agents_env, agent_id: str
     ) -> None:
@@ -1973,6 +1979,7 @@ class TestAgentPermissionLevel:
         assert resp.status_code == 403
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-04")
     async def test_permission_change_writes_activity_log(
         self, agents_env, agent_id: str
     ) -> None:
@@ -2044,6 +2051,7 @@ class TestAgentPermissionLevel:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", [None, "", " ", "--help", "bad name", "x=y", "a" * 65])
+@pytest.mark.req("AGT-02")
 async def test_pi_provider_rejected_before_agent_creation(agents_env, provider):
     env = agents_env
     headers = {"Authorization": f"Bearer {env['token']}"}
@@ -2055,6 +2063,7 @@ async def test_pi_provider_rejected_before_agent_creation(agents_env, provider):
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("AGT-02")
 async def test_pi_custom_provider_roundtrip_update_and_legacy_compatibility(agents_env):
     env = agents_env
     client = env["client"]
@@ -2199,6 +2208,7 @@ class TestAgentInitialSetup:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("problem", ["missing", "offline", "disconnected", "engine", "capacity", "capability"])
+    @pytest.mark.req("AGT-03")
     async def test_invalid_machine_rejected_before_any_rows(self, agents_env, problem):
         env = agents_env
         machine_id = env["machine"].id
@@ -2232,6 +2242,7 @@ class TestAgentInitialSetup:
             assert (await db.scalars(select(Participant))).all() == []
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-05")
     async def test_invalid_initial_permission_rejected(self, agents_env):
         env = agents_env
         response = await env["client"].post(

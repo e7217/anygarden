@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from anygarden_agent.memory import compose_shared_context_block
 
 
@@ -76,3 +78,47 @@ class TestComposeSharedContextBlock:
         assert "good.md" in block
         # Bad file is silently skipped rather than raising.
         assert "bad.bin" not in block
+
+
+@pytest.mark.req("MEM-05", "WS-06")
+class TestRoomScopedSharedContext:
+    def test_reads_only_the_current_rooms_directory(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        (shared / "room-a").mkdir(parents=True)
+        (shared / "room-b").mkdir(parents=True)
+        (shared / "room-a" / "a.md").write_text("ROOM-A", encoding="utf-8")
+        (shared / "room-b" / "b.md").write_text("ROOM-B", encoding="utf-8")
+        (shared / "legacy.md").write_text("LEGACY-FLAT", encoding="utf-8")
+
+        block = compose_shared_context_block(shared, room_id="room-a")
+        assert "ROOM-A" in block
+        assert "ROOM-B" not in block
+        assert "LEGACY-FLAT" not in block
+
+    def test_path_like_room_ids_read_nothing(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        (shared / "room-b").mkdir(parents=True)
+        (shared / "room-b" / "b.md").write_text("ROOM-B", encoding="utf-8")
+        for bad in ("..", ".", "", "room-a/../room-b"):
+            assert compose_shared_context_block(shared, room_id=bad) == ""
+
+    def test_symlinked_file_is_skipped(self, tmp_path: Path) -> None:
+        outside = tmp_path / "outside.md"
+        outside.write_text("OUTSIDE-SECRET", encoding="utf-8")
+        room = tmp_path / "shared" / "room-a"
+        room.mkdir(parents=True)
+        (room / "ok.md").write_text("ok", encoding="utf-8")
+        (room / "link.md").symlink_to(outside)
+
+        block = compose_shared_context_block(tmp_path / "shared", room_id="room-a")
+        assert "ok.md" in block
+        assert "link.md" not in block
+        assert "OUTSIDE-SECRET" not in block
+
+    def test_symlinked_room_directory_is_ignored(self, tmp_path: Path) -> None:
+        sibling = tmp_path / "shared" / "room-b"
+        sibling.mkdir(parents=True)
+        (sibling / "b.md").write_text("ROOM-B", encoding="utf-8")
+        (tmp_path / "shared" / "room-a").symlink_to(sibling, target_is_directory=True)
+
+        assert compose_shared_context_block(tmp_path / "shared", room_id="room-a") == ""

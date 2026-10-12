@@ -78,6 +78,7 @@ def _make_goal(
 # ── CAS / idempotency ────────────────────────────────────────────────
 
 
+@pytest.mark.req("EXE-02")
 @pytest.mark.asyncio
 async def test_same_slot_fired_twice_creates_exactly_one_task(engine):
     """Two ``_tick`` passes over the same due slot must dedup to one
@@ -199,6 +200,7 @@ async def test_trigger_goal_idempotency_key_collision_raises(engine):
 # ── In-flight dedup ──────────────────────────────────────────────────
 
 
+@pytest.mark.req("EXE-03")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["todo", "in_progress", "blocked"])
 async def test_in_flight_task_blocks_refire(engine, status):
@@ -247,6 +249,7 @@ async def test_in_flight_task_blocks_refire(engine, status):
         assert goal.next_run_at <= _utcnow()
 
 
+@pytest.mark.req("EXE-03")
 @pytest.mark.asyncio
 async def test_blocked_run_completion_allows_one_waiting_schedule_fire(engine):
     factory = build_session_factory(engine)

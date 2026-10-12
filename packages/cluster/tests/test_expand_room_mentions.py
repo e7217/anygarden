@@ -8,6 +8,8 @@ reuses the explicit-mention path.
 
 from __future__ import annotations
 
+import pytest
+
 from anygarden.orchestration.rules import expand_room_mentions
 
 AGENTS = ["pa", "pb", "pc"]
@@ -24,6 +26,7 @@ def _expand(mentions, **overrides):
     return expand_room_mentions(mentions, **kwargs)
 
 
+@pytest.mark.req("COL-03")
 def test_everyone_expands_to_every_agent():
     assert _expand([{"type": "everyone"}]) == [
         {"type": "user", "id": "pa", "via": "everyone"},
@@ -57,6 +60,7 @@ def test_everyone_in_room_without_agents_disappears():
     assert _expand([{"type": "everyone"}], agent_pids=[]) == []
 
 
+@pytest.mark.req("COL-08")
 def test_sole_agent_added_for_unmentioned_human_root_message():
     assert _expand([], agent_pids=["pa"]) == [
         {"type": "user", "id": "pa", "via": "sole_agent"}

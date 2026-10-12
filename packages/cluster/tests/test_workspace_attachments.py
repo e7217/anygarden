@@ -167,6 +167,7 @@ async def workspace_env(tmp_path: Path):
     await engine.dispose()
 
 
+@pytest.mark.req("WS-04")
 def test_raw_path_is_not_part_of_attachment_request_contract() -> None:
     with pytest.raises(ValidationError):
         AttachmentCreate.model_validate(
@@ -180,6 +181,7 @@ def test_raw_path_is_not_part_of_attachment_request_contract() -> None:
         )
 
 
+@pytest.mark.req("WS-04")
 def test_verify_contract_accepts_only_one_way_consent_proof() -> None:
     proof = f"wcp_{'a' * 64}"
     assert VerifyBody.model_validate({"consent_proof": proof}).consent_proof
@@ -189,6 +191,7 @@ def test_verify_contract_accepts_only_one_way_consent_proof() -> None:
         VerifyBody.model_validate({"consent_proof": "wsc_raw_secret"})
 
 
+@pytest.mark.req("WS-04")
 @pytest.mark.asyncio
 async def test_write_turn_requires_claimed_source_linked_task(workspace_env) -> None:
     async with workspace_env["factory"]() as db:
@@ -239,6 +242,7 @@ async def test_write_turn_requires_claimed_source_linked_task(workspace_env) -> 
     assert metadata["workspace_attachment_epoch"] == 7
 
 
+@pytest.mark.req("WS-04")
 @pytest.mark.asyncio
 async def test_epoch_change_fences_pending_delivery(workspace_env) -> None:
     async with workspace_env["factory"]() as db:
@@ -281,6 +285,7 @@ async def test_epoch_change_fences_pending_delivery(workspace_env) -> None:
         assert turn.terminal_reason == "workspace_epoch_mismatch"
 
 
+@pytest.mark.req("WS-05")
 @pytest.mark.asyncio
 async def test_archive_revokes_attachment_and_emits_opaque_stop_frame(
     workspace_env,
@@ -313,7 +318,27 @@ async def test_archive_revokes_attachment_and_emits_opaque_stop_frame(
     )
     assert bus.frames[-1][1]["epoch"] == revoke_epoch
 
+    # Each automatic revoke leaves a path-free audit record with its reason.
+    async with workspace_env["factory"]() as db:
+        audits = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit).where(
+                        WorkspaceInvocationAudit.attachment_id
+                        == workspace_env["attachment"]
+                    )
+                )
+            ).all()
+        )
+    revokes = [row for row in audits if row.event_type == "automatic_revoke"]
+    assert revokes
+    assert all(row.outcome == "revoking" for row in revokes)
+    assert all(
+        row.details == {"reason": "workspace_room_archived"} for row in revokes
+    )
 
+
+@pytest.mark.req("WS-05")
 @pytest.mark.asyncio
 async def test_audit_strips_paths_content_secrets_and_chains(workspace_env) -> None:
     async with workspace_env["factory"]() as db:
@@ -359,6 +384,7 @@ async def test_audit_strips_paths_content_secrets_and_chains(workspace_env) -> N
     assert "stdout" not in (rows[1].details or {})
 
 
+@pytest.mark.req("WS-04")
 @pytest.mark.asyncio
 async def test_denied_receipt_projects_only_allowlisted_reason_code(
     workspace_env,
@@ -405,6 +431,7 @@ async def test_denied_receipt_projects_only_allowlisted_reason_code(
     assert "machine_denied" in projection
 
 
+@pytest.mark.req("WS-04")
 @pytest.mark.asyncio
 async def test_verified_receipt_discards_untrusted_reason_text(workspace_env) -> None:
     async with workspace_env["factory"]() as db:
@@ -458,6 +485,7 @@ async def test_verified_receipt_discards_untrusted_reason_text(workspace_env) ->
     assert "machine_verified" in projection
 
 
+@pytest.mark.req("WS-04")
 @pytest.mark.asyncio
 async def test_attach_receipt_requires_enrolled_signing_key(workspace_env) -> None:
     async with workspace_env["factory"]() as db:
@@ -500,6 +528,7 @@ async def test_attach_receipt_requires_enrolled_signing_key(workspace_env) -> No
         assert audit.details == {"reason": "workspace_receipt_key_unenrolled"}
 
 
+@pytest.mark.req("WS-04")
 @pytest.mark.asyncio
 async def test_attach_receipt_signature_covers_untrusted_reason(workspace_env) -> None:
     async with workspace_env["factory"]() as db:
@@ -576,6 +605,7 @@ async def test_revoke_receipt_signature_failure_stays_retryable(workspace_env) -
         assert attachment.failure_code == "workspace_receipt_signature_invalid"
 
 
+@pytest.mark.req("WS-05")
 @pytest.mark.asyncio
 async def test_audit_evidence_survives_attachment_deletion(workspace_env) -> None:
     attachment_id = workspace_env["attachment"]
@@ -669,6 +699,7 @@ async def test_audit_api_requires_system_or_room_admin(workspace_env) -> None:
         assert exc_info.value.status_code == 403
 
 
+@pytest.mark.req("WS-04")
 def test_legacy_or_unsupported_daemon_and_engine_fail_closed() -> None:
     machine = SimpleNamespace(control_capabilities=["workspace_attach_v1"])
     agent = SimpleNamespace(engine="codex-cli", permission_level="standard")

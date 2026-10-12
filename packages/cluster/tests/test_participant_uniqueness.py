@@ -67,6 +67,7 @@ class TestRequireRoomMemberToleratesDuplicates:
 
 
 class TestUniqueIndexBlocksDuplicates:
+    @pytest.mark.req("ROOM-06")
     @pytest.mark.asyncio
     async def test_duplicate_user_participant_rejected(self, db) -> None:
         user = User(email="u@test.com", password_hash="x")

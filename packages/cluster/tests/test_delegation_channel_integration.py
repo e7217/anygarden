@@ -475,6 +475,7 @@ async def test_sweeper_skips_and_audits_when_guard_refuses(product):
         assert len(observations) == 1
 
 
+@pytest.mark.req("AGT-09")
 async def test_auto_selection_skips_blocked_and_picks_least_loaded(product):
     from datetime import timedelta
 
@@ -573,6 +574,60 @@ async def test_auto_selection_no_eligible_executor_is_explicit(product):
     service = p.service
     async with p.a.s.sessions() as db:
         assert await service.select_executor(db, channel_id=p.a.channel) is None
+    with pytest.raises(DelegationError, match="NO_ELIGIBLE_EXECUTOR"):
+        await service.delegate(
+            p.a.c,
+            channel_id=p.a.channel,
+            task_id=uid(),
+            source_message_id=uid(),
+            requester={
+                "node_id": p.b.s.node_id,
+                "kind": "agent",
+                "principal_id": p.b.actor,
+            },
+            tls=p.b.s.identity,
+        )
+
+
+@pytest.mark.req("FED-04")
+async def test_budget_paused_only_channel_has_no_eligible_executor(product):
+    from anygarden.db.models import Agent as AgentRow
+    from anygarden.shared_channels.models import SharedParticipant
+
+    p = product
+    paused_id = uid()
+    async with p.a.s.sessions.begin() as db:
+        grant = await db.get(
+            PeerGrant, (p.b.s.node_id, p.a.s.node_id, p.a.channel), populate_existing=True
+        )
+        grant.actors = list(grant.actors or []) + [
+            {"node_id": p.a.s.node_id, "kind": "agent", "principal_id": paused_id}
+        ]
+        db.add(AgentRow(id=paused_id, name="paused", engine="pi-cli"))
+        db.add(
+            SharedParticipant(
+                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
+                node_id=p.a.s.node_id, kind="agent", principal_id=paused_id,
+                role="member", active=True, revision=1,
+            )
+        )
+    service = p.service
+    # Control: the same agent is selectable while it is not paused.
+    async with p.a.s.sessions() as db:
+        assert await service.select_executor(db, channel_id=p.a.channel) == {
+            "node_id": p.a.s.node_id, "agent_id": paused_id,
+        }
+
+    async with p.a.s.sessions.begin() as db:
+        (await db.get(AgentRow, paused_id)).pause_reason = "budget"
+
+    async with p.a.s.sessions() as db:
+        assert await service.select_executor(db, channel_id=p.a.channel) is None
+        health = await service.chain_health(db, channel_id=p.a.channel)
+    assert health["eligible_executors"] == []
+    assert {b["agent_id"]: b["reason"] for b in health["blocked_executors"]} == {
+        paused_id: "budget_pause"
+    }
     with pytest.raises(DelegationError, match="NO_ELIGIBLE_EXECUTOR"):
         await service.delegate(
             p.a.c,

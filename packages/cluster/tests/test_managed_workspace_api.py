@@ -53,6 +53,7 @@ async def seed(env, tmp_path):
     return machine_id, root
 
 
+@pytest.mark.req("WS-01")
 @pytest.mark.parametrize("delivery", ["remote", "integrated"])
 async def test_real_disk_round_trip_and_persistence(workspace_env, tmp_path, delivery):
     env = workspace_env
@@ -238,6 +239,7 @@ async def test_real_disk_round_trip_and_persistence(workspace_env, tmp_path, del
         await finish()
 
 
+@pytest.mark.req("WS-01")
 async def test_unavailable_states_and_placement_change(workspace_env, tmp_path):
     env = workspace_env
     machine_id, _ = await seed(env, tmp_path)
@@ -276,6 +278,7 @@ async def test_unavailable_states_and_placement_change(workspace_env, tmp_path):
     await env["bus"].unregister_local(machine_id, receiver)
 
 
+@pytest.mark.req("WS-01")
 async def test_read_only_machine_rejects_edits(workspace_env, tmp_path):
     env = workspace_env
     machine_id, root = await seed(env, tmp_path)

@@ -65,6 +65,7 @@ _TURN = {"request_id": "rid-1", "turn_attempt": 1, "turn_generation": 2, "turn_l
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-02")
 async def test_skip_closes_the_delivered_turn(wired) -> None:
     client, _ = wired
     await client.handler(_msg("<@user:other-pid> 도와줘", mentions=[

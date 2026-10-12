@@ -296,6 +296,7 @@ class TestAskPeerPostsAtOnce:
 
 class TestFanIn:
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
     async def test_caller_reply_becomes_a_draft_and_the_caller_is_woken_with_answers(
         self, ws_env
     ) -> None:
@@ -354,6 +355,7 @@ class TestFanIn:
             assert needle in wake.content
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
     async def test_deadline_times_out_silent_peers_and_still_wakes(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
@@ -444,6 +446,7 @@ class TestFanIn:
         assert len(groups) == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
     async def test_a_group_is_woken_only_once(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
@@ -738,3 +741,48 @@ class TestReviewFixes:
             # The failed claim rolled back and is retried on the next tick.
             assert (await db.get(PeerAskGroup, "bad-group")).state == "ready"
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("COL-06")
+async def test_three_peer_ask_wakes_the_caller_once_with_every_outcome(ws_env) -> None:
+    """Asking three peers wakes the caller exactly once, after every peer
+    has answered or timed out, with all three outcomes in one message."""
+    app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+    sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+    second_pid = await _add_running_agent(sf, room, "agent01")
+    third_pid = await _add_running_agent(sf, room, "agent02")
+    peer_token = await _add_token(sf, peer_pid)
+    second_token = await _add_token(sf, second_pid)
+
+    with TestClient(app) as client:
+        trigger = _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+        _ask_peer(client, sender_token, room.id, [
+            (peer_pid, "디스크"), (second_pid, "메모리"), (third_pid, "네트워크"),
+        ])
+        _agent_send(client, room.id, sender_token, "초안", await _proof(sf, sender_pid))
+        _agent_send(client, room.id, peer_token, "디스크 OK",
+                    await _proof(sf, peer_pid), thread_root_id=trigger["id"])
+        _agent_send(client, room.id, second_token, "메모리 OK",
+                    await _proof(sf, second_pid), thread_root_id=trigger["id"])
+        # The third peer is still silent: no wake yet.
+        assert await dispatch_peer_ask_groups(sf, None) == 0
+        async with sf() as db:
+            group = (await db.scalars(select(PeerAskGroup))).one()
+            group.deadline_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await db.commit()
+        assert await dispatch_peer_ask_groups(sf, None) == 1
+        assert await dispatch_peer_ask_groups(sf, None) == 0
+
+    targets = await _targets(sf)
+    assert targets[third_pid].state == "timeout"
+    async with sf() as db:
+        group = (await db.scalars(select(PeerAskGroup))).one()
+        wakes = (await db.scalars(select(AgentTurn).where(
+            AgentTurn.target_participant_id == sender_pid,
+        ))).all()
+        wake = await db.get(Message, (await db.get(AgentTurn, group.wake_request_id)).trigger_message_id)
+    assert group.state == "woken"
+    assert len(wakes) == 2  # the original turn and exactly one wake
+    for needle in ("디스크 OK", "메모리 OK", "timeout (deadline)"):
+        assert needle in wake.content

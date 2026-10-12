@@ -283,6 +283,32 @@ def test_create_upload_and_edit_use_actual_managed_disk(managed):
     assert (agent / "notes" / "image.bin").read_bytes() == b"\0binary\xff"
 
 
+@pytest.mark.req("WS-02")
+def test_writes_without_a_valid_edit_token_are_rejected(managed):
+    roots, agent = managed
+    valid = workspace.browse(roots, "agent-a", 2).edit_token
+    assert valid
+    forged = ("0" if valid[0] != "0" else "1") + valid[1:]
+    for token, expected in ((forged, "stale"), ("", "blocked"), ("ab" * 10, "blocked")):
+        for operation, extra in (
+            ("mkdir", {}),
+            ("write", {"text": "x", "expected_sha256": "absent"}),
+            ("upload", {"content_base64": base64.b64encode(b"x").decode()}),
+        ):
+            result = workspace.mutate(
+                roots,
+                "agent-a",
+                2,
+                operation=operation,
+                path="forged",
+                edit_token=token,
+                **extra,
+            )
+            assert result.status == expected, (token, operation)
+            assert not (agent / "forged").exists()
+
+
+@pytest.mark.req("WS-02")
 def test_edits_reject_stale_content_receipt_private_and_unsafe_paths(managed, tmp_path):
     roots, agent = managed
     token = workspace.browse(roots, "agent-a", 2).edit_token

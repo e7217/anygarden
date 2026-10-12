@@ -212,6 +212,7 @@ async def test_ack_loss_keeps_local_pending_recover_same_receipt(pair):
         ("sender", "IDENTITY_MISMATCH"),
     ],
 )
+@pytest.mark.req("FED-01")
 async def test_invalid_invite(pair, mutation, code):
     a, b = pair
     bundle = await a.s.create_invite(a.admin, invitation(a, b))
@@ -230,8 +231,13 @@ async def test_invalid_invite(pair, mutation, code):
     with pytest.raises(PeerError, match=code):
         await a.s.redeem(b.s.identity, sender, str(bundle.invite_id), token)
     assert await count(a.s, PeerGrant) == 0
+    # The invite pre-registers a pending peer; a rejected redeem never activates it.
+    async with a.s.sessions() as db:
+        states = list(await db.scalars(select(Peer.state)))
+    assert "active" not in states
 
 
+@pytest.mark.req("FED-03")
 async def test_revoke_durable_before_delivery_and_reinvite_does_not_restore_old_grant(
     pair,
 ):
@@ -257,6 +263,47 @@ async def test_revoke_durable_before_delivery_and_reinvite_does_not_restore_old_
     with pytest.raises(PeerError, match="GRANT_DENIED"):
         await authorize(a, b, epoch=1)
     await authorize(a, b, epoch=3)
+
+
+@pytest.mark.req("FED-03")
+async def test_revoking_peer_disables_every_channel_grant(pair):
+    a, b = pair
+    second = uid()
+    async with a.s.sessions.begin() as db:
+        db.add(Room(id=second, name="second-channel"))
+    principal = Principal(node_id=b.s.node_id, kind="agent", principal_id=b.actor)
+    body = invitation(a, b).model_copy(update={"scopes": [
+        Scope(channel_id=channel, actors=[principal], capabilities=["channel.read", "message.send"])
+        for channel in (a.channel, second)
+    ]})
+    bundle = await a.s.create_invite(a.admin, body)
+    await a.s.redeem(
+        b.s.identity, b.s.node_id, str(bundle.invite_id), bundle.token.get_secret_value()
+    )
+    async with a.s.sessions() as db:
+        grants = list(await db.scalars(
+            select(PeerGrant).where(PeerGrant.peer_node_id == b.s.node_id)
+        ))
+    assert {g.channel_id for g in grants} == {a.channel, second}
+    assert all(g.active for g in grants)
+    await authorize(a, b)
+
+    await a.s.revoke(a.admin, b.s.node_id)
+
+    async with a.s.sessions() as db:
+        grants = list(await db.scalars(
+            select(PeerGrant).where(PeerGrant.peer_node_id == b.s.node_id)
+        ))
+    assert len(grants) == 2
+    assert not any(g.active for g in grants)
+    for channel in (a.channel, second):
+        with pytest.raises(PeerError):
+            async with a.s.sessions.begin() as db:
+                await a.s.authorize(
+                    db, b.s.identity, sender_node_id=b.s.node_id,
+                    authority_node_id=a.s.node_id, channel_id=channel,
+                    principal=principal, action="message.send", grant_epoch=1,
+                )
 
 
 async def test_fresh_authorization_before_cached_receipt(pair):
@@ -305,6 +352,7 @@ async def test_scope_principal_policy_archive_and_demoted_admin(pair):
         await authorize(a, b)
 
 
+@pytest.mark.req("FED-02")
 async def test_pin_rotation_invalidates_old_connection_and_never_restores_grants(
     pair, tmp_path
 ):
@@ -461,6 +509,7 @@ async def test_two_independent_nodes_real_tls_bootstrap_redeem_and_identity(pair
         assert await count(b.s, PeerGrant) == 1
 
 
+@pytest.mark.req("FED-02")
 async def test_tls_rejects_untrusted_certificate_before_http(pair, tmp_path):
     a, b = pair
     async with live_pair(a, b) as (_, body, _, __):
@@ -476,6 +525,7 @@ async def test_tls_rejects_untrusted_certificate_before_http(pair, tmp_path):
             )
 
 
+@pytest.mark.req("FED-02")
 async def test_keepalive_old_pin_denied_even_when_socket_close_delayed(
     pair, tmp_path, monkeypatch
 ):
@@ -913,6 +963,7 @@ async def test_actual_jwt_admin_gate_and_peer_disabled_mode(pair):
         ).status_code == 503
 
 
+@pytest.mark.req("FED-01")
 async def test_expiry_revoke_invite_and_preapproved_scope_are_enforced(pair):
     a, b = pair
     invitation_body = invitation(a, b)
@@ -937,6 +988,7 @@ async def test_expiry_revoke_invite_and_preapproved_scope_are_enforced(pair):
         await authorize(a, b)
 
 
+@pytest.mark.req("FED-02")
 async def test_tls_rejects_absent_client_certificate(pair):
     import ssl
 

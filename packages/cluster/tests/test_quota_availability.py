@@ -96,6 +96,7 @@ def test_mark_window_and_lazy_clear():
     assert not clear_quota_block(agent)  # already clear
 
 
+@pytest.mark.req("AGT-09")
 def test_routing_blocked_semantics():
     fine = _Row()
     assert not routing_blocked(fine, now=NOW)
@@ -123,6 +124,7 @@ def test_message_rendering_includes_reset():
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("AGT-09")
 async def test_lifecycle_frame_marks_and_clears_agent(db):
     """Wire-level: a failed quota frame marks; a later ok frame clears."""
     from uuid import uuid4

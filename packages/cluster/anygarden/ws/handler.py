@@ -518,7 +518,11 @@ def _frame_carries_usage(frame: LifecycleFrame) -> bool:
 
 
 async def _write_lifecycle_usage_row(
-    session_factory: Any, *, agent_id: str, frame: LifecycleFrame
+    session_factory: Any,
+    *,
+    agent_id: str,
+    frame: LifecycleFrame,
+    lifecycle: Any = None,
 ) -> None:
     """Record one ``UsageLedger`` row from a token-bearing frame (#461).
 
@@ -549,6 +553,18 @@ async def _write_lifecycle_usage_row(
         cost_usd=frame.cost_usd,
         duration_ms=frame.duration_ms or 0,
         status_code=200,
+    )
+    # USE-05 — feed the post-cost evaluator now that the SUM includes this
+    # row: an AGENT-scope hard breach stops the agent (pause_reason
+    # 'budget'), every hard/soft breach records a deduped incident. With no
+    # active hard-stop policy this is one read and no writes. Never raises.
+    from anygarden.budgets.ledger import evaluate_cost_event
+
+    await evaluate_cost_event(
+        session_factory,
+        agent_id=agent_id,
+        room_id=frame.room_id,
+        lifecycle=lifecycle,
     )
 
 
@@ -2439,6 +2455,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 session_factory,
                                 agent_id=identity.id,
                                 frame=frame_in,
+                                lifecycle=getattr(
+                                    websocket.app.state, "agent_lifecycle", None
+                                ),
                             )
                         if (
                             frame_in.event == "handler_finished"

@@ -325,6 +325,7 @@ class TestPinEndpoints:
             assert r.status_code == 200
             assert r.json() == {"pinned_room_ids": []}
 
+    @pytest.mark.req("ROOM-09")
     @pytest.mark.asyncio
     async def test_put_pin_order_snapshot(self, pin_env) -> None:
         app = pin_env["app"]
@@ -347,6 +348,66 @@ class TestPinEndpoints:
             )
             assert r.status_code == 200
             assert r.json() == {"pinned_room_ids": snapshot}
+
+    @pytest.mark.req("ROOM-09")
+    @pytest.mark.asyncio
+    async def test_pin_order_survives_reload_and_reaches_other_sessions(
+        self, pin_env
+    ) -> None:
+        """A saved order comes back from a fresh ``GET /rooms`` (page
+        reload) and is pushed to every one of the user's live sessions."""
+
+        class _RecordingManager:
+            def __init__(self) -> None:
+                self.sent: list[tuple[str, object]] = []
+
+            async def send_to(self, pid: str, frame: object) -> bool:
+                self.sent.append((pid, frame))
+                return True
+
+        app = pin_env["app"]
+        manager = _RecordingManager()
+        app.state.connection_manager = manager
+        rooms = pin_env["rooms"]
+        headers = {"Authorization": f"Bearer {pin_env['token']}"}
+        snapshot = [rooms[2].id, rooms[0].id, rooms[1].id]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            for r in rooms:
+                await client.patch(
+                    f"/api/v1/rooms/{r.id}/pin", json={"pinned": True}, headers=headers
+                )
+            manager.sent.clear()
+            put = await client.put(
+                "/api/v1/rooms/pin-order", json={"room_ids": snapshot}, headers=headers
+            )
+            assert put.status_code == 200
+
+            listed = await client.get(
+                f"/api/v1/rooms?project_id={pin_env['project'].id}", headers=headers
+            )
+            assert listed.status_code == 200
+            pinned = sorted(
+                (r for r in listed.json() if r["pinned"]),
+                key=lambda r: r["sort_order"],
+            )
+            assert [r["id"] for r in pinned] == snapshot
+
+        async with pin_env["session_factory"]() as db:
+            user_pids = set(
+                (
+                    await db.execute(
+                        select(Participant.id).where(
+                            Participant.user_id == pin_env["user"].id
+                        )
+                    )
+                ).scalars().all()
+            )
+        assert {pid for pid, _ in manager.sent} == user_pids
+        for _, frame in manager.sent:
+            assert frame.pinned_room_ids == snapshot
+            assert frame.user_id == pin_env["user"].id
 
     @pytest.mark.asyncio
     async def test_patch_pin_requires_auth(self, pin_env) -> None:

@@ -131,6 +131,7 @@ class TestShouldRespond:
                "metadata": {"_nonce": "x"}}
         assert should_respond(msg, client) is True
 
+    @pytest.mark.req("COL-01")
     def test_human_message_without_mention_is_ingest_only(self):
         """#739 — no addressable mention + human sender → the agent keeps
         the message as context but does not reply. The server expands
@@ -146,6 +147,7 @@ class TestShouldRespond:
         msg = {"participant_id": "human-pid", "content": "안녕하세요", "metadata": {}}
         assert decide_policy(msg, client) is MessagePolicy.SKIP
 
+    @pytest.mark.req("COL-08")
     def test_sole_agent_expansion_responds(self):
         """#739 — the server calls the only agent of a 1:1 room with a
         ``via: sole_agent`` user mention that is not in the content."""
@@ -211,6 +213,7 @@ class TestShouldRespond:
         }
         assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
+    @pytest.mark.req("COL-02")
     def test_human_message_addressed_to_other_agent_skips(self):
         """Regression guard for the multi-agent fan-out bug: if the
         server parsed an explicit mention list and this agent isn't
@@ -792,6 +795,7 @@ class TestThreadReplyPolicy:
         }
         assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
+    @pytest.mark.req("COL-07")
     def test_forged_thread_mention_without_content_token_stays_passive(self):
         client = _make_client(my_pids={"my-pid-123"})
         msg = {

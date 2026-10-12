@@ -11,7 +11,7 @@ cap query) end-to-end against the in-memory SQLite app.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import AsyncIterator
 
 import pytest
@@ -129,6 +129,7 @@ async def test_completed_run_survives_replay_and_queue_cleanup(goals_env, materi
     assert len(restored) == 1 and restored[0]["id"] == task_id and restored[0]["is_silent"]
 
 
+@pytest.mark.req("EXE-02")
 @pytest.mark.asyncio
 async def test_manual_run_twice_same_minute_is_idempotent(goals_env):
     client = goals_env["client"]
@@ -279,3 +280,103 @@ async def test_create_goal_rejects_archived_report_room(goals_env):
     async with goals_env["factory"]() as db:
         goals = (await db.execute(select(Goal))).scalars().all()
         assert goals == []
+
+
+async def _create_goal(goals_env, trigger_type: str, trigger_config: dict):
+    return await goals_env["client"].post(
+        f"/api/v1/agents/{goals_env['agent_id']}/goals",
+        json={
+            "title": "scheduled",
+            "spec": "do it",
+            "trigger_type": trigger_type,
+            "trigger_config": trigger_config,
+            "materialize": "full",
+            "report_room_id": goals_env["room_id"],
+        },
+        headers=_auth(goals_env["token"]),
+    )
+
+
+async def _set_next_run(goals_env, goal_id: str, slot: datetime) -> None:
+    async with goals_env["factory"]() as db:
+        goal = await db.get(Goal, goal_id)
+        goal.next_run_at = slot
+        await db.commit()
+
+
+@pytest.mark.req("EXE-02")
+@pytest.mark.asyncio
+async def test_redelivered_schedule_slot_returns_the_existing_task(goals_env):
+    created = await _create_goal(goals_env, "interval", {"interval_seconds": 3600})
+    assert created.status_code == 201, created.text
+    goal_id = created.json()["id"]
+    slot = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=5)
+    await _set_next_run(goals_env, goal_id, slot)
+
+    url = f"/api/v1/goals/{goal_id}/scheduled-events"
+    body = {"scheduled_for": slot.isoformat()}
+    first = await goals_env["client"].post(url, json=body, headers=_auth(goals_env["token"]))
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "accepted"
+    task_id = first.json()["task_id"]
+    assert task_id
+
+    again = await goals_env["client"].post(url, json=body, headers=_auth(goals_env["token"]))
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "duplicate"
+    assert again.json()["task_id"] == task_id
+    async with goals_env["factory"]() as db:
+        count = await db.scalar(
+            select(func.count()).select_from(Task).where(Task.goal_id == goal_id)
+        )
+    assert count == 1
+
+
+@pytest.mark.req("EXE-03")
+@pytest.mark.asyncio
+async def test_next_slot_waits_while_previous_run_is_open(goals_env):
+    created = await _create_goal(goals_env, "interval", {"interval_seconds": 3600})
+    goal_id = created.json()["id"]
+    url = f"/api/v1/goals/{goal_id}/scheduled-events"
+    first_slot = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=10)
+    await _set_next_run(goals_env, goal_id, first_slot)
+    first = await goals_env["client"].post(
+        url, json={"scheduled_for": first_slot.isoformat()}, headers=_auth(goals_env["token"]))
+    assert first.json()["status"] == "accepted", first.text
+
+    # The previous run is still open (blocked waiting for input) when the
+    # next slot comes due: it waits instead of overlapping.
+    async with goals_env["factory"]() as db:
+        task = await db.get(Task, first.json()["task_id"])
+        task.status = "blocked"
+        await db.commit()
+    second_slot = first_slot + timedelta(seconds=5)
+    await _set_next_run(goals_env, goal_id, second_slot)
+    second = await goals_env["client"].post(
+        url, json={"scheduled_for": second_slot.isoformat()}, headers=_auth(goals_env["token"]))
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "waiting_overlap"
+    assert second.json()["task_id"] is None
+    async with goals_env["factory"]() as db:
+        count = await db.scalar(
+            select(func.count()).select_from(Task).where(Task.goal_id == goal_id)
+        )
+    assert count == 1
+
+
+@pytest.mark.req("EXE-05")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trigger_type,trigger_config",
+    [
+        ("interval", {"interval_seconds": 59}),
+        ("cron", {"cron": "0 9 * * *", "timezone": "No/Such_Zone"}),
+    ],
+)
+async def test_create_goal_rejects_short_interval_and_bad_timezone(
+    goals_env, trigger_type, trigger_config
+):
+    resp = await _create_goal(goals_env, trigger_type, trigger_config)
+    assert resp.status_code == 422, resp.text
+    async with goals_env["factory"]() as db:
+        assert await db.scalar(select(func.count()).select_from(Goal)) == 0

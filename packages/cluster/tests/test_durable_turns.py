@@ -433,6 +433,7 @@ async def test_completion_proof_cannot_be_replayed_by_another_agent(turn_env) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-03")
 async def test_expired_lease_retries_once_then_fails_with_one_notice(turn_env) -> None:
     request_id, _, manager = await _create_and_deliver(turn_env)
     now = datetime.now(timezone.utc)
@@ -514,6 +515,7 @@ async def test_old_attempt_completion_is_fenced_after_redispatch(turn_env) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-03")
 async def test_terminal_lifecycle_without_completion_enters_bounded_recovery(
     turn_env,
 ) -> None:
@@ -792,6 +794,7 @@ def _skipped_frame(env, request_id: str, metadata: dict, **overrides) -> SimpleN
 
 
 @pytest.mark.asyncio
+@pytest.mark.req("ENG-02")
 async def test_skipped_lifecycle_closes_turn_without_redispatch(turn_env) -> None:
     # #720 — an agent that declines a delivered turn must close it; left
     # leased, it blocked later deliveries until the lease expired.
@@ -889,3 +892,32 @@ def test_skipped_is_not_a_task_redispatch_outcome() -> None:
     from anygarden.ws.handler import _REDISPATCH_OUTCOMES
 
     assert "skipped" not in _REDISPATCH_OUTCOMES
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("ENG-05")
+async def test_cancelled_lifecycle_closes_turn_without_redispatch(turn_env) -> None:
+    """A cancelled turn is terminal: lease recovery never retries it."""
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    metadata = manager.frames[0].metadata
+    async with turn_env["factory"]() as db:
+        assert await record_lifecycle(
+            db, agent_id=turn_env["agent"],
+            frame=_skipped_frame(turn_env, request_id, metadata, outcome="cancelled"),
+        )
+        await db.commit()
+
+    result = await recover_stalled_turns(
+        turn_env["factory"], manager,
+        now=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    assert result.redispatched == 0
+    assert result.failed == 0
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        attempts = (await db.scalars(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )).all()
+        assert turn is not None and turn.state == "cancelled"
+        assert turn.retry_count == 0
+        assert [a.state for a in attempts] == ["cancelled"]

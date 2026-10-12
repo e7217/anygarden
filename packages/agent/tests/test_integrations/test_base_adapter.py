@@ -465,6 +465,7 @@ class TestComposeSessionContextSuffix:
         assert "note.md" in out
         assert "room file content" in out
 
+    @pytest.mark.req("MEM-05", "MEM-07")
     def test_room_switches_and_restart_do_not_inline_another_projects_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

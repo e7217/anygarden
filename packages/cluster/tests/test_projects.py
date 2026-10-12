@@ -145,6 +145,7 @@ async def test_delete_empty_project(projects_env: AsyncClient):
     assert all(p["id"] != project_id for p in resp.json())
 
 
+@pytest.mark.req("ROOM-02")
 async def test_delete_project_with_rooms_cascades(projects_env: AsyncClient):
     """Deleting a project also removes its rooms via the
     ``ON DELETE CASCADE`` FK. GET on each room id returns 404."""

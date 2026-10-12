@@ -60,6 +60,7 @@ async def test_register_success(auth_env: AsyncClient):
     assert "token" in data
 
 
+@pytest.mark.req("AUTH-01")
 async def test_register_duplicate_email(auth_env: AsyncClient):
     payload = {"email": "alice@example.com", "password": "s3cret!"}
     await auth_env.post("/api/v1/auth/register", json=payload)
@@ -67,6 +68,7 @@ async def test_register_duplicate_email(auth_env: AsyncClient):
     assert resp.status_code == 409
 
 
+@pytest.mark.req("AUTH-01")
 async def test_register_first_user_is_admin(auth_env: AsyncClient):
     resp = await auth_env.post(
         "/api/v1/auth/register",
@@ -82,6 +84,7 @@ async def test_register_first_user_is_admin(auth_env: AsyncClient):
     assert me_resp.json()["is_admin"] is True
 
 
+@pytest.mark.req("AUTH-01")
 async def test_register_second_user_not_admin(auth_env: AsyncClient):
     # First user (admin)
     await auth_env.post(
@@ -117,6 +120,7 @@ async def test_login_success(auth_env: AsyncClient):
     assert data["user"]["email"] == "login@example.com"
 
 
+@pytest.mark.req("AUTH-02")
 async def test_login_wrong_password(auth_env: AsyncClient):
     payload = {"email": "wrong-pw@example.com", "password": "s3cret!"}
     await auth_env.post("/api/v1/auth/register", json=payload)
@@ -127,6 +131,7 @@ async def test_login_wrong_password(auth_env: AsyncClient):
     assert resp.status_code == 401
 
 
+@pytest.mark.req("AUTH-02")
 async def test_login_nonexistent_email(auth_env: AsyncClient):
     resp = await auth_env.post(
         "/api/v1/auth/login",

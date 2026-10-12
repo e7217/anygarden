@@ -232,6 +232,7 @@ async def _authorization_audits(factory) -> list[RoomAuthorizationAudit]:
         ).all()
 
 
+@pytest.mark.req("MSG-06")
 @pytest.mark.asyncio
 async def test_private_room_is_hidden_from_all_nonmember_rest_paths(
     authorization_env: dict,
@@ -675,6 +676,7 @@ async def test_audit_flush_releases_callers_before_second_pool_checkout(
         await engine.dispose()
 
 
+@pytest.mark.req("ROOM-04")
 @pytest.mark.asyncio
 async def test_archive_cascades_to_child_and_converts_writes_to_409(
     authorization_env: dict,
@@ -718,6 +720,7 @@ async def test_archive_cascades_to_child_and_converts_writes_to_409(
         assert child.archived_at is not None
 
 
+@pytest.mark.req("MSG-01")
 def test_websocket_nonmember_and_observer_writes_do_not_leak_events(
     authorization_env: dict,
 ) -> None:
@@ -761,6 +764,29 @@ def test_websocket_nonmember_and_observer_writes_do_not_leak_events(
     assert asyncio.run(_message_count(authorization_env["factory"], room_id)) == 1
 
 
+@pytest.mark.req("MSG-01")
+def test_websocket_invalid_token_is_closed_4001_before_accept(
+    authorization_env: dict,
+) -> None:
+    """A forged/garbage token is refused with 4001 during the handshake."""
+
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    room_id = authorization_env["room_id"]
+    with TestClient(authorization_env["app"]) as client:
+        for bad in ("not-a-jwt", "agt_" + "z" * 40):
+            with (
+                pytest.raises(WebSocketDisconnect) as exc,
+                client.websocket_connect(
+                    f"/ws/rooms/{room_id}",
+                    subprotocols=["anygarden.v1", f"bearer.{bad}"],
+                ),
+            ):
+                pytest.fail("an invalid token must not receive a WS welcome")
+            assert exc.value.code == 4001
+
+
 def test_global_admin_rest_bypass_does_not_create_websocket_identity(
     authorization_env: dict,
 ) -> None:
@@ -798,6 +824,7 @@ def test_global_admin_rest_bypass_does_not_create_websocket_identity(
     assert all(audit.outcome == "allowed" for audit in audits)
 
 
+@pytest.mark.req("ROOM-04")
 def test_archive_immediately_revokes_open_websocket(
     authorization_env: dict,
 ) -> None:

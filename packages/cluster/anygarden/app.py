@@ -26,6 +26,7 @@ from anygarden.api.v1.graph import router as graph_router
 from anygarden.api.v1.invites import router as invites_router
 from anygarden.api.v1.machines import router as machines_api_router
 from anygarden.api.v1.mcp_templates import router as mcp_templates_router
+from anygarden.api.v1.metrics import router as metrics_router
 from anygarden.api.v1.pi_auth import router as pi_auth_router
 from anygarden.api.v1.projects import router as projects_router
 from anygarden.api.v1.saved import router as saved_router
@@ -1614,6 +1615,7 @@ def create_app(
     app.include_router(execution_approvals_router)
     app.include_router(project_inbox_router)
     app.include_router(turns_router)
+    app.include_router(metrics_router)
     app.include_router(workspaces_router)
     app.include_router(goals_router)
     app.include_router(system_router)

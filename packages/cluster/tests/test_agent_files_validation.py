@@ -61,6 +61,7 @@ class TestRejectedPaths:
             "skills/\nnewline/SKILL.md",
         ],
     )
+    @pytest.mark.req("AGT-07")
     def test_path_traversal_and_control_chars_rejected(self, path: str) -> None:
         with pytest.raises(AgentFilePathError):
             validate_agent_file_path(path)

@@ -51,6 +51,7 @@ def offline(monkeypatch):
     )
 
 
+@pytest.mark.req("NODE-03")
 def test_owner_identity_is_stable_and_second_process_cannot_start(tmp_path):
     owner = NodeOwner(tmp_path)
     owner.acquire()
@@ -98,6 +99,7 @@ def test_stop_request_targets_owner_nonce_not_pid(tmp_path):
 
 
 @pytest.mark.parametrize("args", [["--workers", "2"], ["--reload"]])
+@pytest.mark.req("NODE-04")
 def test_cli_rejects_unsupported_modes_before_creating_state(tmp_path, args):
     result = CliRunner().invoke(
         dispatch, ["start", "--data-dir", str(tmp_path / "node"), *args]
@@ -106,6 +108,7 @@ def test_cli_rejects_unsupported_modes_before_creating_state(tmp_path, args):
     assert not (tmp_path / "node").exists()
 
 
+@pytest.mark.req("NODE-04")
 def test_worker_environment_rejected_before_ownership(tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_CONCURRENCY", "2")
     result = CliRunner().invoke(
@@ -333,6 +336,7 @@ async def test_cleanup_failure_keeps_recovery_required(tmp_path, monkeypatch):
         NodeOwner(tmp_path).acquire()
 
 
+@pytest.mark.req("NODE-09")
 async def test_shutdown_waits_for_inflight_spawn_and_kills_its_process(
     tmp_path, monkeypatch
 ):
@@ -415,6 +419,7 @@ async def test_shutdown_waits_for_inflight_spawn_and_kills_its_process(
 
 
 @pytest.mark.parametrize("cleanup_failure", [None, "backend", "server"])
+@pytest.mark.req("NODE-03")
 def test_real_cli_start_stop_and_restart_without_network_daemon(
     tmp_path, cleanup_failure
 ):
@@ -708,6 +713,7 @@ async def test_integrated_agent_process_inherits_only_explicit_environment(
         owner.release(clean=True)
 
 
+@pytest.mark.req("FED-06")
 def test_peer_port_without_credentials_is_refused_before_startup(tmp_path):
     """--peer-port is explicit opt-in and fails closed without credentials."""
     from click.testing import CliRunner
@@ -814,6 +820,7 @@ def test_real_cli_peer_listener_lifecycle_with_stop(tmp_path):
         socket.create_connection(("127.0.0.1", peer_port), timeout=0.5)
 
 
+@pytest.mark.req("FED-06")
 def test_invalid_credentials_with_peer_port_fail_startup(tmp_path):
     """Requested listener + unusable credentials aborts boot, not silence."""
     import os

@@ -140,6 +140,7 @@ class TestPlacement:
             assert selected.id == machine_a.id
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-01")
     async def test_capacity_full_raises(self, placement_env) -> None:
         """When all machines are at max capacity, raise NoSuitableMachineError."""
         bus = placement_env["bus"]
@@ -171,6 +172,7 @@ class TestPlacement:
                 await select_machine_for("echo", db, bus)
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-01")
     async def test_no_ws_connection_skipped(self, placement_env) -> None:
         """Machine C is offline and has no WS connection — should be skipped."""
         bus = placement_env["bus"]
@@ -179,6 +181,50 @@ class TestPlacement:
         # Unregister A and B so no machines are connected
         await bus.unregister(placement_env["machine_a"].id)
         await bus.unregister(placement_env["machine_b"].id)
+
+        async with factory() as db:
+            with pytest.raises(NoSuitableMachineError):
+                await select_machine_for("echo", db, bus)
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("NODE-01")
+    async def test_offline_machine_skipped_even_when_connected(self, placement_env) -> None:
+        """Machine C is offline in the DB; a live socket does not make it eligible."""
+        bus = placement_env["bus"]
+        factory = placement_env["factory"]
+
+        class FakeWS:
+            async def send_text(self, data: str) -> None:
+                pass
+
+        await bus.unregister(placement_env["machine_a"].id)
+        await bus.unregister(placement_env["machine_b"].id)
+        await bus.register(placement_env["machine_c"].id, FakeWS())
+
+        async with factory() as db:
+            with pytest.raises(NoSuitableMachineError):
+                await select_machine_for("echo", db, bus)
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("NODE-07")
+    async def test_draining_machine_gets_no_new_placement(self, placement_env) -> None:
+        """A drained (status=draining) machine is skipped even with free slots and a socket."""
+        bus = placement_env["bus"]
+        factory = placement_env["factory"]
+        machine_a = placement_env["machine_a"]
+        machine_b = placement_env["machine_b"]
+
+        async with factory() as db:
+            (await db.get(Machine, machine_b.id)).status = "draining"
+            await db.commit()
+
+        async with factory() as db:
+            selected = await select_machine_for("echo", db, bus)
+            assert selected.id == machine_a.id
+
+        async with factory() as db:
+            (await db.get(Machine, machine_a.id)).status = "draining"
+            await db.commit()
 
         async with factory() as db:
             with pytest.raises(NoSuitableMachineError):

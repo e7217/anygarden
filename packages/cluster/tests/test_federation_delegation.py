@@ -758,6 +758,7 @@ async def test_invalid_ack_cannot_authorize_launch(h, setup_bridge, field, value
     assert (await bridge.deliver(outbox, h.commit))["state"] == "accepted"
 
 
+@pytest.mark.req("FED-05")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "code,until,pause",

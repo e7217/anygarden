@@ -242,6 +242,7 @@ async def test_goal_derived_failure_increments_consecutive_failures(db):
     assert goal.consecutive_failures == 1
 
 
+@pytest.mark.req("EXE-04")
 @pytest.mark.asyncio
 async def test_goal_pauses_on_threshold_failure(db):
     """Crossing the failure threshold flips the parent goal to

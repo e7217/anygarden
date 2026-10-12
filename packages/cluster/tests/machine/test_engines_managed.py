@@ -47,11 +47,13 @@ def test_non_executable_file_is_not_an_install(root):
     assert managed.managed_pi_executable() is None
 
 
+@pytest.mark.req("ENG-07")
 def test_pinned_version_matches_agent_adapter():
     pi = pytest.importorskip("anygarden_agent.runtime.execution.pi")
     assert managed.PI_PINNED_VERSION == pi.ENGINE_VERSION
 
 
+@pytest.mark.req("ENG-07")
 def test_path_opt_in_is_explicit(root, monkeypatch):
     assert managed.pi_path_opt_in() is False
     monkeypatch.setenv(managed.PATH_OPT_IN_ENV, "true")
@@ -76,6 +78,7 @@ def test_pi_lifecycle_uses_managed_channel(root):
     assert lc.detect.mode == "managed"
 
 
+@pytest.mark.req("ENG-07")
 def test_update_engine_installs_pinned_version_into_prefix(root):
     calls = []
 
@@ -104,6 +107,7 @@ def test_update_engine_installs_pinned_version_into_prefix(root):
 # ── Detection ───────────────────────────────────────────────────────
 
 
+@pytest.mark.req("ENG-07")
 async def test_detects_managed_install_first(root, tmp_path, monkeypatch):
     fake_pi(tmp_path / "bin" / "pi", "0.87.1")
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
@@ -112,6 +116,7 @@ async def test_detects_managed_install_first(root, tmp_path, monkeypatch):
     assert (pi.version, pi.path) == ("0.85.1", str(exe))
 
 
+@pytest.mark.req("ENG-07")
 async def test_global_pi_is_ignored_without_opt_in(root, tmp_path, monkeypatch):
     fake_pi(tmp_path / "bin" / "pi", "0.87.1")
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
@@ -119,6 +124,7 @@ async def test_global_pi_is_ignored_without_opt_in(root, tmp_path, monkeypatch):
     assert "pi-cli" not in engines
 
 
+@pytest.mark.req("ENG-07")
 async def test_global_pi_detected_with_opt_in(root, tmp_path, monkeypatch):
     binary = fake_pi(tmp_path / "bin" / "pi", "0.87.1")
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))

@@ -45,6 +45,7 @@ __all__ = [
     "InvocationBlock",
     "compute_observed_tokens",
     "evaluate_invocation_block",
+    "invocation_block_in_session",
     "evaluate_cost_event",
     "clear_observed_cache",
 ]
@@ -184,13 +185,30 @@ async def evaluate_invocation_block(
     yet. ``pause_reason`` is NULL by default, so this guard is invisible
     on the default-OFF path — a fresh DB never enters this branch.
     """
+    async with session_factory() as session:
+        return await invocation_block_in_session(
+            session, agent_id=agent_id, room_id=room_id
+        )
+
+
+async def invocation_block_in_session(
+    session: AsyncSession,
+    *,
+    agent_id: str | None,
+    room_id: str | None,
+) -> InvocationBlock | None:
+    """:func:`evaluate_invocation_block` against a caller-owned session.
+
+    Read-only. Room turn delivery (USE-06) calls this inside its own write
+    transaction so the check never needs a second connection. Same
+    semantics and default-OFF invariant as :func:`evaluate_invocation_block`.
+    """
     if agent_id is not None:
-        async with session_factory() as session:
-            paused = (
-                await session.execute(
-                    select(Agent.pause_reason).where(Agent.id == agent_id)
-                )
-            ).scalar_one_or_none()
+        paused = (
+            await session.execute(
+                select(Agent.pause_reason).where(Agent.id == agent_id)
+            )
+        ).scalar_one_or_none()
         if paused == "budget":
             return InvocationBlock(
                 scope_type="agent",
@@ -215,38 +233,37 @@ async def evaluate_invocation_block(
             & (TokenBudgetPolicy.scope_id == room_id)
         )
 
-    async with session_factory() as session:
-        rows = (
-            await session.execute(
-                select(TokenBudgetPolicy).where(
-                    TokenBudgetPolicy.is_active.is_(True),
-                    TokenBudgetPolicy.hard_stop_enabled.is_(True),
-                    or_(*scope_clauses),
-                )
+    rows = (
+        await session.execute(
+            select(TokenBudgetPolicy).where(
+                TokenBudgetPolicy.is_active.is_(True),
+                TokenBudgetPolicy.hard_stop_enabled.is_(True),
+                or_(*scope_clauses),
             )
-        ).scalars().all()
+        )
+    ).scalars().all()
 
-        if not rows:
-            return None
+    if not rows:
+        return None
 
-        # Deterministic evaluation order: global, then agent, then room —
-        # so a global cap is reported before a narrower one when both are
-        # tripped. (Any single over-ceiling scope blocks the call.)
-        order = {"global": 0, "agent": 1, "room": 2}
-        policies = sorted(rows, key=lambda p: order.get(p.scope_type, 99))
+    # Deterministic evaluation order: global, then agent, then room —
+    # so a global cap is reported before a narrower one when both are
+    # tripped. (Any single over-ceiling scope blocks the call.)
+    order = {"global": 0, "agent": 1, "room": 2}
+    policies = sorted(rows, key=lambda p: order.get(p.scope_type, 99))
 
-        now = datetime.now(timezone.utc)
-        for policy in policies:
-            observed = await _observed_for_policy(session, policy, now=now)
-            if observed >= policy.token_ceiling:
-                return InvocationBlock(
-                    scope_type=policy.scope_type,
-                    scope_id=policy.scope_id,
-                    reason=(
-                        f"token budget exceeded: {observed} >= "
-                        f"{policy.token_ceiling} ({policy.window_kind})"
-                    ),
-                )
+    now = datetime.now(timezone.utc)
+    for policy in policies:
+        observed = await _observed_for_policy(session, policy, now=now)
+        if observed >= policy.token_ceiling:
+            return InvocationBlock(
+                scope_type=policy.scope_type,
+                scope_id=policy.scope_id,
+                reason=(
+                    f"token budget exceeded: {observed} >= "
+                    f"{policy.token_ceiling} ({policy.window_kind})"
+                ),
+            )
 
     return None
 

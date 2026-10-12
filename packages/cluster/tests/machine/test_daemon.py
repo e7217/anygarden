@@ -1485,6 +1485,7 @@ class TestSharedFileHandlers:
 
     room_id = "00000000-0000-0000-0000-000000000001"
 
+    @pytest.mark.req("WS-06")
     async def test_same_named_inputs_and_delete_are_isolated_by_room(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
@@ -1580,6 +1581,7 @@ class TestSharedFileHandlers:
         ))
         assert private.read_text() == "UNCHANGED"
 
+    @pytest.mark.req("WS-06")
     async def test_write_creates_file(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
@@ -1675,6 +1677,7 @@ class TestSharedFileHandlers:
         shared_file = agent_root / "memory" / "shared" / self.room_id / "spec.md"
         assert shared_file.read_text() == second
 
+    @pytest.mark.req("WS-06")
     async def test_delete_removes_file(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:

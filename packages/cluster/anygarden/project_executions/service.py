@@ -203,6 +203,9 @@ def _validate_policy(allowed_actions: list | None, limits: dict | None) -> None:
                 _reject("INVALID_EXECUTION_LIMIT", f"{key} must be a positive int64")
 
 
+EXTERNAL_RELEASE_OPERATIONS = ("managed_submission", "managed_deployment")
+
+
 def require_execution_operation(execution: ProjectExecution, operation: str) -> None:
     """Authorize a supported managed operation, never a native-engine grant."""
     _active(execution)
@@ -622,6 +625,18 @@ async def delegate_task(
     if role not in INTERNAL_TASK_ROLES:
         _reject("DELEGATION_ROLE_INVALID", "Unsupported execution task role")
     require_execution_operation(execution, role)
+    # A release result needs an approved managed action (see the "result"
+    # check below), and ``allowed_actions`` is fixed at begin. Without an
+    # external grant such a task could never finish, so refuse it now and
+    # let the lead delegate the deliverable as ordinary work.
+    if role == "release" and not any(
+        allows_operation(execution.allowed_actions, op) for op in EXTERNAL_RELEASE_OPERATIONS
+    ):
+        _reject(
+            "DELEGATION_ROLE_INVALID",
+            "A release task needs a managed_submission or managed_deployment grant on the "
+            "execution; delegate an internal deliverable with role 'work'",
+        )
     declared_dependencies = list(dict.fromkeys(depends_on or []))
     if role == "qa":
         depends_on = [*dict.fromkeys([*(depends_on or []), qa_target_task_id])]

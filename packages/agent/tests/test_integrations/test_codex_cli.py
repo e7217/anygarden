@@ -185,6 +185,7 @@ class TestExtractUsage:
 class TestCallCodexSession:
     """Session continuity: first turn captures id, later turns resume."""
 
+    @pytest.mark.req("ENG-06")
     async def test_first_turn_captures_thread_id(self, monkeypatch) -> None:
         adapter = CodexCliAdapter()
         adapter._codex_path = "/usr/bin/codex"

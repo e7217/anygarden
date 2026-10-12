@@ -155,3 +155,167 @@ async def test_process_send_stamps_and_rejects(db):
         sender_participant_id=target,
     )
     assert out["next_speaker_participant_id"] == requester
+
+
+
+@pytest.mark.req("MSG-07")
+@pytest.mark.asyncio
+async def test_second_resolution_of_same_interaction_is_rejected(engine, config):
+    """Over the room WebSocket: the first answer to an interaction lands; a
+    second answer gets an error frame and appends nothing."""
+    import json
+
+    from sqlalchemy import func, select
+    from starlette.testclient import TestClient
+
+    from anygarden.app import create_app
+    from anygarden.auth.jwt import create_user_token
+    from anygarden.db.engine import build_session_factory
+    from anygarden.db.models import (
+        InteractionResolution,
+        Message,
+        Participant,
+        Project,
+        Room,
+        User,
+    )
+
+    iid = str(uuid4())
+    sessions = build_session_factory(engine)
+    async with sessions() as db:
+        asker = User(email="asker@t.test", password_hash="x")
+        answerer = User(email="answerer@t.test", password_hash="x")
+        project = Project(name="p")
+        db.add_all([asker, answerer, project])
+        await db.flush()
+        room = Room(project_id=project.id, name="r")
+        db.add(room)
+        await db.flush()
+        asker_part = Participant(room_id=room.id, user_id=asker.id, role="owner")
+        db.add_all(
+            [asker_part, Participant(room_id=room.id, user_id=answerer.id, role="member")]
+        )
+        await db.flush()
+        root = Message(
+            room_id=room.id,
+            participant_id=asker_part.id,
+            content="pick one",
+            seq=1,
+            extra_metadata={"interaction": valid_request(id=iid)},
+        )
+        db.add(root)
+        await db.commit()
+        room_id, root_id = room.id, root.id
+        token = create_user_token(
+            answerer.id, answerer.email, False, secret=config.jwt_secret
+        )
+
+    app = create_app(config)
+    app.state.engine = engine
+    app.state.session_factory = sessions
+
+    def answer(content: str) -> str:
+        return json.dumps(
+            {
+                "type": "send",
+                "content": content,
+                "thread_root_id": root_id,
+                "metadata": {
+                    "interaction_resolution": {"interaction_id": iid, "answer": content}
+                },
+            }
+        )
+
+    def next_of(ws, kinds: set[str]) -> dict:
+        while True:
+            frame = json.loads(ws.receive_text())
+            if frame.get("type") in kinds:
+                return frame
+
+    with TestClient(app) as client, client.websocket_connect(
+        f"/ws/rooms/{room_id}", subprotocols=["anygarden.v1", f"bearer.{token}"]
+    ) as ws:
+        assert json.loads(ws.receive_text())["type"] == "welcome"
+        ws.send_text(answer("A"))
+        first = next_of(ws, {"message", "error"})
+        assert first["type"] == "message", first
+        ws.send_text(answer("B"))
+        second = next_of(ws, {"message", "error"})
+        assert second["type"] == "error", second
+        assert "already resolved" in second["detail"]
+
+    async with sessions() as db:
+        resolutions = (await db.execute(select(InteractionResolution))).scalars().all()
+        assert [r.interaction_id for r in resolutions] == [iid]
+        assert resolutions[0].resolution_message_id == first["id"]
+        count = await db.scalar(
+            select(func.count()).select_from(Message).where(Message.room_id == room_id)
+        )
+        assert count == 2  # request + the single accepted answer
+
+
+@pytest.mark.req("MSG-07")
+@pytest.mark.asyncio
+async def test_rest_answer_lands_once_and_mismatch_is_400(engine, config):
+    """Over REST: a matching answer is accepted, a reference mismatch is a 400
+    (not a 500), and a second answer to the same interaction is refused."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import select
+
+    from anygarden.app import create_app
+    from anygarden.auth.jwt import create_user_token
+    from anygarden.db.engine import build_session_factory
+    from anygarden.db.models import InteractionResolution, Message, Participant, Project, Room, User
+
+    iid = str(uuid4())
+    sessions = build_session_factory(engine)
+    async with sessions() as db:
+        asker = User(email="asker@t.test", password_hash="x")
+        answerer = User(email="answerer@t.test", password_hash="x")
+        project = Project(name="p")
+        db.add_all([asker, answerer, project])
+        await db.flush()
+        room = Room(project_id=project.id, name="r")
+        db.add(room)
+        await db.flush()
+        asker_part = Participant(room_id=room.id, user_id=asker.id, role="owner")
+        db.add_all(
+            [asker_part, Participant(room_id=room.id, user_id=answerer.id, role="member")]
+        )
+        await db.flush()
+        root = Message(
+            room_id=room.id,
+            participant_id=asker_part.id,
+            content="pick one",
+            seq=1,
+            extra_metadata={"interaction": valid_request(id=iid)},
+        )
+        db.add(root)
+        await db.commit()
+        url = f"/api/v1/rooms/{room.id}/threads/{root.id}/messages"
+        token = create_user_token(answerer.id, answerer.email, False, secret=config.jwt_secret)
+
+    app = create_app(config)
+    app.state.engine = engine
+    app.state.session_factory = sessions
+
+    def answer(interaction_id: str, content: str) -> dict:
+        return {
+            "content": content,
+            "metadata": {
+                "interaction_resolution": {"interaction_id": interaction_id, "answer": content}
+            },
+        }
+
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        mismatch = await client.post(url, json=answer(str(uuid4()), "X"), headers=headers)
+        assert mismatch.status_code == 400, mismatch.text
+        first = await client.post(url, json=answer(iid, "A"), headers=headers)
+        assert first.status_code == 201, first.text
+        second = await client.post(url, json=answer(iid, "B"), headers=headers)
+        assert 400 <= second.status_code < 500, second.text
+
+    async with sessions() as db:
+        resolutions = (await db.execute(select(InteractionResolution))).scalars().all()
+        assert [r.resolution_message_id for r in resolutions] == [first.json()["id"]]

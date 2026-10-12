@@ -98,3 +98,72 @@ def test_main_exits_zero_when_all_pass(tmp_path):
     junit = _write_junit(tmp_path, _case("test_a", "AUTH-08"))
 
     assert req_report.main([str(junit)]) == 0
+
+
+def test_collects_ids_from_bracketed_test_titles(tmp_path):
+    junit = _write_junit(
+        tmp_path,
+        _case("Inbox &gt; shows approval [INB-04]", None),
+        _case("reconnects [MSG-04] [MSG-05]", None, "fail"),
+    )
+
+    results = req_report.collect([junit])
+
+    assert [r.outcome for r in results["INB-04"]] == ["passed"]
+    assert [r.outcome for r in results["MSG-05"]] == ["failed"]
+
+
+def _write_spec(tmp_path: Path) -> Path:
+    spec = tmp_path / "requirements.md"
+    spec.write_text(
+        "| ID | 요구 | 검증 |\n|---|---|---|\n"
+        "| AUTH-08 | 초대 회수 | pytest |\n"
+        "| SYS-04 | 빌드가 통과한다 | build |\n"
+        "| USE-06 | 예산 UI | gap |\n"
+        "| INB-04 | 인박스 | e2e, vitest |\n",
+        encoding="utf-8",
+    )
+    return spec
+
+
+def test_spec_layers_reads_the_verification_column(tmp_path):
+    layers = req_report.spec_layers(_write_spec(tmp_path))
+
+    assert layers == {
+        "AUTH-08": {"pytest"},
+        "SYS-04": {"build"},
+        "USE-06": {"gap"},
+        "INB-04": {"e2e", "vitest"},
+    }
+
+
+def test_require_coverage_passes_when_declared_layers_are_covered(tmp_path, capsys):
+    junit = _write_junit(
+        tmp_path, _case("test_a", "AUTH-08"), _case("inbox [INB-04]", None)
+    )
+    spec = _write_spec(tmp_path)
+
+    assert req_report.main([str(junit), "--spec", str(spec), "--require-coverage"]) == 0
+    out = capsys.readouterr().out
+    assert "| SYS-04 | build | 0 |" in out
+    assert "| USE-06 | gap | 0 |" in out
+    assert "Known gaps (1): USE-06" in out
+
+
+def test_require_coverage_fails_on_untested_and_unknown_ids(tmp_path, capsys):
+    junit = _write_junit(tmp_path, _case("test_a", "AUTH-99"))
+    spec = _write_spec(tmp_path)
+
+    assert req_report.main([str(junit), "--spec", str(spec), "--require-coverage"]) == 1
+    out = capsys.readouterr().out
+    assert "AUTH-99: tagged in tests but not listed in the spec" in out
+    assert "AUTH-08: declared pytest but no passing test" in out
+    assert "INB-04: declared e2e/vitest but no passing test" in out
+    assert "SYS-04" not in out.split("Coverage problems:")[1]
+
+
+def test_require_coverage_needs_spec(tmp_path):
+    junit = _write_junit(tmp_path, _case("test_a", "AUTH-08"))
+
+    with pytest.raises(SystemExit):
+        req_report.main([str(junit), "--require-coverage"])
