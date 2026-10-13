@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import { useMemo, useState } from 'react'
 import CreateAgentDialog from './CreateAgentDialog'
 import type { Agent } from '@/hooks/useAgents'
 
@@ -188,4 +189,31 @@ it("shows the machine's Codex login next to the Codex model", async () => {
   expect(mocks.apiFetch).toHaveBeenCalledWith('/api/v1/machines/chosen-machine/engines')
   // A missing login is a warning, not a blocker: the agent can be signed in later.
   expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled()
+})
+
+it('keeps the draft when the admin switches machines in the picker', async () => {
+  function Harness() {
+    const [machineId, setMachineId] = useState('m1')
+    const engines = useMemo(() => machineId === 'm1' ? [{ engine: 'codex-cli' }] : [{ engine: 'claude-code' }], [machineId])
+    return <CreateAgentDialog open onOpenChange={vi.fn()} machineId={machineId} machineName={machineId === 'm1' ? 'Studio' : 'Laptop'}
+      machineOptions={[{ id: 'm1', name: 'Studio' }, { id: 'm2', name: 'Laptop' }]} onMachineChange={setMachineId}
+      engines={engines} availableEngines={[]} projects={[]} roomsByProject={{}}
+      createAgent={createAgent} fetchEngineCatalog={vi.fn().mockResolvedValue(null)} onCreated={vi.fn()} />
+  }
+  const createAgent = vi.fn().mockResolvedValue({ id: 'a', name: 'Reviewer' } as Agent)
+  render(<Harness />)
+  expect(screen.getByRole('heading', { name: 'Create Agent' })).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reviewer' } })
+  fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'm2' } })
+  expect(screen.getByLabelText('Name')).toHaveValue('Reviewer')
+  next()
+  expect(screen.getByLabelText('Engine')).toHaveValue('claude-code')
+  next()
+  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  await waitFor(() => expect(createAgent).toHaveBeenCalledWith(expect.objectContaining({ machine_id: 'm2', engine: 'claude-code' })))
+})
+
+it('hides the machine picker when only one machine is offered', () => {
+  setup({ machineOptions: [{ id: 'chosen-machine', name: 'Studio' }] })
+  expect(screen.queryByLabelText('Machine')).toBeNull()
 })

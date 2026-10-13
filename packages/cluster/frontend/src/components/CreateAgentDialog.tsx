@@ -21,6 +21,10 @@ interface Props {
   onOpenChange: (open: boolean) => void
   machineId: string
   machineName: string
+  /** Online machines to choose from; omitted when the caller fixes the machine. */
+  machineOptions?: Array<{ id: string; name: string }>
+  onMachineChange?: (machineId: string) => void
+  enginesLoading?: boolean
   engines: Array<{ engine: string; version?: string | null }>
   availableEngines: AvailableEngine[]
   projects: Array<{ id: string; name: string }>
@@ -45,7 +49,7 @@ type Step = 1 | 2 | 3
  * The draft is split into three steps (#715): basics, engine and model, then
  * access and rooms. Every step stays mounted so going back keeps its input.
  */
-export default function CreateAgentDialog({ open, onOpenChange, machineId, machineName, engines, availableEngines, projects, roomsByProject, roomsStatus = 'ready', onRetryRooms, createAgent, fetchEngineCatalog, onCreated }: Props) {
+export default function CreateAgentDialog({ open, onOpenChange, machineId, machineName, machineOptions, onMachineChange, enginesLoading = false, engines, availableEngines, projects, roomsByProject, roomsStatus = 'ready', onRetryRooms, createAgent, fetchEngineCatalog, onCreated }: Props) {
   const { locale, t } = useLocale()
   const [step, setStep] = useState<Step>(1)
   const [agentName, setAgentName] = useState('')
@@ -79,9 +83,16 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
     setEndpointDraft(emptyEndpointDraft('')); setDiscoveredModels([])
     setCreateError(null); setCreatedAgent(null)
     setRequestId(uuid())
-    // Start a fresh draft for each opening; machine refreshes must not erase edits.
+    // Start a fresh draft for each opening; machine refreshes and switching
+    // machines in the picker must not erase edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, machineId])
+  }, [open])
+
+  // Engines arrive per machine; keep the selection valid when the list changes.
+  useEffect(() => {
+    if (!open) return
+    setAgentEngine(current => engines.some(e => e.engine === current) ? current : engines[0]?.engine ?? '')
+  }, [open, engines])
 
   useEffect(() => {
     setAgentProvider(''); setEndpointDraft(emptyEndpointDraft(agentEngine)); setDiscoveredModels([])
@@ -163,7 +174,7 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
     <Dialog open={open} onOpenChange={next => { if (!creating) onOpenChange(next) }}>
       <DialogContent className="flex max-h-[90dvh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-[var(--color-border)] px-4 py-4 pr-14 sm:px-6 sm:pr-14">
-          <DialogTitle>{t('admin.machines.createAgentTitle', { name: machineName })}</DialogTitle>
+          <DialogTitle>{machineOptions ? t('admin.machines.createAgent') : t('admin.machines.createAgentTitle', { name: machineName })}</DialogTitle>
           <DialogDescription>{t('agentSetup.intro')}</DialogDescription>
         </DialogHeader>
         <ol aria-label={t('agentSetup.stepsLabel')} className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-4 py-3 sm:px-6">
@@ -197,6 +208,14 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
                 <p id="create-agent-description-help">{t('admin.overview.descriptionVisibility')}</p><span className="shrink-0">{description.length}/200</span>
               </div>
             </div>
+            {machineOptions && machineOptions.length > 1 && (
+              <div className="space-y-2">
+                <Label htmlFor="create-agent-machine">{t('agentSetup.machine')}</Label>
+                <Select id="create-agent-machine" value={machineId} onChange={e => onMachineChange?.(e.target.value)} className={selectCSS}>
+                  {machineOptions.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </Select>
+              </div>
+            )}
             <div className="flex gap-3 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3">
               <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-foreground-muted)]" />
               <div className="space-y-1"><p className="text-sm font-medium">{t('agentSetup.runsOn', { machine: machineName })}</p><p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceHint')}</p></div>
@@ -218,6 +237,11 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
                   )
                 })}
               </Select>
+              {engines.length === 0 && (
+                <p role="status" className="text-xs text-[var(--color-foreground-muted)]">
+                  {enginesLoading ? t('common.loading') : t('admin.machines.noEnginesHint')}
+                </p>
+              )}
               {selectedAgentEngineMeta?.deprecated ? (
                 <p
                   className="text-xs text-[var(--color-warning)]"
