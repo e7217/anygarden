@@ -758,6 +758,10 @@
           "cost_usd": 0.0,
           "cost_per_done_task": 0.0
         }
+      },
+      "judged": {
+        "status": "invalid",
+        "reason": "runner race: judged when the task turned done, before the agent posted its full answer (all facts were present); fixed in f524b4a and re-measured 3/3"
       }
     },
     {
