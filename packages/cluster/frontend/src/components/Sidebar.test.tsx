@@ -260,6 +260,23 @@ describe('Sidebar — footer admin menu (#699)', () => {
   })
 })
 
+describe('Sidebar — add agent entry point', () => {
+  it('shows the add-agent action in the agents header for admins, even with no agents yet', () => {
+    authMockState.isAdmin = true
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }))
+    renderSidebar()
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('Create Agent')
+  })
+
+  it('hides the add-agent action from non-admins', () => {
+    roomsMockState.agentDMs = [{ id: 'dm1', name: 'DM: helper', project_id: null, is_dm: true }]
+    renderSidebar()
+    expect(screen.getByText('Agents')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add agent' })).not.toBeInTheDocument()
+  })
+})
+
 describe('Sidebar — project delete permission (#783)', () => {
   it('shows the project menu only for projects the caller may delete', () => {
     roomsMockState.projects = [

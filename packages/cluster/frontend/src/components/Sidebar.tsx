@@ -23,6 +23,7 @@ import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import SidebarAdminMenu from '@/components/SidebarAdminMenu'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
+import SidebarCreateAgentDialog from '@/components/SidebarCreateAgentDialog'
 import { useLocale } from '@/i18n/LocaleProvider'
 import SidebarPreferencesMenu from '@/components/SidebarPreferencesMenu'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
@@ -226,6 +227,7 @@ export default function Sidebar({
     } catch { /* ignore */ }
   }, [expandedProjects])
   const [agentsExpanded, setAgentsExpanded] = useState(true)
+  const [createAgentOpen, setCreateAgentOpen] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [newRoomName, setNewRoomName] = useState('')
   const [roomProjectId, setRoomProjectId] = useState('')
@@ -587,27 +589,46 @@ export default function Sidebar({
             ``useAgents()`` — an admin-gated endpoint). Non-admins
             get the same DM list without dots, to avoid a 403 on the
             agents fetch and to avoid a misleading "offline
-            everywhere" dot for guest sessions. See #71. */}
-        {agentDMs.length > 0 && (
+            everywhere" dot for guest sessions. See #71.
+            Admins always get the section so its "add agent" action is
+            reachable before the first agent exists. */}
+        {(isAdmin || agentDMs.length > 0) && (
           <div className="border-t border-[var(--color-border)] px-2 py-2">
-            <button
-              onClick={() => setAgentsExpanded(prev => !prev)}
-              aria-expanded={agentsExpanded}
-              className="flex min-h-[var(--control-sm-height)] w-full items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
-            >
-              {agentsExpanded
-                ? <ChevronDown className="h-3 w-3" />
-                : <ChevronRight className="h-3 w-3" />}
-              {t('chat.agents')}
-            </button>
-            {agentsExpanded && (
-              isAdmin ? (
-                <AgentDMListAdmin
-                  dms={agentDMs}
-                  selectedRoom={selectedRoom}
-                  onGo={go}
-                />
-              ) : (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setAgentsExpanded(prev => !prev)}
+                aria-expanded={agentsExpanded}
+                className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+              >
+                {agentsExpanded
+                  ? <ChevronDown className="h-3 w-3" />
+                  : <ChevronRight className="h-3 w-3" />}
+                {t('chat.agents')}
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setCreateAgentOpen(true)}
+                  aria-label={t('chat.addAgent')}
+                  title={t('chat.addAgent')}
+                  data-testid="sidebar-add-agent"
+                  className="inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            {isAdmin ? (
+              // Stays mounted while collapsed so the create/settings
+              // dialogs it owns survive toggling the section.
+              <AgentDMListAdmin
+                dms={agentsExpanded ? agentDMs : []}
+                selectedRoom={selectedRoom}
+                onGo={go}
+                createAgentOpen={createAgentOpen}
+                onCreateAgentOpenChange={setCreateAgentOpen}
+              />
+            ) : agentsExpanded && (
                 <div className="flex flex-col gap-0.5">
                   {agentDMs.map(dm => {
                     const label = dm.name.replace(/^DM:\s*/, '')
@@ -634,7 +655,6 @@ export default function Sidebar({
                     )
                   })}
                 </div>
-              )
             )}
           </div>
         )}
@@ -959,15 +979,20 @@ function AgentDMListAdmin({
   dms,
   selectedRoom,
   onGo,
+  createAgentOpen,
+  onCreateAgentOpenChange,
 }: {
   dms: Room[]
   selectedRoom: string | null
   onGo: (path: string) => void
+  createAgentOpen: boolean
+  onCreateAgentOpenChange: (open: boolean) => void
 }) {
   const { t } = useLocale()
   const { confirm, notify } = useFeedback()
   const {
     agents,
+    createAgent,
     deleteAgent,
     updateAgent,
     fetchAgentFiles,
@@ -1382,6 +1407,18 @@ function AgentDMListAdmin({
                 )
             : undefined
         }
+      />
+      <SidebarCreateAgentDialog
+        open={createAgentOpen}
+        onOpenChange={onCreateAgentOpenChange}
+        createAgent={createAgent}
+        fetchEngineCatalog={fetchEngineCatalog}
+        availableEngines={availableEngines}
+        onCreated={created => {
+          fetchAgentDMs()
+          setSettingsAgentId(created.id)
+          setSettingsOpen(true)
+        }}
       />
       {/* #241 — DM rename dialog. Reuses RoomEditDialog so DM
           rename flows through the same PATCH /rooms/{id} endpoint
