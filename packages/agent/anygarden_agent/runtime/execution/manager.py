@@ -349,6 +349,10 @@ class LocalExecutionManager:
         """Trusted local owner can stop an execution after its grant is revoked."""
         return await self._cancel(execution_id)
 
+    def has_session(self, scope: SessionScope) -> bool:
+        """Whether the next invocation in *scope* resumes a native session."""
+        return self._store.session(scope.key) is not None
+
     async def revoke(self, scope: SessionScope) -> None:
         """Trusted local policy owner retires a binding and cancels its executions.
 

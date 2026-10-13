@@ -267,24 +267,16 @@ class RoomExecutionAdapter(CodexCliAdapter):
                 self._delivered_turn.reset(delivery_token)
             self._turn_metadata.reset(token)
 
-    def _take_last_usage(self):
-        usage = self._usage.get()
-        self._usage.set(None)
-        return usage
-
-    async def _call_codex(self, prompt, room_id):
-        # The inherited name is the prompt adapter seam, not an engine choice.
-        msg = self._turn_metadata.get() or {}
-        workspace = self._workspace()
-        self._report_workspace(workspace)
-        authority = hashlib.sha256(self._client._server_url.encode()).hexdigest()
-        tier = self._permission_level or "standard"
+    def _session_scope(self, msg, room_id, workspace):
+        """The engine session lane a turn for *msg* runs in (before binding)."""
         from anygarden_agent.memory.scope import memory_session_scope
 
+        authority = hashlib.sha256(self._client._server_url.encode()).hexdigest()
+        tier = self._permission_level or "standard"
         policy_scope = f"{tier}:{memory_session_scope(self._client, room_id)}:{self._project_session_scope(msg)}"
         policy_epoch = int.from_bytes(hashlib.sha256(policy_scope.encode()).digest()[:4], "big")
         retry_request_id, retry_attempt = self._retry_session_scope(msg) or (None, None)
-        scope = SessionScope(
+        return SessionScope(
             execution_node_id=authority,
             agent_id=self._identity(),
             authority_node_id=authority,
@@ -304,6 +296,28 @@ class RoomExecutionAdapter(CodexCliAdapter):
             retry_request_id=retry_request_id,
             retry_attempt=retry_attempt,
         )
+
+    def _has_resumable_session(self, msg) -> bool:
+        # #805 — ask the execution store, which records a native handle
+        # only for a turn that succeeded, not the injector's own memory.
+        room_id = msg.get("room_id", "_default")
+        scope = self._session_scope(msg, room_id, self._workspace())
+        return self._manager.has_session(self._launch.bind_scope(scope))
+
+    def _take_last_usage(self):
+        usage = self._usage.get()
+        self._usage.set(None)
+        return usage
+
+    async def _call_codex(self, prompt, room_id):
+        # The inherited name is the prompt adapter seam, not an engine choice.
+        msg = self._turn_metadata.get() or {}
+        workspace = self._workspace()
+        self._report_workspace(workspace)
+        tier = self._permission_level or "standard"
+        from anygarden_agent.memory.scope import memory_session_scope
+
+        scope = self._session_scope(msg, room_id, workspace)
         runtime_home = self._root
         # Authenticate execution tools with this delivered lease, rather than
         # asking the model to copy secrets or infer a latest open turn.
