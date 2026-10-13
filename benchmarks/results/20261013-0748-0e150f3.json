@@ -1,0 +1,742 @@
+{
+  "schema": 1,
+  "suite": "core",
+  "suite_version": 4,
+  "commit": "0e150f3afe4e1055ed7b4d850053787ae17a5993",
+  "started_at": "2026-10-13T07:50:38.633411+00:00",
+  "engine": {
+    "engine": "codex-cli",
+    "model": "gpt-6.1-sol",
+    "permission_level": "standard"
+  },
+  "k": 3,
+  "runs": [
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 300,
+      "gates": []
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "team",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "team",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "team",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "solo",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 300,
+      "gates": []
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "solo",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "solo",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "team",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "team",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "team",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "solo",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "solo",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "solo",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 300,
+      "gates": []
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "team",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "team",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "team",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 300,
+      "gates": []
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "GT-01",
+      "mode": "solo",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 300,
+      "gates": []
+    },
+    {
+      "scenario": "GT-01",
+      "mode": "solo",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "GT-01",
+      "mode": "solo",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "GT-02",
+      "mode": "solo",
+      "n": 1,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "GT-02",
+      "mode": "solo",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "GT-02",
+      "mode": "solo",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "QA-03",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 51,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 delegated sub-room task",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G3 delegated spec carries the request",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 assignee woken on the task",
+          "ok": true,
+          "seconds": 0
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T07:50:38.633559+00:00",
+        "until": "2026-10-13T07:52:14.816360+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 1,
+            "leased": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "in_progress": 2
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 121678,
+          "completion_tokens": 723,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-03",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 51,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 delegated sub-room task",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G3 delegated spec carries the request",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 assignee woken on the task",
+          "ok": true,
+          "seconds": 0
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T07:50:38.633987+00:00",
+        "until": "2026-10-13T07:52:15.175042+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "blocked": 1,
+            "in_progress": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 271377,
+          "completion_tokens": 1401,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-03",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 51,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 25
+        },
+        {
+          "gate": "G2 delegated sub-room task",
+          "ok": true,
+          "seconds": 10
+        },
+        {
+          "gate": "G3 delegated spec carries the request",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 assignee woken on the task",
+          "ok": true,
+          "seconds": 0
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T07:50:38.634279+00:00",
+        "until": "2026-10-13T07:52:15.077045+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 1,
+            "leased": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 1,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "in_progress": 2
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 121581,
+          "completion_tokens": 713,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-06",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 131,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 25
+        },
+        {
+          "gate": "G2 pending question",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "G2b question asks for the date",
+          "ok": true,
+          "value": "bench-admin님, v2.4 릴리스 노트에 포함할 확정 릴리스 날짜를 알려주세요. YYYY-MM-DD 형식으로 답변해 주세요. 날짜를 확인한 뒤 제공된 두 변경 사항만 포함해 문서를 완성하겠습니다."
+        },
+        {
+          "gate": "G3 inbox lists the question",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 answered and carried into the spec",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G5 assignee resumed on the task",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G6 task done",
+          "ok": true,
+          "seconds": 55
+        },
+        {
+          "gate": "G6b result carries the answered date",
+          "ok": true,
+          "value": null
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T07:50:38.634512+00:00",
+        "until": "2026-10-13T07:53:35.177429+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 4,
+          "by_state": {
+            "completed": 3,
+            "leased": 1
+          },
+          "replied": 3,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "done": 1,
+            "in_progress": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 3,
+          "requests_without_cost": 3,
+          "prompt_tokens": 335957,
+          "completion_tokens": 2042,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "QA-06",
+      "mode": "team",
+      "n": 2,
+      "status": "fail",
+      "claimed_done": null,
+      "wall_seconds": 959,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 pending question",
+          "ok": false,
+          "seconds": 902
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T07:52:14.873991+00:00",
+        "until": "2026-10-13T08:08:58.475230+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 3,
+          "by_state": {
+            "completed": 2,
+            "failed": 1
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.3333,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "blocked": 1,
+            "in_progress": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 210954,
+          "completion_tokens": 1133,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-06",
+      "mode": "team",
+      "n": 3,
+      "status": "fail",
+      "claimed_done": null,
+      "wall_seconds": 968,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 30
+        },
+        {
+          "gate": "G2 pending question",
+          "ok": false,
+          "seconds": 902
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T07:52:15.229019+00:00",
+        "until": "2026-10-13T08:09:08.498413+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "failed": 2
+          },
+          "replied": 0,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 1.0,
+          "silent_loss_rate": null
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "blocked": 2
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 0,
+          "requests_without_cost": 0,
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-08",
+      "mode": "team",
+      "n": 1,
+      "status": "fail",
+      "claimed_done": null,
+      "wall_seconds": 1540,
+      "gates": [
+        {
+          "gate": "decision",
+          "info": true,
+          "value": "approve"
+        },
+        {
+          "gate": "G1 pending approval for mock-portal",
+          "ok": false,
+          "seconds": 1504
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T07:52:16.289304+00:00",
+        "until": "2026-10-13T08:18:40.887423+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "failed": 2
+          },
+          "replied": 0,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 1.0,
+          "silent_loss_rate": null
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "blocked": 2
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 0,
+          "requests_without_cost": 0,
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-08",
+      "mode": "team",
+      "n": 2,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    },
+    {
+      "scenario": "QA-08",
+      "mode": "team",
+      "n": 3,
+      "status": "error",
+      "error": "RuntimeError(\"agents not running after 300s: ['pending', 'pending', 'pending']\")",
+      "wall_seconds": 301,
+      "gates": []
+    }
+  ],
+  "finished_at": "2026-10-13T08:49:04.770257+00:00"
+}
