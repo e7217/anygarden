@@ -18,28 +18,14 @@ import httpx
 TOKEN_ENV = "ANYGARDEN_AGENT_TOKEN"
 CONFIG_ENV = "AG_PI_SELF_TOOLS_CONFIG"
 EXTENSION_PATH = Path(__file__).with_name("pi_self_tools.mjs")
-TOOL_NAMES = frozenset(
-    {
-        "create_skill",
-        "update_skill",
-        "list_my_skills",
-        "delete_my_skill",
-        "claim_task",
-        "claim_current_request",
-        "request_task_input",
-        "mark_task_status",
-        "add_task_blocker",
-        "clear_task_blocker",
-    }
-)
 MAX_RESPONSE_BYTES = 262_144
-PROJECT_TOOL_NAMES = frozenset({
-    "begin_project_execution", "delegate_project_task", "resume_project_task",
-    "seal_project_plan",
-    "get_project_execution", "complete_project_execution",
-    "request_project_input", "publish_project_artifact", "read_project_artifact",
-    "request_project_approval", "execute_approved_project_action",
-})
+# One allowlist for both sides of the bridge (#804): the extension reads the
+# same file. Pi gets only these names so a server schema can never shadow one
+# of Pi's own tools; ``required`` fails fast against an older server.
+_ALLOWLIST = json.loads(EXTENSION_PATH.with_name("pi_self_tools.json").read_text())
+TOOL_NAMES = frozenset(_ALLOWLIST["required"])
+OPTIONAL_TOOL_NAMES = frozenset(_ALLOWLIST["optional"])
+ALLOWED_TOOL_NAMES = TOOL_NAMES | OPTIONAL_TOOL_NAMES
 
 
 class PiSelfToolsError(ValueError):
@@ -84,7 +70,7 @@ def _validate_tools(payload: object) -> list[dict]:
         if (
             not isinstance(tool, dict)
             or not isinstance(tool.get("name"), str)
-            or tool["name"] not in TOOL_NAMES | PROJECT_TOOL_NAMES
+            or tool["name"] not in ALLOWED_TOOL_NAMES
         ):
             continue
         name = tool["name"]

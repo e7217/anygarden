@@ -11,11 +11,13 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+
 from anygarden_agent.integrations.room_execution import RoomExecutionAdapter
 from anygarden_agent.runtime.execution.contracts import Invocation, SessionScope
 from anygarden_agent.runtime.execution.launch import ExecutionLaunch
 from anygarden_agent.runtime.execution.pi import PiRuntime
 from anygarden_agent.runtime.execution.pi_self_tools import (
+    ALLOWED_TOOL_NAMES,
     CONFIG_ENV,
     EXTENSION_PATH,
     TOKEN_ENV,
@@ -29,7 +31,7 @@ TOKEN = "agt_self-tools-fixture"
 HARNESS = Path(__file__).parents[1] / "fixtures" / "pi_self_tools_harness.mjs"
 
 
-def tool_list():
+def tool_list(names=TOOL_NAMES):
     return {
         "jsonrpc": "2.0",
         "id": "pi-tools",
@@ -40,7 +42,7 @@ def tool_list():
                     "description": name,
                     "inputSchema": {"type": "object", "properties": {}},
                 }
-                for name in TOOL_NAMES
+                for name in names
             ]
         },
     }
@@ -184,6 +186,52 @@ async def test_extension_registers_all_tools_and_maps_errors_and_cancellation(tm
     assert "cancelled" in output["results"][-2]["error"]
     assert "timed out" in output["results"][-1]["error"]
     assert TOKEN.encode() not in stdout + stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is required by Pi")
+async def test_both_sides_register_ask_peer_and_drop_unlisted_names(tmp_path):
+    """One allowlist feeds the config and the extension (#804).
+
+    ``ask_peer`` reaches Pi like the project tools do; a name outside the
+    allowlist (here one of Pi's own tools) never does.
+    """
+    assert "ask_peer" in ALLOWED_TOOL_NAMES
+    config = await prepared(tmp_path, tool_list(ALLOWED_TOOL_NAMES | {"bash"}))
+    assert {t["name"] for t in json.loads(config.read_text())["tools"]} == (
+        ALLOWED_TOOL_NAMES
+    )
+    child = await asyncio.create_subprocess_exec(
+        "node",
+        str(HARNESS),
+        str(EXTENSION_PATH),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, TOKEN_ENV: TOKEN, CONFIG_ENV: str(config)},
+    )
+    stdout, stderr = await asyncio.wait_for(
+        child.communicate(json.dumps({"calls": []}).encode()), 10
+    )
+    assert child.returncode == 0, stderr.decode()
+    assert set(json.loads(stdout)["names"]) == ALLOWED_TOOL_NAMES
+
+    # The extension enforces the same list on a config it did not write.
+    data = json.loads(config.read_text())
+    data["tools"].append({**data["tools"][0], "name": "bash"})
+    config.write_text(json.dumps(data))
+    child = await asyncio.create_subprocess_exec(
+        "node",
+        str(HARNESS),
+        str(EXTENSION_PATH),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, TOKEN_ENV: TOKEN, CONFIG_ENV: str(config)},
+    )
+    _, stderr = await asyncio.wait_for(child.communicate(b"{}"), 10)
+    assert child.returncode != 0
+    assert b"invalid tool" in stderr
 
 
 @pytest.mark.parametrize("tier", ["standard", "trusted", "restricted"])
