@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
-import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search, PanelRight, ListTree } from 'lucide-react'
+import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -88,8 +88,6 @@ interface RoomHeaderProps {
   /** Thread layout A/B switch. Both handler and value must be
    *  supplied for the control to render; it is temporary scaffolding
    *  while the shape is being chosen, not a settled setting. */
-  threadDisplayMode?: 'panel' | 'inline'
-  onToggleThreadDisplayMode?: () => void
   /** #329 Phase 3 — artifacts trigger. Forwarded to the overflow
    *  menu so every room member (not just admins) can browse the
    *  agent-produced artifacts without the header growing another
@@ -148,8 +146,6 @@ export default function RoomHeader({
   ephemeral,
   onToggleEphemeral,
   onSearch,
-  threadDisplayMode,
-  onToggleThreadDisplayMode,
   onShowArtifacts,
   onShowRoomActivity,
   rightRailSlot,
@@ -318,23 +314,6 @@ export default function RoomHeader({
             <Search className="h-4 w-4" />
           </button>
         )}
-        {threadDisplayMode && onToggleThreadDisplayMode && (
-          <button
-            type="button"
-            onClick={onToggleThreadDisplayMode}
-            title={t('chat.threadModeTitle', { mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline') })}
-            aria-label={t('chat.threadModeAction', { mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline'), next: t(threadDisplayMode === 'panel' ? 'chat.threadModeInline' : 'chat.threadModePanel') })}
-            data-testid="thread-mode-toggle"
-            className="hidden @[34rem]/header:inline-flex h-[var(--control-icon-size)] items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
-          >
-            {threadDisplayMode === 'panel' ? (
-              <PanelRight className="h-4 w-4" />
-            ) : (
-              <ListTree className="h-4 w-4" />
-            )}
-            {t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline')}
-          </button>
-        )}
         <RoomSettingsMenu
           onCreateSubRoom={onCreateSubRoom}
           onEditRoom={onEditRoom}
@@ -342,8 +321,6 @@ export default function RoomHeader({
           onManageAgents={onManageAgents}
           onManageWorkspaces={onManageWorkspaces}
           onSearch={onSearch}
-          threadDisplayMode={threadDisplayMode}
-          onToggleThreadDisplayMode={onToggleThreadDisplayMode}
           onShowArtifacts={onShowArtifacts}
           onShowRoomActivity={onShowRoomActivity}
           onStopAllAgents={onStopAllAgents}

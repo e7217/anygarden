@@ -124,6 +124,9 @@ async function stubApi(page: Page) {
     if (pathname === `/api/v1/rooms/${ROOM_ID}/messages`) {
       return fulfillJson(route, 200, HISTORY)
     }
+    if (pathname === `/api/v1/rooms/${ROOM_ID}/messages/msg-reply/context`) {
+      return fulfillJson(route, 200, HISTORY)
+    }
 
     // Everything else the room shell asks for is empty for this suite.
     return fulfillJson(route, 200, [])
@@ -238,22 +241,6 @@ test.describe('thread composer contract', () => {
     expect(frame.thread_root_id).toBe(ROOT_ID)
   })
 
-  test('the inline composer addresses the same root [MSG-05]', async ({ page }) => {
-    await openRoom(page)
-    await page.getByTestId('thread-mode-toggle').click()
-    await threadTrigger(page).click()
-
-    const inline = page.getByTestId('thread-inline-root')
-    await expect(inline).toBeVisible()
-    await inline.getByPlaceholder('Reply to thread…').fill('inline reply')
-    await inline.getByRole('button', { name: 'Send message' }).click()
-
-    await expect.poll(async () => (await sentSends(page)).length).toBe(1)
-    const [frame] = await sentSends(page)
-    expect(frame.content).toBe('inline reply')
-    expect(frame.thread_root_id).toBe(ROOT_ID)
-  })
-
   test('opening focuses the reply composer', async ({ page }) => {
     await openRoom(page)
     await threadTrigger(page).click()
@@ -290,23 +277,22 @@ test.describe('thread composer contract', () => {
     await expect(threadTrigger(page)).toBeFocused()
   })
 
-  test('an unsent reply survives switching layouts', async ({ page }) => {
-    // Comparing the two layouts is the toggle's whole purpose, so losing
-    // the message mid-comparison is the worst moment to drop it.
-    await openRoom(page)
-    await threadTrigger(page).click()
-    await page
-      .getByTestId('thread-panel-root')
-      .getByPlaceholder('Reply to thread…')
-      .fill('half-written reply')
-
-    await page.getByTestId('thread-mode-toggle').click()
-
-    const inline = page.getByTestId('thread-inline-root')
-    await expect(inline).toBeVisible()
-    await expect(inline.getByPlaceholder('Reply to thread…')).toHaveValue(
-      'half-written reply',
+  test('a link to a reply opens it in the panel even with a stale inline preference', async ({
+    page,
+  }) => {
+    // Inline threads were removed (#810). A browser that once picked them
+    // still carries the old preference, which must no longer matter.
+    await page.addInitScript(() =>
+      localStorage.setItem('anygarden.threadDisplayMode', 'inline'),
     )
+    await signIn(page)
+    await page.goto(`/rooms/${ROOM_ID}?message=msg-reply`)
+
+    const panel = page.getByTestId('thread-panel-root')
+    await expect(panel).toBeVisible()
+    await expect(
+      panel.locator('[data-message-id="msg-reply"]'),
+    ).toHaveAttribute('data-message-focused', 'true')
   })
 
   test('re-clicking the open trigger closes it and discards the draft', async ({
@@ -394,16 +380,6 @@ test.describe('thread composer contract', () => {
       expect(context!.width).toBe(settings!.width)
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     }
-  })
-
-  test('mobile overflow menu keeps thread layout available', async ({ page }) => {
-    await page.setViewportSize({ width: 375, height: 800 })
-    await openRoom(page)
-    await expect(page.getByTestId('thread-mode-toggle')).toBeHidden()
-    await page.getByTestId('room-header-settings-menu-trigger').click()
-    await page.getByTestId('room-menu-thread-mode').click()
-    await threadTrigger(page).click()
-    await expect(page.getByTestId('thread-inline-root')).toBeVisible()
   })
 
   test('collapsed navigation restores from the same position without covering the title', async ({ page }) => {
