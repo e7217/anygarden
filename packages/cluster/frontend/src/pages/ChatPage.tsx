@@ -16,10 +16,8 @@ import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
 import ThreadPanel from '@/components/ThreadPanel'
-import ThreadInline from '@/components/ThreadInline'
 import { indexThreads, canHostThread } from '@/lib/threads'
 import { clearDraft, threadDraftKey } from '@/lib/composerDrafts'
-import { useThreadDisplayMode } from '@/hooks/useThreadDisplayMode'
 import { useElementHeightVar } from '@/hooks/useElementHeightVar'
 import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
@@ -89,7 +87,6 @@ function LocalChatPage() {
   // panel can never disagree about which messages are replies.
   const threadIndex = useMemo(() => indexThreads(messages), [messages])
   const [threadRootId, setThreadRootId] = useState<string | null>(null)
-  const [threadMode, setThreadMode] = useThreadDisplayMode()
   // An orphaned reply is in ``roots`` so it stays visible, but it can
   // never host a thread — the server rejects a thread rooted at a reply.
   // ChatArea already hides the affordance; this second guard keeps the
@@ -171,7 +168,7 @@ function LocalChatPage() {
       element.focus({ preventScroll: true })
     })
     return () => cancelAnimationFrame(frame)
-  }, [focusMessageId, selectedRoom, messages, threadIndex, threadRootId, threadMode, location.key])
+  }, [focusMessageId, selectedRoom, messages, threadIndex, threadRootId, location.key])
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
@@ -670,10 +667,6 @@ function LocalChatPage() {
                     : undefined
                 }
                 onSearch={() => setSearchOpen(true)}
-                threadDisplayMode={threadMode}
-                onToggleThreadDisplayMode={() =>
-                  setThreadMode(threadMode === 'panel' ? 'inline' : 'panel')
-                }
                 onShowArtifacts={() => setArtifactsOpen(true)}
                 onShowRoomActivity={
                   user?.is_admin ? () => setRoomActivityOpen(true) : undefined
@@ -724,27 +717,6 @@ function LocalChatPage() {
                 if (threadRootId === id) closeThread()
                 else setThreadRootId(id)
               }}
-              renderInlineThread={
-                threadMode === 'inline' && selectedRoom
-                  ? root => (
-                      <ThreadInline
-                        root={root}
-                        replies={threadIndex.repliesByRoot.get(root.id) ?? []}
-                        participants={participants}
-                        myParticipantId={myParticipantId}
-                        roomId={selectedRoom}
-                        connected={connected}
-                        mentionUsers={mentionUsers}
-                        mentionRooms={mentionRooms}
-                        onSend={(content, metadata) =>
-                          send(content, metadata, root.id)
-                        }
-                        onTyping={sendTyping}
-                                onCollapse={closeThread}
-                      />
-                    )
-                  : undefined
-              }
             />
             <MessageInput
               onSend={send}
@@ -878,7 +850,7 @@ function LocalChatPage() {
           the slot; closing it restores the rail in whatever state the
           user had left it, since the rail's own collapse flag is never
           touched here. */}
-      {selectedRoom && threadRoot && threadMode === 'panel' ? (
+      {selectedRoom && threadRoot ? (
         <ThreadPanel
           focusedMessageId={focusMessageId}
           root={threadRoot}

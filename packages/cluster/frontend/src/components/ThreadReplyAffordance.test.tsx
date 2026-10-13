@@ -117,29 +117,6 @@ describe('ChatArea thread affordances', () => {
     expect(screen.getByText('orphan body')).toBeInTheDocument()
   })
 
-  it('does not expand an inline thread under an orphan', () => {
-    // Same guard on the inline path: even if an orphan id somehow became
-    // the active thread, no composer may open under it.
-    const messages = [
-      reply('scrolled-away', { id: 'orphan', seq: 5, content: 'orphan body' }),
-    ]
-    renderArea(messages, {
-      activeThreadRootId: 'orphan',
-      renderInlineThread: () => <div data-testid="inline-thread" />,
-    })
-
-    expect(screen.queryByTestId('inline-thread')).not.toBeInTheDocument()
-  })
-
-  it('expands an inline thread under a real root', () => {
-    renderArea([msg({ id: 'root', seq: 1, content: 'root body' })], {
-      activeThreadRootId: 'root',
-      renderInlineThread: () => <div data-testid="inline-thread" />,
-    })
-
-    expect(screen.getByTestId('inline-thread')).toBeInTheDocument()
-  })
-
   it('renders every message inline and offers no threads without an index', () => {
     // The guest room (§11.5) omits threadIndex — replies stay in the
     // timeline and no thread control appears.

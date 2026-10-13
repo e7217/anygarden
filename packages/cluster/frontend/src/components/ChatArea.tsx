@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
 import RoomQueryBanner from '@/components/RoomQueryBanner'
@@ -36,15 +36,9 @@ interface ChatAreaProps {
    *  the pre-thread behaviour of rendering every message inline.
    *  Grouping there would hide replies with no way to reach them. */
   threadIndex?: ThreadIndex
-  /** Root id of the thread currently open — in the side panel or
-   *  expanded inline, depending on the display mode. */
+  /** Root id of the thread currently open in the side panel. */
   activeThreadRootId?: string | null
   onOpenThread?: (rootMessageId: string) => void
-  /** Slot rendered under a root while its thread is the active one.
-   *  Supplied only in inline mode; panel mode leaves it undefined and
-   *  renders the thread as a sibling column instead. Kept as a render
-   *  prop so ChatArea doesn't need the composer's dependencies. */
-  renderInlineThread?: (root: ChatMessage) => ReactNode
   /** ENG-09 — show a stop control beside working agents. Off for guests,
    *  whom the cancel endpoint rejects. */
   canCancelTurns?: boolean
@@ -61,7 +55,6 @@ export default function ChatArea({
   threadIndex,
   activeThreadRootId,
   onOpenThread,
-  renderInlineThread,
   canCancelTurns = true,
 }: ChatAreaProps) {
   const { t } = useLocale()
@@ -281,10 +274,6 @@ export default function ChatArea({
                     onOpen={onOpenThread}
                   />
                 )}
-                {renderInlineThread
-                  && activeThreadRootId === msg.id
-                  && (!threadIndex || canHostThread(threadIndex, msg.id))
-                  && renderInlineThread(msg)}
               </div>
             )
           })}

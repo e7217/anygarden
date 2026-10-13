@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Activity, FolderOpen, FolderPlus, Image as ImageIcon, Link2, LogOut, MoreHorizontal, PanelRight, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
+import { Activity, FolderOpen, FolderPlus, Image as ImageIcon, Link2, LogOut, MoreHorizontal, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
@@ -33,8 +33,6 @@ export interface RoomSettingsMenuProps {
    *  (sub-sm). Mobile users can't type ⌘K, so they need a menu
    *  fallback. */
   onSearch?: () => void
-  threadDisplayMode?: 'panel' | 'inline'
-  onToggleThreadDisplayMode?: () => void
   /** #329 Phase 3 — agent-produced artifacts viewer. Available to
    *  every room member (no admin gate); kept here in the overflow
    *  menu so the header strip doesn't grow another inline icon. */
@@ -57,8 +55,6 @@ export default function RoomSettingsMenu({
   onManageAgents,
   onManageWorkspaces,
   onSearch,
-  threadDisplayMode,
-  onToggleThreadDisplayMode,
   onShowArtifacts,
   onShowRoomActivity,
   onStopAllAgents,
@@ -70,15 +66,6 @@ export default function RoomSettingsMenu({
   const rootRef = useRef<HTMLDivElement>(null)
 
   const safeActions = [
-    threadDisplayMode && onToggleThreadDisplayMode && {
-      label: t('chat.threadModeAction', {
-        mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline'),
-        next: t(threadDisplayMode === 'panel' ? 'chat.threadModeInline' : 'chat.threadModePanel'),
-      }),
-      icon: <PanelRight className="h-4 w-4" />,
-      onClick: onToggleThreadDisplayMode,
-      testId: 'room-menu-thread-mode',
-    },
     onSearch && {
       label: t('chat.searchMessages'),
       icon: <Search className="h-4 w-4" />,
