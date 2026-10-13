@@ -91,6 +91,16 @@ if pi:
     event({'type':'turn_end'})
 else:
     event({'type':'thread.started','thread_id':'native-session'})
+    fail=os.environ.get('TEST_CODEX_FAIL')
+    if fail:
+        status=500 if fail=='after-effect' else 429
+        msg=json.dumps({'type':'error','status':status,'error':{'type':'rate_limit_exceeded','message':'DO-NOT-PUBLISH'}})
+        event({'type':'turn.started'})
+        if fail=='after-effect':
+            event({'type':'item.started','item':{'type':'command_execution','command':'DO-NOT-PUBLISH'}})
+        event({'type':'error','message':msg})
+        event({'type':'turn.failed','error':{'message':msg}})
+        sys.exit(1)
     if os.environ.get('TEST_PROGRESS'):
         event({'type':'item.started','item':{'type':'command_execution','command':'DO-NOT-PUBLISH'}})
         event({'type':'item.completed','item':{'type':'command_execution','command':'DO-NOT-PUBLISH'}})
@@ -553,3 +563,42 @@ async def test_pi_explicit_executable_must_be_executable(setup_room, monkeypatch
     monkeypatch.setenv("ANYGARDEN_PI_EXECUTABLE", str(setup_room / "missing-pi"))
     with pytest.raises(ValueError, match="ANYGARDEN_PI_EXECUTABLE"):
         await client_for("pi-cli", monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("EXE-10")
+@pytest.mark.parametrize(
+    "failure,reason,transient",
+    [
+        ("before-effect", "MODEL_TRANSIENT_FAILURE", True),
+        ("after-effect", "MODEL_EXECUTION_FAILED", False),
+    ],
+)
+async def test_codex_transient_failure_reaches_frames_as_native_transient(
+    setup_room, monkeypatch, failure, reason, transient
+):
+    """A 429 before any tool item rides the terminal frames as transient so the
+    cluster's bounded auto-retry applies; a 5xx after a tool item does not."""
+    monkeypatch.setenv("TEST_CODEX_FAIL", failure)
+    client = await client_for("codex-cli", monkeypatch)
+    try:
+        await client._message_handlers[0](message())
+        frames = {
+            c.kwargs["event"]: c.kwargs
+            for c in client.sendLifecycle.call_args_list
+            if c.kwargs.get("event") in {"engine_call_finished", "handler_finished"}
+        }
+        for event in ("engine_call_finished", "handler_finished"):
+            frame = frames[event]
+            assert frame["outcome"] == "failed"
+            assert frame["native_outcome"] == "failed"
+            assert frame["native_process_state"] == "stopped"
+            assert frame["native_reason_code"] == reason
+            assert frame["native_transient"] is transient
+            assert frame["local_execution_id"]
+        assert "DO-NOT-PUBLISH" not in str(client.sendLifecycle.call_args_list)
+        assert "DO-NOT-PUBLISH" not in str(client.send.call_args_list)
+        calls = (setup_room / "workspace" / "calls.jsonl").read_text().splitlines()
+        assert len(calls) == 1  # the agent never retries in-process
+    finally:
+        await client.close()

@@ -1721,8 +1721,30 @@ async def reconcile_execution(
             "No result was accepted from this failed request.\n"
             f"Required action: {failure_details['next_action']}.\n"
         )
+        from anygarden.project_executions.recovery import engine_failure_resume_reason
+        from anygarden.project_executions.resumes import (
+            MAX_LEAD_RESUMES_PER_TASK,
+            lead_resume_count,
+        )
+
+        engine_reason = (
+            await engine_failure_resume_reason(db, task=task, execution=execution)
+            if failure_details["phase"] == "action_required" else None
+        )
+        used = await lead_resume_count(
+            db, execution_id=execution.id, task_id=task.id, input_revision=task.input_revision,
+        ) if engine_reason else 0
         if failure_details["phase"] == "exhausted":
             text += "The worker's retry limit is exhausted. Do not create a new task to retry the same work.\n"
+        elif engine_reason and used < MAX_LEAD_RESUMES_PER_TASK:
+            text += (
+                f"The worker's engine call failed ({engine_reason}) and its process is confirmed "
+                "finished, so this same task can be restarted safely. Decide once: retry it with "
+                "resume_project_task(execution_id, task_id, guidance) — at most "
+                f"{MAX_LEAD_RESUMES_PER_TASK - used} more time(s) for this task — giving guidance "
+                "such as that the previous attempt failed in the engine and what to focus on; "
+                "or ask the user; or stop. Do not create a new task or re-delegate to retry it.\n"
+            )
         else:
             text += (
                 "Do not retry this worker from the lead turn. An authorized user must resolve "

@@ -13,13 +13,19 @@ from dataclasses import replace
 from pathlib import Path
 
 import psutil
+import structlog
 
 from .contracts import Capabilities, Invocation, RuntimeResult
 from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
-from .failure_feedback import classify_failure
+from .failure_feedback import CodexFailureTracker, stderr_tail
 from .usage import SOURCE, TOKEN_KEYS, counters
 
+logger = structlog.get_logger(__name__)
+
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
+# Bounded stderr tail of the running CLI — local diagnosis only.
+_STDERR_TAIL: ContextVar[bytearray | None] = ContextVar("stderr_tail", default=None)
+_STDERR_KEEP = 2048
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
@@ -222,7 +228,7 @@ class CodexRuntime:
                     env=env,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,
                     limit=MAX_LINE,
                 )
@@ -239,6 +245,16 @@ class CodexRuntime:
             tree = ProcessTree(proc.pid)
             measured: dict = {}
             stream: asyncio.Task | None = None
+            errors = bytearray()
+
+            async def drain_stderr() -> None:
+                # Always drained (a full pipe would block the CLI); only the
+                # tail is kept for the local nonzero-exit log.
+                while chunk := await proc.stderr.read(4096):
+                    errors.extend(chunk)
+                    del errors[:-_STDERR_KEEP]
+
+            stderr_task = asyncio.create_task(drain_stderr())
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
                 launched(proc.pid)
@@ -246,11 +262,13 @@ class CodexRuntime:
                     raise asyncio.CancelledError
                 async def collect():
                     token = _MEASURED_USAGE.set(measured)
+                    tail_token = _STDERR_TAIL.set(errors)
                     try:
                         return await self._collect(
                             proc, invocation, session_handle, output, emit, authorized
                         )
                     finally:
+                        _STDERR_TAIL.reset(tail_token)
                         _MEASURED_USAGE.reset(token)
 
                 stream = asyncio.create_task(collect())
@@ -283,6 +301,8 @@ class CodexRuntime:
                         await asyncio.wait_for(proc.wait(), 2)
                     except TimeoutError:
                         confirmed = False
+                    stderr_task.cancel()
+                    await asyncio.gather(stderr_task, return_exceptions=True)
                     return confirmed
 
                 cleanup_task = asyncio.create_task(cleanup())
@@ -306,6 +326,21 @@ class CodexRuntime:
                 usage_terminal=bool(measured.get("terminal_usage")),
             )
 
+    @staticmethod
+    def _log_failure(exit_code, failures: CodexFailureTracker, code: str | None) -> None:
+        """Local agent log only: redacted reason + stderr tail for diagnosis."""
+        errors = _STDERR_TAIL.get()
+        logger.error(
+            "codex_cli.nonzero_exit" if exit_code else "codex_cli.turn_failed",
+            exit_code=exit_code,
+            status=failures.status,
+            reason=failures.reason,
+            code=code or "ENGINE_ERROR",
+            transient=code == "MODEL_TRANSIENT_FAILURE",
+            side_effect_started=failures.side_effect_started,
+            stderr_tail=stderr_tail(bytes(errors)) if errors else "",
+        )
+
     async def _collect(
         self, proc, invocation, session, output, emit, authorized
     ) -> RuntimeResult:
@@ -324,8 +359,7 @@ class CodexRuntime:
         texts: list[str] = []
         text_size = 0
         completed = failed = False
-        failure_count = 0
-        failure_code: str | None = None
+        failures = CodexFailureTracker()
         measured = _MEASURED_USAGE.get()
         usage = measured if measured is not None else {}
         while line := await proc.stdout.readline():
@@ -335,6 +369,7 @@ class CodexRuntime:
                 continue
             if not isinstance(event, dict):
                 continue
+            failures.observe(event)
             kind = event.get("type")
             if kind == "thread.started":
                 handle = event.get("thread_id")
@@ -359,14 +394,6 @@ class CodexRuntime:
             elif kind == "turn.failed":
                 failed = True
                 usage["terminal_usage"] = False
-                failure_count += 1
-                if failure_count == 1:
-                    error = event.get("error")
-                    failure_code = classify_failure(
-                        ENGINE, error.get("message") if isinstance(error, dict) else None
-                    )
-                else:
-                    failure_code = None
             elif kind in {
                 "turn.started",
                 "item.started",
@@ -397,14 +424,21 @@ class CodexRuntime:
                     payload["item_type"] = item_type
                 emit("progress", payload)
         await proc.wait()
+        # Transient (retryable) only when the provider failure looks transient
+        # AND no side-effecting item started in this turn; see
+        # CodexFailureTracker. The raw message never leaves this process.
+        failure_code = failures.code()
+        if proc.returncode != 0 or failed:
+            self._log_failure(proc.returncode, failures, failure_code)
         if proc.returncode != 0:
+            if failed:
+                return RuntimeResult("failed", "stopped", failure_code or "ENGINE_ERROR")
+            if failure_code == "MODEL_TRANSIENT_FAILURE":
+                # Exited on a transient provider error before any tool item.
+                return RuntimeResult("failed", "stopped", failure_code)
             # Even an apparently missing session might already have tool effects.
             # No automatic fresh attempt, no transient retry signal.
-            return RuntimeResult(
-                "failed" if failed else "unknown",
-                "stopped",
-                (failure_code or "ENGINE_ERROR") if failed else "nonzero_exit",
-            )
+            return RuntimeResult("unknown", "stopped", "nonzero_exit")
         if failed:
             return RuntimeResult("failed", "stopped", failure_code or "ENGINE_ERROR")
         if not completed:

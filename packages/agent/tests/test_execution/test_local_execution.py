@@ -69,7 +69,25 @@ if prompt == "hang":
     Path("child.pid").write_text(str(child.pid))
 event({"type": "thread.started", "thread_id": "native-session"})
 event({"type": "turn.started"})
+def api_error(status, etype, text):
+    return json.dumps({"type": "error", "status": status, "error": {"type": etype, "message": text}})
+if prompt.startswith("noeffect-"):
+    failures = {
+        "noeffect-429": api_error(429, "rate_limit_exceeded", "Rate limit DO-NOT-PUBLISH"),
+        "noeffect-400": api_error(400, "invalid_request_error", "bad request DO-NOT-PUBLISH"),
+        "noeffect-stream": "stream disconnected before completion: DO-NOT-PUBLISH",
+    }
+    sys.stderr.write("ERROR codex_core: DO-NOT-PUBLISH upstream\n")
+    if prompt == "noeffect-error-only":
+        event({"type": "error", "message": api_error(503, "server_error", "DO-NOT-PUBLISH")})
+        sys.exit(1)
+    event({"type": "error", "message": failures[prompt]})
+    event({"type": "turn.failed", "error": {"message": failures[prompt]}})
+    sys.exit(1)
 event({"type": "item.started", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH"}})
+if prompt == "effect-500":
+    event({"type": "turn.failed", "error": {"message": api_error(500, "server_error", "DO-NOT-PUBLISH")}})
+    sys.exit(1)
 if prompt == "hang":
     time.sleep(60)
 if prompt == "delay":
@@ -180,6 +198,13 @@ async def test_partial_resume_failure_never_reexecutes(
         ("auth-failed", "failed", "ENGINE_AUTH_ERROR"),
         ("mixed-failure", "failed", "ENGINE_ERROR"),
         ("malformed", "unknown", "missing_terminal_event"),
+        # Live benchmark 2026-10-12: a transient provider failure before any
+        # side-effecting item is retryable; after a tool item it is not.
+        pytest.param("noeffect-429", "failed", "MODEL_TRANSIENT_FAILURE", marks=pytest.mark.req("EXE-10")),
+        pytest.param("noeffect-stream", "failed", "MODEL_TRANSIENT_FAILURE", marks=pytest.mark.req("EXE-10")),
+        pytest.param("noeffect-error-only", "failed", "MODEL_TRANSIENT_FAILURE", marks=pytest.mark.req("EXE-10")),
+        pytest.param("noeffect-400", "failed", "ENGINE_ERROR", marks=pytest.mark.req("EXE-10")),
+        pytest.param("effect-500", "failed", "ENGINE_ERROR", marks=pytest.mark.req("EXE-10")),
         ("huge", "unknown", "invalid_runtime_output"),
     ],
 )
@@ -193,6 +218,29 @@ async def test_terminal_failure_categories(
         assert receipt.outcome == outcome and receipt.reason == reason
         assert receipt.text is None
         assert "DO-NOT-PUBLISH" not in str((receipt, events))
+    finally:
+        await m.close()
+
+
+@pytest.mark.req("EXE-10")
+async def test_failed_turn_reason_and_stderr_are_logged_locally(
+    tmp_path, executable, invocation
+):
+    """The diagnosis stays in the local log; the receipt keeps a closed code."""
+    from structlog.testing import capture_logs
+
+    m = manager(tmp_path, executable)
+    try:
+        with capture_logs() as logs:
+            await m.start(replace(invocation, prompt="noeffect-429"))
+            receipt, _ = await done(m)
+        assert receipt.reason == "MODEL_TRANSIENT_FAILURE"
+        entry = next(e for e in logs if e["event"] == "codex_cli.nonzero_exit")
+        assert entry["exit_code"] == 1
+        assert entry["status"] == 429
+        assert entry["transient"] is True and entry["side_effect_started"] is False
+        assert "Rate limit" in entry["reason"]
+        assert "codex_core" in entry["stderr_tail"]
     finally:
         await m.close()
 

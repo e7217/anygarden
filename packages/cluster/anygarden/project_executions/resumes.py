@@ -1,10 +1,19 @@
-"""Lead-driven resume of a worker-blocked execution task (EXE-21).
+"""Lead-driven resume of a stopped execution task (EXE-21).
 
 When a worker blocks its task, the lead is woken once with ``TASK_BLOCKED``.
 Re-delegating cannot move that task: the same ``delegation_key`` replays the
 blocked task and a changed spec is a key conflict, while the sealed plan still
 requires it. ``resume_blocked_task`` lets the lead put the *same* task back in
 progress with an appended guidance addendum and one new bound assignee turn.
+
+The same applies when the worker's engine call failed with a terminal receipt
+proving the native process finished (``MODEL_EXECUTION_FAILED``, or a
+non-automatic ``MODEL_TRANSIENT_FAILURE``) and the same-task retry gate is
+open. The failed request and its attempts stay recorded; the new assignment
+message moves ``Task.source_message_id``, so the old turn is superseded and can
+no longer change the task. A new turn (rather than another attempt of the old
+request, as the user's ``retry_task`` does) carries the guidance and does not
+spend the old request's retry budget. Unknown native outcomes stay user-only.
 """
 
 from __future__ import annotations
@@ -16,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import (
     Agent,
+    AgentTurn,
+    AgentTurnOutbox,
     Participant,
     ProjectExecution,
     ProjectExecutionEvent,
@@ -62,7 +73,10 @@ async def resume_blocked_task(
     from anygarden.messages.service import inject_task_assignment_message
     from anygarden.project_executions import service
     from anygarden.project_executions.approvals import blocking_for_task
-    from anygarden.project_executions.recovery import public_task_error
+    from anygarden.project_executions.recovery import (
+        engine_failure_resume_reason,
+        public_task_error,
+    )
     from anygarden.project_executions.usage import admission_disposition
     from anygarden.task_service import TaskMutationConflict, claim_task_cas
 
@@ -91,11 +105,12 @@ async def resume_blocked_task(
                                  input_revision=task.input_revision)
     count = len(resumes)
 
-    if task.status != "blocked":
+    if task.status not in {"blocked", "failed"}:
         # An identical replay of the last resume returns the resumed task.
         if resumes and resumes[-1].details.get("guidance_sha256") == guidance_sha:
             return _payload(task, count)
-        reject("TASK_NOT_BLOCKED", f"Task is {task.status}; only a task its worker blocked can be resumed")
+        reject("TASK_NOT_BLOCKED", f"Task is {task.status}; only a task its worker blocked "
+               "or whose engine call failed can be resumed")
     if await db.scalar(select(TaskBlocker.task_id).where(TaskBlocker.task_id == task.id).limit(1)):
         reject("TASK_WAITING_FOR_PREREQUISITES",
                "Task is waiting for its prerequisites and resumes automatically when they finish")
@@ -103,8 +118,18 @@ async def resume_blocked_task(
             or await blocking_for_task(db, task_id=task.id, input_revision=task.input_revision)):
         reject("TASK_WAITING_FOR_USER",
                "Task is waiting for a user answer or approval, not for the lead")
-    if public_task_error(task.status, task.error) != "TASK_BLOCKED":
-        reject("TASK_NOT_BLOCKED", "Task was not blocked by its worker")
+    public_error = public_task_error(task.status, task.error)
+    engine_reason = None
+    if not (task.status == "blocked" and public_error == "TASK_BLOCKED"):
+        engine_reason = await engine_failure_resume_reason(db, task=task, execution=execution)
+        if engine_reason is None:
+            if public_error == "PROCESS_OUTCOME_UNKNOWN":
+                reject("TASK_OUTCOME_UNKNOWN",
+                       "The worker's engine outcome is unknown (PROCESS_OUTCOME_UNKNOWN); it may "
+                       "still be running, so only a user can retry once it is safely stopped")
+            reject("TASK_NOT_BLOCKED",
+                   f"Task stopped with {public_error or 'no reason'}; only a task its worker "
+                   "blocked or whose engine call failed retryably can be resumed by the lead")
     if count >= MAX_LEAD_RESUMES_PER_TASK:
         reject("TASK_RESUME_LIMIT",
                f"This task was already resumed {count} times; ask the user or stop instead")
@@ -131,15 +156,29 @@ async def resume_blocked_task(
         reject("EXECUTION_CHANGED", "Execution changed while resuming; read it again")
 
     number = count + 1
+    why = ("Your previous attempt ended because the engine call failed "
+           f"({engine_reason}); no result was accepted from it. The lead asks you to "
+           "do this same task again" if engine_reason else
+           "The lead reviewed why you stopped and asks you to continue this same task")
     # Keep the original assignment; the worker's raw block text stays out.
     task.spec = (task.spec or "") + (
         f"\n\n**LEAD GUIDANCE · resume {number} · input revision {task.input_revision}**\n"
-        "The lead reviewed why you stopped and asks you to continue this same task "
-        f"with this guidance:\n{guidance}"
+        f"{why} with this guidance:\n{guidance}"
     )
     task.status = "todo"
     task.error = None
+    task.finished_at = None
     await db.flush()
+    # Fence delivery rows of the task's earlier requests so nothing queued for
+    # a failed request can run beside the new turn (as retry_task does).
+    old_turns = select(AgentTurn.request_id).where(
+        AgentTurn.task_id == task.id, AgentTurn.execution_id == execution.id,
+        AgentTurn.execution_input_revision == task.input_revision,
+    )
+    await db.execute(update(AgentTurnOutbox).where(
+        AgentTurnOutbox.turn_id.in_(old_turns),
+        AgentTurnOutbox.state.in_({"pending", "delivering"}),
+    ).values(state="cancelled"))
     try:
         task = await claim_task_cas(db, task_id=task.id, room_id=task.room_id,
                                     participant_id=participant.id)
@@ -154,7 +193,8 @@ async def resume_blocked_task(
         f"execution:{execution.id}:lead-resume:{task.id}:r{task.input_revision}:{number}:{guidance_sha[:16]}",
         RESUME_EVENT_TYPE, task_id=task.id,
         details={"input_revision": task.input_revision, "resume_number": number,
-                 "guidance_sha256": guidance_sha, "resume_message_id": message.id},
+                 "guidance_sha256": guidance_sha, "resume_message_id": message.id,
+                 "resumed_from": engine_reason or "TASK_BLOCKED"},
     )
     if event is None:
         reject("RESUME_CONFLICT", "A concurrent resume of this task was recorded")
