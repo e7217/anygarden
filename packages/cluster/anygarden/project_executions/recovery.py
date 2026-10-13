@@ -36,6 +36,11 @@ from anygarden.db.models import (
     TaskResult,
 )
 from anygarden.project_executions.authorization import ACTIVE_STATES, SAFE_STOP_STATES
+from anygarden.turns.service import (
+    MAX_TRANSIENT_RETRIES,
+    is_transient_retry_attempt,
+    transient_retries_used,
+)
 
 PUBLIC_REASONS = frozenset({
     "MODEL_CALL_FAILED", "MODEL_TIMEOUT", "MODEL_CONFIGURATION_INVALID", "RATE_LIMITED",
@@ -53,7 +58,7 @@ NATIVE_REASONS = frozenset({"MODEL_CONFIGURATION_INVALID", "AUTHENTICATION_FAILE
     "MODEL_TRANSIENT_FAILURE", "MODEL_EXECUTION_FAILED", "PROCESS_OUTCOME_UNKNOWN"})
 _REASON_ALIASES = {
     "ENGINE_ERROR": "MODEL_CALL_FAILED", "PI_PROVIDER_ERROR": "MODEL_CALL_FAILED",
-    "TIMEOUT_STOPPED": "MODEL_TIMEOUT", "ENGINE_AUTH_ERROR": "MODEL_CONFIGURATION_INVALID",
+    "TIMEOUT_STOPPED": "MODEL_TIMEOUT", "TIMEOUT_AFTER_SIDE_EFFECT": "MODEL_TIMEOUT", "ENGINE_AUTH_ERROR": "MODEL_CONFIGURATION_INVALID",
     "AUTH_MISSING": "MODEL_CONFIGURATION_INVALID", "AUTH_CHECK_FAILED": "MODEL_CONFIGURATION_INVALID",
     "UNKNOWN_PROVIDER": "MODEL_CONFIGURATION_INVALID", "UNSUPPORTED_RUNTIME": "MODEL_CONFIGURATION_INVALID",
     "POLICY_DENIED": "AUTHORIZATION_REVOKED", "process_lost": "PROCESS_LOST",
@@ -446,6 +451,9 @@ async def task_recovery_payload(db, task: Task, *, execution=None, access=None) 
         "request_id": turn.request_id if turn else None, "active_attempt": turn.active_attempt if turn else None,
         "attempt_count": len(attempts), "completed_attempt_count": sum(row.state in {"completed", "cancelled", "failed", "interrupted", "stale"} for row in attempts),
         "retry_count": turn.retry_count if turn else 0, "max_retries": turn.max_retries if turn else 0,
+        "transient_retry_count": sum(1 for row in attempts if turn and row.turn_id == turn.request_id
+                                     and is_transient_retry_attempt(row)),
+        "max_transient_retries": MAX_TRANSIENT_RETRIES,
         "next_retry_at": outbox.available_at.isoformat() if outbox and turn and turn.retry_count
             else phase.get("next_retry_at") if state == "retry_wait" else None,
         "attempts": [{"ordinal": ordinal, "state": row.state if row.state in _ATTEMPT_STATES else "unknown",
@@ -587,6 +595,9 @@ async def terminal_recovery_details(db, *, task, request_id: str, attempt_number
         "recovery_event_id": phase_event.id, "phase": phase["phase"],
         "reason_code": reason, "next_action": action,
         "attempt_count": count, "retry_count": turn.retry_count, "max_retries": turn.max_retries,
+        "transient_retry_count": await transient_retries_used(
+            db, turn, before=attempt_number + 1),
+        "max_transient_retries": MAX_TRANSIENT_RETRIES,
         "input_revision": task.input_revision, "source_message_id": execution.source_message_id,
         "assignment_message_id": turn.trigger_message_id,
         "accepted_result_for_request": False,

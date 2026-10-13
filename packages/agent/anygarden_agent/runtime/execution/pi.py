@@ -38,6 +38,23 @@ from .pi_auth import INPUT_KEY as PI_INPUT_KEY
 from .pi_auth import materialize_native_auth
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
+# Whether a tool started in this turn; shared with the timeout path, which
+# reports a transient TIMEOUT_STOPPED only before any tool ran.
+_SIDE_EFFECTS: ContextVar[dict | None] = ContextVar("pi_side_effects", default=None)
+_TOOL_EVENTS = frozenset({"tool_execution_start", "tool_execution_update", "tool_execution_end"})
+
+
+def _starts_tool(kind: object, event: dict) -> bool:
+    """A tool execution event, or an assistant message carrying a tool call."""
+    if kind in _TOOL_EVENTS:
+        return True
+    if kind not in {"message_start", "message_update", "message_end"}:
+        return False
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "toolCall" for block in content
+    )
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
@@ -306,6 +323,7 @@ class PiRuntime:
                 return RuntimeResult("failed", "not_started", "ENGINE_ERROR")
             tree = ProcessTree(proc.pid)
             measured: dict[str, int] = {}
+            effects = {"started": False}
             stream: asyncio.Task | None = None
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
@@ -315,11 +333,13 @@ class PiRuntime:
 
                 async def collect():
                     token = _MEASURED_USAGE.set(measured)
+                    effects_token = _SIDE_EFFECTS.set(effects)
                     try:
                         return await self._collect(
                             proc, invocation, session_handle, output, emit, authorized
                         )
                     finally:
+                        _SIDE_EFFECTS.reset(effects_token)
                         _MEASURED_USAGE.reset(token)
 
                 stream = asyncio.create_task(collect())
@@ -334,7 +354,9 @@ class PiRuntime:
                     await asyncio.wait({stream}, timeout=min(0.05, remaining))
                 result = stream.result()
             except TimeoutError:
-                result = RuntimeResult("failed", "stopped", "TIMEOUT_STOPPED")
+                result = RuntimeResult("failed", "stopped", (
+                    "TIMEOUT_AFTER_SIDE_EFFECT" if effects["started"]
+                    else "TIMEOUT_STOPPED"))
             except asyncio.CancelledError:
                 result = RuntimeResult("cancelled", "stopped", "cancelled")
             except Exception:  # noqa: BLE001 — reap child before reporting unknown
@@ -385,6 +407,9 @@ class PiRuntime:
         text_size = 0
         measured = _MEASURED_USAGE.get()
         usage = measured if measured is not None else {}
+        effects = _SIDE_EFFECTS.get()
+        if effects is None:
+            effects = {"started": False}
         session_handle = session
         failed = False
         failure_count = 0
@@ -398,6 +423,8 @@ class PiRuntime:
             if not isinstance(event, dict):
                 continue
             kind = event.get("type")
+            if _starts_tool(kind, event):
+                effects["started"] = True
             if kind == "session":
                 handle = event.get("id")
                 if isinstance(handle, str) and 0 < len(handle) <= 256:

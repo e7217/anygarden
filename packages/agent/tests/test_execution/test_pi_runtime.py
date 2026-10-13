@@ -85,6 +85,14 @@ if prompt == "hang":
     Path("child.pid").write_text(str(child.pid))
 if prompt == "delay":
     time.sleep(0.15)
+if prompt == "stall":
+    time.sleep(60)  # times out before any tool ran
+if prompt in {"tool-stall", "toolcall-stall"}:
+    if prompt == "tool-stall":
+        event({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {}})
+    else:
+        event({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "t1", "name": "bash", "arguments": {}}], "stopReason": "toolUse"}})
+    time.sleep(60)
 if prompt == "failed":
     event({"type": "message_start", "message": {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "401: DO-NOT-PUBLISH"}})
     event({"type": "message_end", "message": {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "401: DO-NOT-PUBLISH"}})
@@ -388,3 +396,29 @@ def test_unsupported_detail_without_observed_version(tmp_path):
     assert runtime.unsupported_detail() == (
         "could not read the installed pi-cli version; this build requires 0.85.1"
     )
+
+
+@pytest.mark.req("EXE-10")
+@pytest.mark.parametrize(
+    ("prompt", "reason", "transient"),
+    [
+        ("stall", "TIMEOUT_STOPPED", True),
+        ("tool-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
+        ("toolcall-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
+    ],
+)
+async def test_timeout_is_transient_only_before_any_tool(
+    tmp_path, invocation, executable, prompt, reason, transient
+):
+    from anygarden_agent.runtime.execution.failure_feedback import (
+        terminal_failure_category,
+    )
+
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt=prompt, timeout_seconds=0.3))
+        receipt, _ = await done(m)
+        assert (receipt.outcome, receipt.reason) == ("failed", reason)
+        assert terminal_failure_category(receipt.outcome, receipt.reason)[1] is transient
+    finally:
+        await m.close()

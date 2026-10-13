@@ -21,6 +21,9 @@ FAILURE_CODES = frozenset(
         "ENGINE_AUTH_ERROR",
         "PI_PROVIDER_ERROR",
         "TIMEOUT_STOPPED",
+        # A timeout after a side-effecting item/tool started in the turn:
+        # effects may be partial, so it is never a transient retry signal.
+        "TIMEOUT_AFTER_SIDE_EFFECT",
         "UNSUPPORTED_RUNTIME",
         "POLICY_DENIED",
         "AUTH_MISSING",

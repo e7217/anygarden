@@ -42,6 +42,74 @@ DEFAULT_LEASE_SEC = 1200
 OUTBOX_RECLAIM_SEC = 30
 FAILURE_NOTICE = "⚠️ 에이전트 응답을 복구하지 못해 이 요청을 종료했습니다."
 
+# A model call that failed before any side effect with a transient provider
+# error (e.g. "Selected model is at capacity") has its own bounded retry
+# budget, separate from ``AgentTurn.max_retries``: the lease/unknown-outcome
+# recovery keeps its single retry (ENG-03) and is never widened by these.
+# The budget is derived from attempt rows: every attempt fenced for a
+# transient retry keeps ``reason == TRANSIENT_FAILURE_REASON`` and state
+# ``interrupted``.
+TRANSIENT_FAILURE_REASON = "MODEL_TRANSIENT_FAILURE"
+MAX_TRANSIENT_RETRIES = 3
+TRANSIENT_RETRY_BACKOFF_SEC = (30, 60, 120)
+_SAFE_PROCESS_STATES = frozenset({"finished", "stopped", "not_started"})
+
+
+def transient_retry_delay(used: int) -> int:
+    """Seconds to wait before transient retry number ``used + 1``."""
+    return TRANSIENT_RETRY_BACKOFF_SEC[min(used, len(TRANSIENT_RETRY_BACKOFF_SEC) - 1)]
+
+
+def is_transient_retry_attempt(attempt: Any) -> bool:
+    """Whether a closed attempt was fenced for a transient retry."""
+    return attempt.state == "interrupted" and attempt.reason == TRANSIENT_FAILURE_REASON
+
+
+async def transient_retries_used(db: AsyncSession, turn: AgentTurn, *, before: int) -> int:
+    """Transient retries this turn already took before attempt ``before``."""
+    return int(await db.scalar(select(func.count()).select_from(AgentTurnAttempt).where(
+        AgentTurnAttempt.turn_id == turn.request_id,
+        AgentTurnAttempt.attempt_number < before,
+        AgentTurnAttempt.state == "interrupted",
+        AgentTurnAttempt.reason == TRANSIENT_FAILURE_REASON,
+    )) or 0)
+
+
+def _lease_retry_delay(used: int) -> int:
+    return min(30, 5 * 2 ** used)
+
+
+_NATIVE_FAILURE_CODES = frozenset({
+    "MODEL_CONFIGURATION_INVALID", "AUTHENTICATION_FAILED",
+    TRANSIENT_FAILURE_REASON, "MODEL_EXECUTION_FAILED",
+})
+
+
+def _general_failure_receipt(attempt: AgentTurnAttempt, frame: Any) -> str | None:
+    """Classify a general-room terminal frame's native failure proof.
+
+    General-room turns keep no receipt event; the same closed categories the
+    execution receipt validates are checked against the bound invocation.
+    Returns ``"transient"`` (failed before any side effect, retry safely),
+    ``"permanent"`` (the process ended with a non-transient failure, e.g. a
+    timeout after a tool call: never retried automatically) or ``None``
+    (no usable proof; the bounded lease recovery applies).
+    """
+    local_id = getattr(frame, "local_execution_id", None)
+    if not (
+        frame.event == "handler_finished"
+        and getattr(frame, "outcome", None) in {"failed", "timeout"}
+        and local_id is not None and local_id == attempt.local_execution_id
+        and getattr(frame, "native_outcome", None) == "failed"
+        and getattr(frame, "native_process_state", None) in _SAFE_PROCESS_STATES
+        and getattr(frame, "native_reason_code", None) in _NATIVE_FAILURE_CODES
+    ):
+        return None
+    if (getattr(frame, "native_reason_code", None) == TRANSIENT_FAILURE_REASON
+            and getattr(frame, "native_transient", None) is True):
+        return "transient"
+    return "permanent"
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -1330,8 +1398,12 @@ async def record_lifecycle(
             safe = bool(receipt and receipt.get("retryable"))
             attempt.outcome = frame.outcome
             attempt.reason = reason_code
-            retry_possible = bool(safe and receipt.get("transient")
-                                  and turn.retry_count < turn.max_retries)
+            transient = bool(safe and receipt.get("transient"))
+            # A transient failure before any side effect draws on its own
+            # bounded budget, never on the lease retry of ``max_retries``.
+            transient_used = (await transient_retries_used(
+                db, turn, before=attempt.attempt_number) if transient else 0)
+            retry_possible = transient and transient_used < MAX_TRANSIENT_RETRIES
             admission = await _execution_admission(db, turn) if retry_possible else None
             if retry_possible and (admission.allowed or admission.wait):
                 # Only the durable server retry owns another engine attempt.
@@ -1339,14 +1411,14 @@ async def record_lifecycle(
                 attempt.lease_expires_at = now + timedelta(seconds=5) if admission.wait else now
                 await on_turn_recovery(db, turn=turn, attempt=attempt,
                     phase="waiting_retry", reason_code=admission.reason_code if admission.wait else reason_code,
-                    next_retry_at=now + timedelta(seconds=min(30, 5 * 2 ** turn.retry_count)))
+                    next_retry_at=now + timedelta(seconds=transient_retry_delay(transient_used)))
             else:
                 recovery_reason = (admission.reason_code if admission is not None else None) or reason_code
                 await mark_turn_terminal(db, turn, state="failed", reason=recovery_reason,
                     at=now, attempt=attempt, attempt_state="failed",
                     attempt_outcome=frame.outcome, attempt_reason=reason_code)
                 await on_turn_recovery(db, turn=turn, attempt=attempt,
-                    phase="exhausted" if safe and receipt.get("transient") and not retry_possible else "action_required",
+                    phase="exhausted" if transient and not retry_possible else "action_required",
                     reason_code=recovery_reason)
         elif turn.state == "completed":
             attempt.state = "completed"
@@ -1387,9 +1459,25 @@ async def record_lifecycle(
             # original (potentially long) timeout: expire it now so the same
             # bounded recovery path fences the attempt and retries at most
             # once. Legacy attempts are still closed without redispatch.
-            attempt.outcome = frame.outcome
-            attempt.reason = f"agent_{frame.outcome}_without_completion"
-            attempt.lease_expires_at = now
+            # A general-room turn whose engine call failed transiently before
+            # any side effect is marked so recovery spends the transient
+            # budget (with backoff) instead of its single lease retry. A
+            # proven non-transient failure (e.g. a timeout after a tool call)
+            # is closed now: retrying could repeat partial side effects.
+            proof = (_general_failure_receipt(attempt, frame)
+                     if turn.execution_id is None else None)
+            if proof == "permanent":
+                code = frame.native_reason_code
+                await mark_turn_terminal(db, turn, state="failed", reason=code,
+                    at=now, attempt=attempt, attempt_state="failed",
+                    attempt_outcome=frame.outcome, attempt_reason=code)
+            else:
+                attempt.outcome = frame.outcome
+                attempt.reason = (
+                    TRANSIENT_FAILURE_REASON if proof == "transient"
+                    else f"agent_{frame.outcome}_without_completion"
+                )
+                attempt.lease_expires_at = now
         if turn.execution_id is not None and turn.task_id is not None:
             # The native call can finish successfully while its domain task
             # remains blocked. Publish the final scoped attempt projection
@@ -1487,6 +1575,10 @@ async def recover_stalled_turns(
                 and attempt.generation == int(agent.generation or 0)
             ):
                 reason = "generation_interrupted"
+            # A general-room attempt is marked transient only by a validated
+            # terminal frame; an execution attempt needs its stored receipt.
+            transient_retry = (turn.execution_id is None
+                               and attempt.reason == TRANSIENT_FAILURE_REASON)
             if turn.execution_id is not None:
                 from anygarden.project_executions.recovery import on_turn_recovery
 
@@ -1513,6 +1605,7 @@ async def recover_stalled_turns(
                     receipt = receipt_event.details if receipt_event is not None else None
                     safe = bool(receipt and receipt.get("retryable")
                                 and receipt.get("local_execution_id") == attempt.local_execution_id)
+                    transient_retry = bool(safe and receipt.get("transient"))
                     # A lost process/lease is not proof that native effects
                     # stopped. Even a known permanent error needs a user to
                     # repair its cause; only a safe transient receipt retries.
@@ -1547,6 +1640,23 @@ async def recover_stalled_turns(
 
                             await apply_queued_usage_denials(app, denials=usage_denials)
                         continue
+            if reason in {"process_lost", "generation_interrupted"}:
+                # A lost process or generation is the lease path's business.
+                transient_retry = False
+            if transient_retry:
+                reason = TRANSIENT_FAILURE_REASON
+            transient_used = await transient_retries_used(
+                db, turn, before=attempt.attempt_number)
+            if transient_retry:
+                retry_allowed = transient_used < MAX_TRANSIENT_RETRIES
+                retry_delay = transient_retry_delay(transient_used)
+            else:
+                # Transient retries also advanced ``retry_count``; only the
+                # rest consumed the lease budget of ``max_retries``.
+                lease_used = turn.retry_count - transient_used
+                retry_allowed = lease_used < turn.max_retries
+                retry_delay = (_lease_retry_delay(lease_used)
+                               if turn.execution_id is not None else 0)
             fenced = await db.execute(
                 update(AgentTurnAttempt)
                 .where(
@@ -1598,7 +1708,7 @@ async def recover_stalled_turns(
             ) is not None
             retry_admission = None
             if (gate_ok and not execution_completed and turn.protocol_version != 0
-                and turn.retry_count < turn.max_retries and turn.execution_id is not None):
+                and retry_allowed and turn.execution_id is not None):
                 retry_admission = await _execution_admission(db, turn)
                 if not retry_admission.allowed and retry_admission.wait:
                     # Undo only this proposed recovery fence. Budget waiting
@@ -1630,7 +1740,7 @@ async def recover_stalled_turns(
                 )
                 result.failed += 1
                 event = "turn_retry_exhausted"
-            elif turn.retry_count >= turn.max_retries:
+            elif not retry_allowed:
                 await mark_turn_terminal(
                     db, turn, state="failed", reason="retry_exhausted", at=current
                 )
@@ -1676,8 +1786,7 @@ async def recover_stalled_turns(
                         room_id=turn.room_id,
                         participant_id=turn.target_participant_id,
                         state="pending",
-                        available_at=(current + timedelta(seconds=min(30, 5 * 2 ** turn.retry_count))
-                                      if turn.execution_id is not None else current),
+                        available_at=current + timedelta(seconds=retry_delay),
                     )
                 )
                 turn.state = "retrying"
@@ -1691,7 +1800,7 @@ async def recover_stalled_turns(
 
                     await on_turn_recovery(db, turn=turn, attempt=next_attempt,
                         phase="retrying", reason_code=reason,
-                        next_retry_at=current + timedelta(seconds=min(30, 5 * 2 ** (turn.retry_count - 1))))
+                        next_retry_at=current + timedelta(seconds=retry_delay))
             turn.updated_at = current
             db.add(
                 ActivityLog(

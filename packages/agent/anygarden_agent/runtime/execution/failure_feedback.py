@@ -103,6 +103,8 @@ def terminal_failure_category(outcome: str | None, reason: str | None) -> tuple[
         "UNSUPPORTED_RUNTIME", "POLICY_DENIED",
     }:
         return "MODEL_CONFIGURATION_INVALID", False
+    # ``TIMEOUT_STOPPED`` is only reported when no side-effecting item or
+    # tool started in the turn; a later timeout is TIMEOUT_AFTER_SIDE_EFFECT.
     if reason in {"MODEL_TRANSIENT_FAILURE", "TIMEOUT_STOPPED"}:
         return "MODEL_TRANSIENT_FAILURE", True
     return "MODEL_EXECUTION_FAILED", False

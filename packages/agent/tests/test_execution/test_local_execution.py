@@ -84,6 +84,8 @@ if prompt.startswith("noeffect-"):
     event({"type": "error", "message": failures[prompt]})
     event({"type": "turn.failed", "error": {"message": failures[prompt]}})
     sys.exit(1)
+if prompt == "stall":
+    time.sleep(60)  # times out before any side-effecting item started
 event({"type": "item.started", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH"}})
 if prompt == "effect-500":
     event({"type": "turn.failed", "error": {"message": api_error(500, "server_error", "DO-NOT-PUBLISH")}})
@@ -263,7 +265,8 @@ async def test_cancel_and_timeout_reap_tool_tree(
             assert receipt.state == "cancel_requested"  # not proof of stop yet
         receipt, _ = await done(m)
         assert receipt.outcome == ("failed" if timeout else "cancelled")
-        assert receipt.reason == ("TIMEOUT_STOPPED" if timeout else "cancelled")
+        # "hang" started a command before stalling: never a transient timeout.
+        assert receipt.reason == ("TIMEOUT_AFTER_SIDE_EFFECT" if timeout else "cancelled")
         assert receipt.process_state == "stopped"
         assert (
             not psutil.pid_exists(pid)
@@ -687,3 +690,31 @@ def test_contracts_engine_membership_and_provider_rules(tmp_path):
     assert make("pi-cli", provider="zai").fingerprint != make(
         "pi-cli", provider="other"
     ).fingerprint
+
+
+@pytest.mark.req("EXE-10")
+@pytest.mark.parametrize(
+    ("prompt", "reason", "category"),
+    [
+        # A timeout before any side-effecting item may be retried safely ...
+        ("stall", "TIMEOUT_STOPPED", ("MODEL_TRANSIENT_FAILURE", True)),
+        # ... but one after a command_execution item started must not be.
+        ("hang", "TIMEOUT_AFTER_SIDE_EFFECT", ("MODEL_EXECUTION_FAILED", False)),
+    ],
+)
+async def test_timeout_is_transient_only_before_any_side_effect(
+    tmp_path, executable, invocation, prompt, reason, category
+):
+    from anygarden_agent.runtime.execution.failure_feedback import (
+        terminal_failure_category,
+    )
+
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt=prompt, timeout_seconds=0.3))
+        receipt, _ = await done(m)
+        assert (receipt.outcome, receipt.process_state) == ("failed", "stopped")
+        assert receipt.reason == reason
+        assert terminal_failure_category(receipt.outcome, receipt.reason) == category
+    finally:
+        await m.close()

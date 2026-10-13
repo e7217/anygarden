@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -554,6 +555,141 @@ async def test_terminal_lifecycle_without_completion_enters_bounded_recovery(
         assert first_attempt is not None
         assert first_attempt.state == "interrupted"
         assert first_attempt.reason == "agent_failed_without_completion"
+
+
+async def _fail_transiently(env, manager, request_id: str, attempt_number: int, *,
+                            outcome: str = "failed",
+                            reason_code: str = "MODEL_TRANSIENT_FAILURE",
+                            transient: bool = True) -> None:
+    """The engine call of a general-room turn failed before any side effect."""
+    metadata = manager.frames[-1].metadata
+    assert metadata["turn_attempt"] == attempt_number
+    local_execution_id = str(uuid4())
+    async with env["factory"]() as db:
+        # The native start permit binds the invocation to this attempt.
+        attempt = await db.scalar(select(AgentTurnAttempt).where(
+            AgentTurnAttempt.turn_id == request_id,
+            AgentTurnAttempt.attempt_number == attempt_number,
+        ))
+        attempt.local_execution_id = local_execution_id
+        await db.commit()
+    async with env["factory"]() as db:
+        assert await record_lifecycle(db, agent_id=env["agent"], frame=SimpleNamespace(
+            request_id=request_id, room_id=env["room"],
+            event="handler_finished", outcome=outcome,
+            turn_attempt=metadata["turn_attempt"],
+            turn_generation=metadata["turn_generation"],
+            turn_lease=metadata["turn_lease"],
+            local_execution_id=local_execution_id, native_process_state="stopped",
+            native_outcome="failed", native_reason_code=reason_code,
+            native_transient=transient,
+        ))
+        await db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("EXE-10")
+async def test_transient_failure_of_a_general_room_turn_is_retried_with_backoff(
+    turn_env,
+) -> None:
+    """A room turn outside any execution (e.g. a lead's first turn) gets the
+    same bounded transient budget: three waits of 30/60/120 s, then the turn
+    ends with the single recovery notice."""
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    for attempt_number, expected in ((1, 30), (2, 60), (3, 120)):
+        await _fail_transiently(turn_env, manager, request_id, attempt_number)
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        result = await recover_stalled_turns(turn_env["factory"], manager, now=now)
+        assert result.redispatched == 1
+        async with turn_env["factory"]() as db:
+            outbox = await db.scalar(select(AgentTurnOutbox).where(
+                AgentTurnOutbox.turn_id == request_id,
+                AgentTurnOutbox.state == "pending",
+            ))
+            assert outbox.available_at == now + timedelta(seconds=expected)
+            failed = await db.scalar(select(AgentTurnAttempt).where(
+                AgentTurnAttempt.turn_id == request_id,
+                AgentTurnAttempt.attempt_number == attempt_number,
+            ))
+            assert failed.reason == "MODEL_TRANSIENT_FAILURE"
+            # The retry is not delivered before its wait has passed.
+            assert await deliver_pending_outbox(turn_env["factory"], manager) == 0
+            outbox.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await db.commit()
+        assert await deliver_pending_outbox(turn_env["factory"], manager) == 1
+    assert manager.broadcasts == []
+
+    await _fail_transiently(turn_env, manager, request_id, 4)
+    result = await recover_stalled_turns(
+        turn_env["factory"], manager,
+        now=datetime.now(timezone.utc) + timedelta(seconds=1),
+    )
+    assert (result.redispatched, result.failed) == (0, 1)
+    assert len(manager.broadcasts) == 1
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        assert turn is not None and turn.state == "failed"
+        assert turn.terminal_reason == "retry_exhausted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("EXE-10")
+async def test_non_transient_timeout_of_a_general_room_turn_is_not_retried(
+    turn_env,
+) -> None:
+    """A timeout after a tool call carries a non-transient receipt: the turn
+    closes at once instead of being re-run with possibly partial effects."""
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    await _fail_transiently(turn_env, manager, request_id, 1, outcome="timeout",
+                            reason_code="MODEL_EXECUTION_FAILED", transient=False)
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        assert turn is not None and turn.state == "failed"
+        assert turn.terminal_reason == "MODEL_EXECUTION_FAILED"
+    result = await recover_stalled_turns(
+        turn_env["factory"], manager,
+        now=datetime.now(timezone.utc) + timedelta(seconds=1),
+    )
+    assert (result.redispatched, result.failed) == (0, 0)
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 0
+    async with turn_env["factory"]() as db:
+        attempts = await db.scalar(select(func.count()).select_from(AgentTurnAttempt)
+                                   .where(AgentTurnAttempt.turn_id == request_id))
+        assert attempts == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("ENG-03")
+async def test_lease_retry_after_a_transient_retry_still_happens_once(turn_env) -> None:
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    await _fail_transiently(turn_env, manager, request_id, 1)
+    now = datetime.now(timezone.utc) + timedelta(seconds=1)
+    assert (await recover_stalled_turns(turn_env["factory"], manager, now=now)).redispatched == 1
+    async with turn_env["factory"]() as db:
+        outbox = await db.scalar(select(AgentTurnOutbox).where(
+            AgentTurnOutbox.turn_id == request_id, AgentTurnOutbox.state == "pending",
+        ))
+        outbox.available_at = now - timedelta(seconds=2)
+        await db.commit()
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 1
+    now = datetime.now(timezone.utc)
+
+    async def expire(attempt_number: int) -> None:
+        async with turn_env["factory"]() as db:
+            attempt = await db.scalar(select(AgentTurnAttempt).where(
+                AgentTurnAttempt.turn_id == request_id,
+                AgentTurnAttempt.attempt_number == attempt_number,
+            ))
+            attempt.lease_expires_at = now - timedelta(seconds=1)
+            await db.commit()
+
+    await expire(2)
+    assert (await recover_stalled_turns(turn_env["factory"], manager, now=now)).redispatched == 1
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 1
+    await expire(3)
+    second = await recover_stalled_turns(turn_env["factory"], manager, now=now)
+    assert (second.redispatched, second.failed) == (0, 1)
+    assert len(manager.broadcasts) == 1
 
 
 @pytest.mark.asyncio
