@@ -161,6 +161,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | NODE-07 | drain된 머신에는 새 배치가 일어나지 않는다 | pytest |
 | NODE-08 | 회수된 머신 토큰으로는 연결할 수 없다 | pytest |
 | NODE-09 | 노드를 종료하면 실행 중 에이전트가 잠금 경합 없이 정리된다 | pytest |
+| NODE-10 | 로컬 실행의 일시적 I/O 오류(디스크 가득 참·DB 잠김)는 노드를 멈추지 않고, 지속되면 healthz가 비정상을 보고하며 노드 프로세스가 스스로 종료된다 | pytest |
 
 ## 페더레이션 (FED)
 
