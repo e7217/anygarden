@@ -23,6 +23,7 @@ import hashlib
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.db.execution_approval_models import ExecutionApproval
 from anygarden.db.models import (
     Agent,
     AgentTurn,
@@ -58,6 +59,21 @@ async def lead_resume_count(db: AsyncSession, *, execution_id: str, task_id: str
                                   input_revision=input_revision))
 
 
+def _approval_state_line(row: ExecutionApproval) -> str:
+    """Tell the resumed worker where its approved action stands (never ask again)."""
+    head = (f"\nApproval {row.id} for action {row.action_key} (target {row.target_alias}) "
+            "is already granted by the user; do not request approval again. ")
+    if row.status == "approved":
+        return head + ("Its action has not been executed yet: call "
+                       f"execute_approved_project_action(approval_id={row.id}) once, then "
+                       "finish the task with the recorded receipt.")
+    if row.status == "succeeded":
+        return head + ("Its action was already executed successfully and the receipt is "
+                       "recorded; do not execute it again. Finish the task with that receipt.")
+    return head + ("Its action was already executed and the receiver rejected it (outcome "
+                   "recorded); it will not be resent. Report that outcome.")
+
+
 def _payload(task: Task, resume_count: int) -> dict:
     return {
         "execution_id": task.execution_id, "task_id": task.id, "room_id": task.room_id,
@@ -72,10 +88,11 @@ async def resume_blocked_task(
 ) -> dict:
     from anygarden.messages.service import inject_task_assignment_message
     from anygarden.project_executions import service
-    from anygarden.project_executions.approvals import blocking_for_task
     from anygarden.project_executions.recovery import (
+        ACTION_OUTCOME_UNKNOWN_STATES,
         engine_failure_resume_reason,
         public_task_error,
+        task_approvals,
     )
     from anygarden.project_executions.usage import admission_disposition
     from anygarden.task_service import TaskMutationConflict, claim_task_cas
@@ -114,22 +131,35 @@ async def resume_blocked_task(
     if await db.scalar(select(TaskBlocker.task_id).where(TaskBlocker.task_id == task.id).limit(1)):
         reject("TASK_WAITING_FOR_PREREQUISITES",
                "Task is waiting for its prerequisites and resumes automatically when they finish")
+    approvals = await task_approvals(db, task=task)
     if (await service._pending_requests(db, task)
-            or await blocking_for_task(db, task_id=task.id, input_revision=task.input_revision)):
+            or any(row.status == "pending" for row in approvals)):
         reject("TASK_WAITING_FOR_USER",
                "Task is waiting for a user answer or approval, not for the lead")
+    if any(row.status in ACTION_OUTCOME_UNKNOWN_STATES for row in approvals):
+        reject("ACTION_OUTCOME_UNKNOWN",
+               "The approved managed action may have been sent and its outcome is unknown "
+               "(ACTION_OUTCOME_UNKNOWN); restarting could send it twice, so only a user can "
+               "resolve it")
     public_error = public_task_error(task.status, task.error)
     engine_reason = None
     if not (task.status == "blocked" and public_error == "TASK_BLOCKED"):
         engine_reason = await engine_failure_resume_reason(db, task=task, execution=execution)
-        if engine_reason is None:
-            if public_error == "PROCESS_OUTCOME_UNKNOWN":
-                reject("TASK_OUTCOME_UNKNOWN",
-                       "The worker's engine outcome is unknown (PROCESS_OUTCOME_UNKNOWN); it may "
-                       "still be running, so only a user can retry once it is safely stopped")
-            reject("TASK_NOT_BLOCKED",
-                   f"Task stopped with {public_error or 'no reason'}; only a task its worker "
-                   "blocked or whose engine call failed retryably can be resumed by the lead")
+    # Decided approvals that are not yet a recorded success only allow the
+    # engine-failure restart of their approval continuation, which
+    # engine_failure_resume_reason has proved safe (all decided, outcomes
+    # known). A rejection (EXE-20) or a worker block stays with the user.
+    if engine_reason is None and any(row.status != "succeeded" for row in approvals):
+        reject("TASK_WAITING_FOR_USER",
+               "Task is waiting for a user answer or approval, not for the lead")
+    if engine_reason is None and not (task.status == "blocked" and public_error == "TASK_BLOCKED"):
+        if public_error == "PROCESS_OUTCOME_UNKNOWN":
+            reject("TASK_OUTCOME_UNKNOWN",
+                   "The worker's engine outcome is unknown (PROCESS_OUTCOME_UNKNOWN); it may "
+                   "still be running, so only a user can retry once it is safely stopped")
+        reject("TASK_NOT_BLOCKED",
+               f"Task stopped with {public_error or 'no reason'}; only a task its worker "
+               "blocked or whose engine call failed retryably can be resumed by the lead")
     if count >= MAX_LEAD_RESUMES_PER_TASK:
         reject("TASK_RESUME_LIMIT",
                f"This task was already resumed {count} times; ask the user or stop instead")
@@ -164,7 +194,7 @@ async def resume_blocked_task(
     task.spec = (task.spec or "") + (
         f"\n\n**LEAD GUIDANCE · resume {number} · input revision {task.input_revision}**\n"
         f"{why} with this guidance:\n{guidance}"
-    )
+    ) + "".join(_approval_state_line(row) for row in approvals)
     task.status = "todo"
     task.error = None
     task.finished_at = None
@@ -187,6 +217,19 @@ async def resume_blocked_task(
     message = await inject_task_assignment_message(
         db, room=room, task=task, sender_participant_id=None, event="reassigned",
     )
+    # An approved, unexecuted permit moves to this fresh continuation: only
+    # the turn of the current resume message may execute it, so the
+    # superseded failed turn can no longer use it.
+    for row in approvals:
+        if row.status != "approved":
+            continue
+        moved = await db.execute(update(ExecutionApproval).where(
+            ExecutionApproval.id == row.id, ExecutionApproval.status == "approved",
+            ExecutionApproval.decision == "approve",
+            ExecutionApproval.resume_message_id == row.resume_message_id,
+        ).values(resume_message_id=message.id).returning(ExecutionApproval.id))
+        if moved.scalar_one_or_none() is None:
+            reject("RESUME_TASK_CHANGED", "The task's approval changed while resuming; read it again")
     service._queue_message(db, message)
     event = await service._event(
         db, execution,

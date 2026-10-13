@@ -161,7 +161,47 @@ def _repair_result_conditions(turn, intent):
     )
 
 
-async def _retry_denial(db, *, task, execution, turn, attempt) -> str | None:
+# A managed action whose outcome is not known: a send may be in flight
+# ("executing") or ended ambiguously ("unknown"). Restarting its worker could
+# duplicate an external side effect, so no automatic or lead restart is allowed.
+ACTION_OUTCOME_UNKNOWN_STATES = frozenset({"executing", "unknown"})
+
+
+async def task_approvals(db, *, task) -> list[ExecutionApproval]:
+    return list(await db.scalars(select(ExecutionApproval).where(
+        ExecutionApproval.task_id == task.id, ExecutionApproval.execution_id == task.execution_id,
+        ExecutionApproval.input_revision == task.input_revision,
+    ).order_by(ExecutionApproval.created_at, ExecutionApproval.id)))
+
+
+def approval_continuation_denial(approvals, *, turn) -> str | None:
+    """Why the task's approvals forbid a lead restart of *turn*, else ``None``.
+
+    A restart is safe only when every approval is decided by the user and
+    every approved action's outcome is known: not attempted yet
+    (``approved``, its permit bound to the failed continuation *turn* so the
+    restart can take it over) or finished with a recorded outcome
+    (``succeeded``/``failed``). A consumed permit never sends again: the
+    executor returns its recorded receipt to any repeated call.
+    """
+    if any(row.status == "pending" for row in approvals):
+        return "APPROVAL_PENDING"
+    if any(row.status in ACTION_OUTCOME_UNKNOWN_STATES for row in approvals):
+        return "ACTION_OUTCOME_UNKNOWN"
+    if any(row.status == "rejected" or row.decision != "approve" or row.decided_by_user_id is None
+           for row in approvals):
+        return "APPROVAL_REJECTED"
+    if any(row.status not in {"approved", "succeeded", "failed"} for row in approvals):
+        return "APPROVAL_PENDING"
+    if any(row.status == "approved" and (turn is None or row.resume_message_id is None
+                                         or row.resume_message_id != turn.trigger_message_id)
+           for row in approvals):
+        return "APPROVAL_CONTEXT_SUPERSEDED"
+    return None
+
+
+async def _retry_denial(db, *, task, execution, turn, attempt,
+                        decided_approvals_ok: bool = False) -> str | None:
     if (execution is None or task.execution_id != execution.id or execution.status not in ACTIVE_STATES
         or task.input_revision != execution.input_revision
         or turn is None or attempt is None or turn.execution_id != execution.id
@@ -204,7 +244,13 @@ async def _retry_denial(db, *, task, execution, turn, attempt) -> str | None:
         ExecutionRequest.input_revision == task.input_revision, ExecutionRequest.status == "pending",
     ).limit(1)):
         return "QUESTION_PENDING"
-    if await db.scalar(select(ExecutionApproval.id).where(
+    if decided_approvals_ok:
+        # Lead restart of an approval continuation (EXE-21): decided
+        # approvals with known action outcomes do not wait for the user.
+        denial = approval_continuation_denial(await task_approvals(db, task=task), turn=turn)
+        if denial:
+            return denial
+    elif await db.scalar(select(ExecutionApproval.id).where(
         ExecutionApproval.task_id == task.id, ExecutionApproval.execution_id == execution.id,
         ExecutionApproval.input_revision == task.input_revision,
         ExecutionApproval.status != "succeeded",
@@ -242,6 +288,12 @@ async def engine_failure_resume_reason(db, *, task: Task, execution) -> str | No
     same-task retry gate open (what a user sees as ``retry_task``) and the
     failure is a confirmed-finished engine failure. Exhausted automatic
     retries end ``failed``/``RETRY_EXHAUSTED`` and are not eligible.
+
+    An approval continuation (the worker resumed to run a user-approved
+    managed action) is also eligible once its approvals are all decided and
+    every approved action's outcome is known (``approval_continuation_denial``).
+    The user-facing gate stays ``review_approval`` for it; only the lead's
+    restart, which carries the approval state in its guidance, accepts it.
     """
     if (task.execution_id != execution.id or task.status not in {"blocked", "failed"}
             or task.input_revision != execution.input_revision):
@@ -258,7 +310,8 @@ async def engine_failure_resume_reason(db, *, task: Task, execution) -> str | No
     ))
     if task.source_message_id != turn.trigger_message_id:
         return None
-    if await _retry_denial(db, task=task, execution=execution, turn=turn, attempt=attempt):
+    if await _retry_denial(db, task=task, execution=execution, turn=turn, attempt=attempt,
+                           decided_approvals_ok=True):
         return None
     native = await _native_terminal(db, turn, attempt)
     reason = public_reason_code(native.get("reason_code")) if native else None

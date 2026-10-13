@@ -1646,3 +1646,194 @@ async def test_resume_refuses_a_task_whose_automatic_retries_are_exhausted(harne
     assert await _no_turn_delivered(harness, "worker")
     async with harness.sessions() as db:
         assert (await db.get(Task, task_id)).status == "failed"
+
+
+# -- EXE-21: the lead restarts an approval continuation that failed in the engine
+
+
+async def _approve_then_fail_continuation(harness: Harness, *, execute: bool = False,
+                                          before_failure=None) -> dict:
+    """Release worker gets approval; its approval-continuation turn fails in the engine.
+
+    With ``execute=True`` the continuation sends the approved action
+    successfully before its engine call fails. ``before_failure(approval_id,
+    continuation)`` runs just before the engine failure is recorded.
+    """
+    ready = await _ready_for_approval(harness)
+    execution_id = ready["execution"]["execution_id"]
+    await harness.tool(ready["lead_turn"], "seal_project_plan", execution_id=execution_id,
+                       required_task_ids=[ready["work_task"], ready["action_task"]])
+    approval = await _request_approval(harness, ready)
+    await harness.end_turn(ready["releaser_turn"])
+    assert (await _decide(harness, approval["id"], "approve")).status_code == 200
+    continuation = await harness.deliver("releaser")
+    if execute:
+        executed = await harness.tool(continuation, "execute_approved_project_action",
+                                      approval_id=approval["id"])
+        assert executed["status"] == "succeeded"
+    if before_failure is not None:
+        await before_failure(approval["id"], continuation)
+    await harness.end_turn(continuation, outcome="failed")
+    return {**ready, "execution_id": execution_id, "approval": approval,
+            "continuation": continuation}
+
+
+async def _lead_notice_for(harness: Harness, lead_turn: Turn, task_id: str) -> Turn:
+    """End the open lead turn and take lead turns until one is about *task_id*."""
+    await harness.end_turn(lead_turn)
+    for _ in range(3):
+        turn = await harness.deliver("lead")
+        if f"delegated task {task_id}" in json.dumps(turn.frame, ensure_ascii=False):
+            return turn
+        await harness.end_turn(turn)
+    raise AssertionError(f"lead was not woken about {task_id}")
+
+
+@pytest.mark.req("EXE-21")
+async def test_lead_resumes_failed_approval_continuation_and_action_runs_once(harness, monkeypatch):
+    portal = _Portal(monkeypatch)
+    flow = await _approve_then_fail_continuation(harness)
+    task_id, approval_id = flow["action_task"], flow["approval"]["id"]
+    async with harness.sessions() as db:
+        task = await db.get(Task, task_id)
+        assert (task.status, task.error) == ("blocked", "MODEL_EXECUTION_FAILED")
+    assert portal.requests == []
+
+    lead_turn = await _lead_notice_for(harness, flow["lead_turn"], task_id)
+    notice = json.dumps(lead_turn.frame, ensure_ascii=False)
+    assert "MODEL_EXECUTION_FAILED" in notice
+    assert "resume_project_task" in notice
+    assert "Do not retry this worker from the lead turn" not in notice
+    # The decided approval is named; nothing waits for a user review.
+    assert "Required action: review_approval" not in notice
+    assert "no user review is pending" in notice
+    assert "has not been executed yet" in notice
+
+    resumed = await harness.tool(
+        lead_turn, "resume_project_task", execution_id=flow["execution_id"],
+        task_id=task_id, guidance="The engine was at capacity; continue the approved submission.",
+    )
+    assert (resumed["status"], resumed["resume_count"]) == ("in_progress", 1)
+
+    # The resumed worker is told the approval is granted and not yet executed.
+    worker_turn = await harness.deliver("releaser")
+    assert worker_turn.frame["metadata"]["task_assignment"]["task_id"] == task_id
+    assert await _no_turn_delivered(harness, "releaser")
+    async with harness.sessions() as db:
+        spec = (await db.get(Task, task_id)).spec
+    assert approval_id in spec.split("LEAD GUIDANCE")[-1]
+    assert "already granted" in spec
+    assert "not been executed" in spec
+
+    # The superseded continuation can no longer use the permit.
+    await harness.tool_error(flow["continuation"], "execute_approved_project_action",
+                             approval_id=approval_id)
+    assert portal.requests == []
+
+    executed = await harness.tool(worker_turn, "execute_approved_project_action",
+                                  approval_id=approval_id)
+    assert executed["status"] == "succeeded"
+    again = await harness.tool(worker_turn, "execute_approved_project_action",
+                               approval_id=approval_id)
+    assert again["status"] == "succeeded"
+    assert len(portal.requests) == 1
+
+    await harness.tool(worker_turn, "mark_task_status", task_id=task_id, status="done",
+                       result_markdown="Submitted with receipt PORTAL-1.")
+    collect = await _lead_notice_for(harness, lead_turn, task_id)
+    assert "Submitted with receipt PORTAL-1." in json.dumps(collect.frame)
+    completed = await harness.tool(
+        collect, "complete_project_execution", execution_id=flow["execution_id"],
+        summary="Release notes submitted once after one engine restart.",
+    )
+    assert completed["status"] == "completed"
+    assert len(portal.requests) == 1
+
+
+@pytest.mark.req("EXE-21")
+async def test_resumed_worker_cannot_resend_an_already_executed_action(harness, monkeypatch):
+    portal = _Portal(monkeypatch)
+    flow = await _approve_then_fail_continuation(harness, execute=True)
+    task_id, approval_id = flow["action_task"], flow["approval"]["id"]
+    assert len(portal.requests) == 1
+
+    lead_turn = await _lead_notice_for(harness, flow["lead_turn"], task_id)
+    assert "resume_project_task" in json.dumps(lead_turn.frame, ensure_ascii=False)
+    await harness.tool(lead_turn, "resume_project_task", execution_id=flow["execution_id"],
+                       task_id=task_id, guidance="Finish from the recorded receipt.")
+    async with harness.sessions() as db:
+        spec = (await db.get(Task, task_id)).spec.split("LEAD GUIDANCE")[-1]
+    assert "already granted" in spec
+    assert "already executed" in spec
+
+    # A resumed worker that calls execute again reads the receipt; no resend.
+    worker_turn = await harness.deliver("releaser")
+    repeated = await harness.tool(worker_turn, "execute_approved_project_action",
+                                  approval_id=approval_id)
+    assert repeated["status"] == "succeeded"
+    assert len(portal.requests) == 1
+    await harness.tool(worker_turn, "mark_task_status", task_id=task_id, status="done",
+                       result_markdown="Submitted with receipt PORTAL-1.")
+    assert len(portal.requests) == 1
+
+
+@pytest.mark.req("EXE-21")
+async def test_resume_refuses_an_approval_continuation_with_a_pending_approval(harness, monkeypatch):
+    portal = _Portal(monkeypatch)
+    ready = await _ready_for_approval(harness)
+    execution_id = ready["execution"]["execution_id"]
+    await harness.tool(ready["lead_turn"], "seal_project_plan", execution_id=execution_id,
+                       required_task_ids=[ready["work_task"], ready["action_task"]])
+    await _request_approval(harness, ready)
+    # The requesting turn fails in the engine while the approval still waits.
+    await harness.end_turn(ready["releaser_turn"], outcome="failed")
+
+    text = await harness.tool_error(
+        ready["lead_turn"], "resume_project_task", execution_id=execution_id,
+        task_id=ready["action_task"], guidance="Try again.",
+    )
+    assert "TASK_WAITING_FOR_USER" in text
+    assert await _no_turn_delivered(harness, "releaser")
+    async with harness.sessions() as db:
+        task = await db.get(Task, ready["action_task"])
+        assert task.status == "blocked"
+        assert "Try again." not in task.spec
+    assert portal.requests == []
+
+
+@pytest.mark.req("EXE-21")
+@pytest.mark.parametrize("outcome", ["in_flight", "unknown"])
+async def test_resume_refuses_an_approval_continuation_with_unknown_action_outcome(
+    harness, monkeypatch, outcome,
+):
+    from anygarden.db.execution_approval_models import ExecutionApproval
+
+    portal = _Portal(monkeypatch)
+
+    async def consume_without_outcome(approval_id: str, continuation: Turn) -> None:
+        # The send started and its outcome was never recorded (in flight), or
+        # it was recorded as unknown: a restart could send it twice.
+        async with harness.sessions() as db:
+            row = await db.get(ExecutionApproval, approval_id)
+            row.status = "executing" if outcome == "in_flight" else "unknown"
+            row.executing_turn_id = continuation.request_id
+            if outcome == "unknown":
+                row.error = "ACTION_OUTCOME_UNKNOWN"
+            await db.commit()
+
+    flow = await _approve_then_fail_continuation(harness, before_failure=consume_without_outcome)
+    task_id = flow["action_task"]
+
+    lead_turn = await _lead_notice_for(harness, flow["lead_turn"], task_id)
+    assert "resume_project_task" not in json.dumps(lead_turn.frame, ensure_ascii=False)
+    text = await harness.tool_error(
+        lead_turn, "resume_project_task", execution_id=flow["execution_id"],
+        task_id=task_id, guidance="Try again.",
+    )
+    assert "ACTION_OUTCOME_UNKNOWN" in text
+    assert await _no_turn_delivered(harness, "releaser")
+    async with harness.sessions() as db:
+        task = await db.get(Task, task_id)
+        assert task.status == "blocked"
+        assert "Try again." not in task.spec
+    assert portal.requests == []
