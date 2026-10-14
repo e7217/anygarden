@@ -40,6 +40,38 @@ def _add_otel_context(
     return event_dict
 
 
+class BestEffortPrintLogger(structlog.PrintLogger):
+    """``PrintLogger`` whose write failures never reach the caller.
+
+    ``PrintLogger`` writes with ``print(..., flush=True)``; on a full disk
+    that raises ``OSError(ENOSPC)`` from *whatever* code logged. On the node
+    shutdown path (spawner ``drain_complete``, turn recovery, ...) such a
+    raise made a confirmed process cleanup look unconfirmed, and the node
+    then refused every restart until manual recovery (NODE-10). Losing a log
+    line is always preferable, so every structlog write is best effort.
+    Real failures (ownership/state files) still raise from their own I/O.
+    """
+
+    def msg(self, message: str) -> None:
+        try:
+            super().msg(message)
+        except (OSError, ValueError):  # ValueError: write to a closed stream
+            pass
+
+    log = debug = info = warn = warning = msg
+    fatal = failure = err = error = critical = exception = msg
+
+
+class BestEffortPrintLoggerFactory:
+    """``PrintLoggerFactory`` producing :class:`BestEffortPrintLogger`."""
+
+    def __init__(self, file: Any = None) -> None:
+        self._file = file
+
+    def __call__(self, *args: Any) -> BestEffortPrintLogger:
+        return BestEffortPrintLogger(self._file)
+
+
 def configure_logging(log_level: str = "INFO", *, dev: bool = False) -> None:
     """Set up structlog — console in dev, JSON in production."""
     renderer: Any = (
@@ -59,6 +91,6 @@ def configure_logging(log_level: str = "INFO", *, dev: bool = False) -> None:
             getattr(logging, log_level.upper(), logging.INFO)
         ),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=BestEffortPrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )

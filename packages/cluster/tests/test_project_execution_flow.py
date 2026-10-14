@@ -1939,3 +1939,70 @@ async def test_resume_refuses_an_approval_continuation_with_unknown_action_outco
         assert task.status == "blocked"
         assert "Try again." not in task.spec
     assert portal.requests == []
+
+
+@pytest.mark.req("EXE-10")
+async def test_transient_fence_closed_by_recovery_then_retried_is_not_counted(harness):
+    """A transient fence that recovery closes (no redispatch) spent no
+    transient retry. After the user retries that request, the next transient
+    failure is the *first* transient retry (30 s, count 1) and the shared
+    ``max_retries`` the user retry consumed is not handed back."""
+    from datetime import UTC, datetime, timedelta
+
+    from anygarden.turns.service import recover_stalled_turns
+
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    await harness.end_turn(flow["lead_turn"])
+    first = await harness.deliver("worker")
+    await _fail_worker(harness, first)
+
+    # The agent is stopped before recovery runs: recovery fences the
+    # transient attempt and closes the turn without a retry.
+    async def set_worker_desired(state: str) -> None:
+        async with harness.sessions() as db:
+            agent = await db.get(Agent, harness.ids["worker"])
+            agent.desired_state = state
+            await db.commit()
+
+    await set_worker_desired("stopped")
+    recovered = await recover_stalled_turns(harness.sessions, harness.manager)
+    assert recovered.redispatched == 0
+    async with harness.sessions() as db:
+        turn = await db.get(AgentTurn, first.request_id)
+        assert turn.state in {"failed", "cancelled"}
+        assert turn.retry_count == 0
+    assert (await _worker_recovery(harness, task_id))["recovery"][
+        "transient_retry_count"] == 0
+    await set_worker_desired("running")
+
+    retry = await harness.client.post(
+        f"/api/v1/execution-tasks/{task_id}/retry",
+        json={"operation_id": str(uuid4()), "expected_input_revision": 1,
+              "expected_request_id": first.request_id,
+              "expected_attempt": first.attempt},
+        headers=harness.user(),
+    )
+    assert retry.status_code == 200, retry.text
+    second = await harness.deliver("worker")
+    assert (second.request_id, second.attempt) == (first.request_id, 2)
+
+    # The next transient failure is the first transient retry.
+    await _fail_worker(harness, second)
+    delay = await _recover_and_release_retry(harness, first.request_id)
+    assert 25 <= delay <= 30
+    recovery = (await _worker_recovery(harness, task_id))["recovery"]
+    assert recovery["transient_retry_count"] == 1
+    third = await harness.deliver("worker")
+    assert third.attempt == 3
+
+    # The user retry spent the single lease retry: a lost lease now ends it.
+    async with harness.sessions() as db:
+        attempt = await db.scalar(select(AgentTurnAttempt).where(
+            AgentTurnAttempt.turn_id == third.request_id,
+            AgentTurnAttempt.attempt_number == third.attempt))
+        attempt.local_execution_id = None
+        attempt.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
+    recovered = await recover_stalled_turns(harness.sessions, harness.manager)
+    assert (recovered.redispatched, recovered.failed) == (0, 1)

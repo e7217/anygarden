@@ -128,6 +128,14 @@ REASON_MAX_CHARS = 300
 SIDE_EFFECT_FREE_ITEMS = frozenset(
     {"agent_message", "reasoning", "error", "todo_list", "plan", "web_search"}
 )
+# Top-level ``codex exec --json`` events that carry no work of their own
+# (items are judged by SIDE_EFFECT_FREE_ITEMS above). Fail closed (EXE-10):
+# an event type outside this set -- e.g. one a newer codex adds -- may stand
+# for work with effects and counts as a side effect.
+_FRAMING_EVENTS = frozenset(
+    {"thread.started", "turn.started", "turn.completed", "turn.failed", "error"}
+)
+_ITEM_EVENTS = frozenset({"item.started", "item.updated", "item.completed"})
 
 _REDACTED = "[REDACTED]"
 _SECRET_PATTERNS = (
@@ -221,11 +229,13 @@ class CodexFailureTracker:
         if not isinstance(event, dict):
             return
         kind = event.get("type")
-        if kind in {"item.started", "item.updated", "item.completed"}:
+        if kind in _ITEM_EVENTS:
             item = event.get("item")
             item_type = item.get("type") if isinstance(item, dict) else None
             if item_type not in SIDE_EFFECT_FREE_ITEMS:
                 self.side_effect_started = True
+        elif kind not in _FRAMING_EVENTS:
+            self.side_effect_started = True
         elif kind == "turn.failed":
             error = event.get("error")
             message = error.get("message") if isinstance(error, dict) else None

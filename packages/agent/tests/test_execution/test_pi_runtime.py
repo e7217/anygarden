@@ -87,6 +87,23 @@ if prompt == "delay":
     time.sleep(0.15)
 if prompt == "stall":
     time.sleep(60)  # times out before any tool ran
+if prompt == "unknown-stall":
+    # An event type this adapter does not know (e.g. a newer Pi release):
+    # it may stand for work with effects, so the timeout is not transient.
+    event({"type": "session", "id": "s1"})
+    event({"type": "agent_start"})
+    event({"type": "extension_action_start", "name": "deploy"})
+    time.sleep(60)
+if prompt == "safe-stall":
+    # Only known side-effect-free events: the model was still thinking.
+    event({"type": "session", "id": "s1"})
+    event({"type": "agent_start"})
+    event({"type": "turn_start"})
+    event({"type": "message_start", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}})
+    event({"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}})
+    event({"type": "message_start", "message": {"role": "assistant", "content": []}})
+    event({"type": "message_update", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": "Work"}]}})
+    time.sleep(60)
 if prompt in {"tool-stall", "toolcall-stall"}:
     if prompt == "tool-stall":
         event({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {}})
@@ -405,6 +422,10 @@ def test_unsupported_detail_without_observed_version(tmp_path):
         ("stall", "TIMEOUT_STOPPED", True),
         ("tool-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
         ("toolcall-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
+        # Fail closed (EXE-10): only known side-effect-free events keep a
+        # timeout transient; any unrecognised event type may be an effect.
+        ("safe-stall", "TIMEOUT_STOPPED", True),
+        ("unknown-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
     ],
 )
 async def test_timeout_is_transient_only_before_any_tool(

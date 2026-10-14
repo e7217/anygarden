@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -742,7 +742,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -923,7 +923,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -1025,7 +1025,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1065,7 +1065,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
             sync_engine.dispose()
         finally:
             try:
@@ -1099,7 +1099,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "092_task_input_requests"
+            assert head == "093_turn_attempt_transient_retry"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1201,7 +1201,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "092_task_input_requests"
+                assert version == "093_turn_attempt_transient_retry"
             sync_engine.dispose()
         finally:
             try:
@@ -1765,4 +1765,33 @@ def test_092_adds_task_input_requests_and_downgrades(tmp_path) -> None:
         assert conn.execute(text(
             "SELECT name FROM sqlite_master WHERE name='task_input_requests'"
         )).first() is None
+    engine.dispose()
+
+
+def test_093_marks_only_redispatched_transient_fences_and_downgrades(tmp_path) -> None:
+    path = str(tmp_path / "transient-retry.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "092_task_input_requests")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.begin() as conn:
+        conn.execute(text("PRAGMA foreign_keys=OFF"))
+        for number, state, reason in (
+            (1, "interrupted", "MODEL_TRANSIENT_FAILURE"),  # led to attempt 2
+            (2, "interrupted", "MODEL_TRANSIENT_FAILURE"),  # closed, no retry
+        ):
+            conn.execute(text(
+                "INSERT INTO agent_turn_attempts (id, turn_id, attempt_number, generation,"
+                " lease_token, state, reason, created_at) VALUES"
+                f" ('a{number}', 't', {number}, 1, 'l{number}', '{state}', '{reason}',"
+                " CURRENT_TIMESTAMP)"
+            ))
+    command.upgrade(cfg, "093_turn_attempt_transient_retry")
+    with engine.connect() as conn:
+        rows = dict(conn.execute(text(
+            "SELECT id, transient_retry FROM agent_turn_attempts")).all())
+        assert rows == {"a1": 1, "a2": 0}
+    command.downgrade(cfg, "092_task_input_requests")
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(agent_turn_attempts)"))}
+        assert "transient_retry" not in columns
     engine.dispose()

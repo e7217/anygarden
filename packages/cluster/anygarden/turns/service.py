@@ -46,9 +46,11 @@ FAILURE_NOTICE = "⚠️ 에이전트 응답을 복구하지 못해 이 요청�
 # error (e.g. "Selected model is at capacity") has its own bounded retry
 # budget, separate from ``AgentTurn.max_retries``: the lease/unknown-outcome
 # recovery keeps its single retry (ENG-03) and is never widened by these.
-# The budget is derived from attempt rows: every attempt fenced for a
-# transient retry keeps ``reason == TRANSIENT_FAILURE_REASON`` and state
-# ``interrupted``.
+# The budget is counted exactly from attempt rows: recovery sets
+# ``AgentTurnAttempt.transient_retry`` on the fenced attempt only when it
+# actually schedules the transient retry. A transient fence that recovery
+# closes instead (gate revoked, admission denied, budget exhausted) spent no
+# retry, and later transitions of the attempt never change the marker.
 TRANSIENT_FAILURE_REASON = "MODEL_TRANSIENT_FAILURE"
 MAX_TRANSIENT_RETRIES = 3
 TRANSIENT_RETRY_BACKOFF_SEC = (30, 60, 120)
@@ -61,8 +63,8 @@ def transient_retry_delay(used: int) -> int:
 
 
 def is_transient_retry_attempt(attempt: Any) -> bool:
-    """Whether a closed attempt was fenced for a transient retry."""
-    return attempt.state == "interrupted" and attempt.reason == TRANSIENT_FAILURE_REASON
+    """Whether this attempt's fence spent a transient retry."""
+    return bool(attempt.transient_retry)
 
 
 async def transient_retries_used(db: AsyncSession, turn: AgentTurn, *, before: int) -> int:
@@ -70,8 +72,7 @@ async def transient_retries_used(db: AsyncSession, turn: AgentTurn, *, before: i
     return int(await db.scalar(select(func.count()).select_from(AgentTurnAttempt).where(
         AgentTurnAttempt.turn_id == turn.request_id,
         AgentTurnAttempt.attempt_number < before,
-        AgentTurnAttempt.state == "interrupted",
-        AgentTurnAttempt.reason == TRANSIENT_FAILURE_REASON,
+        AgentTurnAttempt.transient_retry.is_(True),
     )) or 0)
 
 
@@ -1789,6 +1790,11 @@ async def recover_stalled_turns(
                         available_at=current + timedelta(seconds=retry_delay),
                     )
                 )
+                if transient_retry:
+                    # The only place a transient retry is spent (EXE-10).
+                    await db.execute(update(AgentTurnAttempt).where(
+                        AgentTurnAttempt.id == attempt.id,
+                    ).values(transient_retry=True))
                 turn.state = "retrying"
                 turn.active_attempt = next_number
                 turn.retry_count += 1
