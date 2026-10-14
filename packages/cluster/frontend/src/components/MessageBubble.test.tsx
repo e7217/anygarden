@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import MessageBubble from './MessageBubble'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import { LocaleProvider } from '@/i18n/LocaleProvider'
+import { AGENT_ACTION_EVENT, AgentActionsContext, type AgentActionDetail } from '@/lib/agentActions'
 
 afterEach(() => cleanup())
 
@@ -521,5 +522,42 @@ describe('MessageBubble — undelivered peer calls (#743)', () => {
       <MessageBubble message={baseMsg()} participants={participants} isMine={false} />,
     )
     expect(screen.queryByTestId('undelivered-call')).toBeNull()
+  })
+})
+
+describe('MessageBubble — agent sender menu', () => {
+  const agentParticipants: Record<string, Participant> = {
+    ...participants,
+    'agent-rep': { ...participants['agent-rep'], agent_id: 'agent-row-1' },
+  }
+
+  it('renders a plain sender without the agent-actions context', () => {
+    render(
+      <MessageBubble message={baseMsg()} participants={agentParticipants} isMine={false} />,
+    )
+    expect(screen.queryByTestId('message-sender-menu-trigger')).toBeNull()
+  })
+
+  it('opens the menu from the sender and requests agent actions', () => {
+    const seen: AgentActionDetail[] = []
+    const onAction = (e: Event) => seen.push((e as CustomEvent<AgentActionDetail>).detail)
+    window.addEventListener(AGENT_ACTION_EVENT, onAction)
+    try {
+      render(
+        <AgentActionsContext.Provider value>
+          <MessageBubble message={baseMsg()} participants={agentParticipants} isMine={false} />
+        </AgentActionsContext.Provider>,
+      )
+      fireEvent.click(screen.getByTestId('message-sender-menu-trigger'))
+      fireEvent.click(screen.getByTestId('message-sender-menu-dm'))
+      fireEvent.click(screen.getByTestId('message-sender-menu-trigger'))
+      fireEvent.click(screen.getByTestId('message-sender-menu-settings'))
+    } finally {
+      window.removeEventListener(AGENT_ACTION_EVENT, onAction)
+    }
+    expect(seen).toEqual([
+      { agentId: 'agent-row-1', action: 'direct-message' },
+      { agentId: 'agent-row-1', action: 'settings' },
+    ])
   })
 })

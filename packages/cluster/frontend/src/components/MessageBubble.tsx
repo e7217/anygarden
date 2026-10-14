@@ -16,6 +16,8 @@ import {
 } from '@/lib/room-query'
 import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
+import AgentSenderMenu from '@/components/AgentSenderMenu'
+import { useAgentActionsEnabled } from '@/lib/agentActions'
 import { formatMessageTimestamp } from '@/lib/datetime'
 import { useLocale } from '@/i18n/LocaleProvider'
 import {
@@ -123,6 +125,7 @@ export default memo(function MessageBubble({
   const [saved, setSaved] = useState(false)
   const { locale, t } = useLocale()
   const { rooms } = useRooms()
+  const agentActionsEnabled = useAgentActionsEnabled()
   const fileReferenceCandidates = useMemo(
     () => buildFileReferenceCandidates(message.metadata, roomFiles),
     [message.metadata, roomFiles],
@@ -384,6 +387,25 @@ export default memo(function MessageBubble({
     />
   )
 
+  const senderName = (
+    <span className="text-badge text-[var(--color-foreground-muted)]">
+      {displayName}
+    </span>
+  )
+  // An agent's avatar + name opens its menu (direct message, settings)
+  // for viewers allowed to act on agents.
+  const sender = isAgent && participant?.agent_id && agentActionsEnabled ? (
+    <AgentSenderMenu agentId={participant.agent_id} name={displayName}>
+      {avatar}
+      {senderName}
+    </AgentSenderMenu>
+  ) : (
+    <>
+      {avatar}
+      {senderName}
+    </>
+  )
+
   // Task-assignment variant (#266): synthetic message that announces a
   // task (re)assignment. Compact card, no avatar block — the row is
   // server-originated info, not a participant statement, so we suppress
@@ -413,10 +435,7 @@ export default memo(function MessageBubble({
     return (
       <div className="group flex flex-col items-start">
         <div className="flex items-center gap-1.5 mb-1 pl-1">
-          {avatar}
-          <span className="text-badge text-[var(--color-foreground-muted)]">
-            {displayName}
-          </span>
+          {sender}
           {bookmarkBtn}
         </div>
         <div className="w-full">
@@ -457,10 +476,7 @@ export default memo(function MessageBubble({
     return (
       <div className="group flex flex-col items-start">
         <div className="flex items-center gap-1.5 mb-1 pl-1">
-          {avatar}
-          <span className="text-badge text-[var(--color-foreground-muted)]">
-            {displayName}
-          </span>
+          {sender}
           {bookmarkBtn}
         </div>
         <div
@@ -550,10 +566,7 @@ export default memo(function MessageBubble({
   return (
     <div className="group flex flex-col items-start">
       <div className="flex items-center gap-1.5 mb-1 pl-1">
-        {avatar}
-        <span className="text-badge text-[var(--color-foreground-muted)]">
-          {displayName}
-        </span>
+        {sender}
         {bookmarkBtn}
       </div>
       {/* #329 Phase 2 — agent replies were ``w-full`` so on narrow

@@ -7,10 +7,12 @@ interface SidebarMenuPopoverProps {
   onClose: () => void
   children: ReactNode
   width?: 'normal' | 'narrow'
+  /** Which anchor edge the menu lines up with; ``start`` suits leading triggers such as avatars. */
+  align?: 'start' | 'end'
 }
 
 /** Row menus escape the navigation scroll viewport and flip above low anchors. */
-export default function SidebarMenuPopover({ anchorRef, label, onClose, children, width = 'normal' }: SidebarMenuPopoverProps) {
+export default function SidebarMenuPopover({ anchorRef, label, onClose, children, width = 'normal', align = 'end' }: SidebarMenuPopoverProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ left: 8, top: 8 })
   const closeRef = useRef(onClose)
@@ -38,7 +40,8 @@ export default function SidebarMenuPopover({ anchorRef, label, onClose, children
       const top = below + menu.height <= window.innerHeight - margin
         ? below
         : Math.max(margin, anchor.top - menu.height - 4)
-      const left = Math.max(margin, Math.min(anchor.right - menu.width, window.innerWidth - menu.width - margin))
+      const preferred = align === 'start' ? anchor.left : anchor.right - menu.width
+      const left = Math.max(margin, Math.min(preferred, window.innerWidth - menu.width - margin))
       setPosition({ left, top })
     }
     const onOutside = (event: PointerEvent) => {
@@ -66,7 +69,7 @@ export default function SidebarMenuPopover({ anchorRef, label, onClose, children
       document.removeEventListener('pointerdown', onOutside)
       document.removeEventListener('keydown', onKey)
     }
-  }, [anchorRef])
+  }, [anchorRef, align])
 
   return createPortal(
     <div

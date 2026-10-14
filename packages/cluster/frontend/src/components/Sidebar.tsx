@@ -7,6 +7,7 @@ import { useRooms, type Room } from '@/hooks/useRooms'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
 import { useModalDrawer } from '@/hooks/useModalDrawer'
 import { apiFetch } from '@/lib/api'
+import { AGENT_ACTION_EVENT, type AgentActionDetail } from '@/lib/agentActions'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -1004,7 +1005,7 @@ function AgentDMListAdmin({
     changeAgentEngine,
     availableEngines,
   } = useAgents()
-  const { fetchAgentDMs, createAgentDM } = useRooms()
+  const { agentDMs: allDMs, fetchAgentDMs, createAgentDM } = useRooms()
   const { user } = useAuth()
   const userId = user?.id
 
@@ -1115,6 +1116,26 @@ function AgentDMListAdmin({
     setSettingsAgentId(agentId)
     setSettingsOpen(true)
   }
+
+  // Agent actions requested outside the sidebar (a chat message's sender
+  // menu). Direct message reuses the agent's existing DM when there is
+  // one and creates it otherwise.
+  const agentActionRef = useRef<(detail: AgentActionDetail) => void>(() => {})
+  agentActionRef.current = ({ agentId, action }) => {
+    if (action === 'settings') {
+      handleOpenSettings(agentId)
+      return
+    }
+    // ``dms`` is empty while the agents section is collapsed; use the full list.
+    const existing = allDMs.find(dm => findAgentForDM(dm, agents)?.id === agentId)
+    if (existing) onGo(`/rooms/${existing.id}`)
+    else void handleCreateDM(agentId)
+  }
+  useEffect(() => {
+    const onAction = (e: Event) => agentActionRef.current((e as CustomEvent<AgentActionDetail>).detail)
+    window.addEventListener(AGENT_ACTION_EVENT, onAction)
+    return () => window.removeEventListener(AGENT_ACTION_EVENT, onAction)
+  }, [])
 
   const handleDeleteAgent = async (agentId: string): Promise<boolean> => {
     if (!await confirm({
@@ -1260,7 +1281,9 @@ function AgentDMListAdmin({
               <span
                 // Mouse users reveal actions over the row; names keep the full
                 // width at rest. Touch users retain visible, separate targets.
-                className="mr-1 inline-flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] opacity-100 transition-opacity md:pointer-fine:absolute md:pointer-fine:right-0 md:pointer-fine:pointer-events-none md:pointer-fine:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
+                // Background matches the row's own (hover/selected) fill so only
+                // the button under the pointer is highlighted, not the whole group.
+                className={`mr-1 inline-flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] ${soloIsSelected ? 'bg-[var(--color-surface)]' : 'bg-[var(--color-surface-hover)]'} opacity-100 transition-opacity md:pointer-fine:absolute md:pointer-fine:right-0 md:pointer-fine:pointer-events-none md:pointer-fine:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100`}
                 data-testid={`sidebar-agent-actions-${agent.id}`}
               >
                 <button
@@ -1270,7 +1293,7 @@ function AgentDMListAdmin({
                   }}
                   title={t('chat.newConversation')}
                   aria-label={t('chat.newConversation')}
-                  className="inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]"
+                  className="inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-selected)] hover:text-[var(--color-foreground)]"
                   data-testid={`sidebar-new-dm-${agent.id}`}
                 >
                   <Plus className="h-3.5 w-3.5" />

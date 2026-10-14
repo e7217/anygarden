@@ -27,6 +27,7 @@ import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRoomParticipants } from '@/hooks/useRoomParticipants'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
+import { AgentActionsContext } from '@/lib/agentActions'
 import { apiFetch } from '@/lib/api'
 import { leaveRoom } from '@/lib/roomMembership'
 import { MessageSquare, Menu, Plus } from 'lucide-react'
@@ -550,6 +551,7 @@ function LocalChatPage() {
   )
 
   return (
+    <AgentActionsContext.Provider value={!!user?.is_admin}>
     <div ref={setPageEl} className="flex h-dvh overflow-hidden">
       <SearchDialog
         open={searchOpen}
@@ -874,5 +876,6 @@ function LocalChatPage() {
         />
       )}
     </div>
+    </AgentActionsContext.Provider>
   )
 }
