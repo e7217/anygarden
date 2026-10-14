@@ -28,6 +28,7 @@ from anygarden.machine.daemon import MachineDaemon
 from anygarden.machine.detector import detect_engines
 from anygarden.machine.updater import run_update
 from anygarden.machine.workspace_registry import WorkspaceRegistry
+from anygarden.observability.logging import BestEffortPrintLoggerFactory
 
 log = structlog.get_logger()
 
@@ -114,6 +115,8 @@ def main() -> None:
             structlog.dev.ConsoleRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(20),  # INFO
+        # A full disk must not turn a log line into a failed drain/shutdown.
+        logger_factory=BestEffortPrintLoggerFactory(),
     )
 
 

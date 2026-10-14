@@ -377,7 +377,9 @@ class LocalExecutionBackend:
             now=now,
             attempt_ids=attempt_ids,
         )
-        log.info(
+        # Shutdown path: a failed log write must not undo confirmed cleanup.
+        _log_best_effort(
+            "info",
             "local_execution.turns_recovered_after_cleanup",
             attempt_count=len(attempt_ids),
             redispatched=recovered.redispatched,

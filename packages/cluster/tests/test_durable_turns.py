@@ -1057,3 +1057,33 @@ async def test_cancelled_lifecycle_closes_turn_without_redispatch(turn_env) -> N
         assert turn is not None and turn.state == "cancelled"
         assert turn.retry_count == 0
         assert [a.state for a in attempts] == ["cancelled"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("EXE-10")
+async def test_exhausting_transient_fence_spends_no_transient_retry(turn_env) -> None:
+    """Only fences whose recovery scheduled a retry are counted: after the
+    budget is exhausted the turn shows exactly MAX_TRANSIENT_RETRIES spent,
+    not one more for the final fence that closed it."""
+    from anygarden.turns.service import MAX_TRANSIENT_RETRIES, transient_retries_used
+
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    for attempt_number in range(1, MAX_TRANSIENT_RETRIES + 2):
+        await _fail_transiently(turn_env, manager, request_id, attempt_number)
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        await recover_stalled_turns(turn_env["factory"], manager, now=now)
+        async with turn_env["factory"]() as db:
+            outbox = await db.scalar(select(AgentTurnOutbox).where(
+                AgentTurnOutbox.turn_id == request_id,
+                AgentTurnOutbox.state == "pending",
+            ))
+            if outbox is not None:
+                outbox.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+                await db.commit()
+        await deliver_pending_outbox(turn_env["factory"], manager)
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        assert turn.state == "failed"
+        assert turn.retry_count == MAX_TRANSIENT_RETRIES
+        assert await transient_retries_used(
+            db, turn, before=MAX_TRANSIENT_RETRIES + 2) == MAX_TRANSIENT_RETRIES

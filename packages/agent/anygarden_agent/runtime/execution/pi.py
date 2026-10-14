@@ -38,22 +38,41 @@ from .pi_auth import INPUT_KEY as PI_INPUT_KEY
 from .pi_auth import materialize_native_auth
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
-# Whether a tool started in this turn; shared with the timeout path, which
-# reports a transient TIMEOUT_STOPPED only before any tool ran.
+# Whether this turn may have caused a side effect; shared with the timeout
+# path, which reports a transient TIMEOUT_STOPPED only when it surely did not.
 _SIDE_EFFECTS: ContextVar[dict | None] = ContextVar("pi_side_effects", default=None)
-_TOOL_EVENTS = frozenset({"tool_execution_start", "tool_execution_update", "tool_execution_end"})
+# Fail closed (EXE-10): a timeout is transient only if *every* event of the
+# turn is one of these known side-effect-free Pi 0.85.1 event types. Any other
+# type -- tool_execution_*, or one a newer Pi adds -- may stand for work with
+# effects, so it makes the timeout non-transient.
+_SAFE_EVENTS = frozenset({
+    "session", "agent_start", "agent_end", "agent_settled",
+    "turn_start", "turn_end",
+})
+_MESSAGE_EVENTS = frozenset({"message_start", "message_update", "message_end"})
+# A message is side-effect free only from these roles with these blocks;
+# a ``toolCall`` block, a ``toolResult`` message or anything unknown is not.
+_SAFE_MESSAGE_ROLES = frozenset({"user", "assistant"})
+_SAFE_CONTENT_BLOCKS = frozenset({"text", "thinking"})
 
 
-def _starts_tool(kind: object, event: dict) -> bool:
-    """A tool execution event, or an assistant message carrying a tool call."""
-    if kind in _TOOL_EVENTS:
-        return True
-    if kind not in {"message_start", "message_update", "message_end"}:
+def _may_have_side_effect(kind: object, event: dict) -> bool:
+    """Whether this event is not provably side-effect free."""
+    if kind in _SAFE_EVENTS:
         return False
+    if kind not in _MESSAGE_EVENTS:
+        return True
     message = event.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    return isinstance(content, list) and any(
-        isinstance(block, dict) and block.get("type") == "toolCall" for block in content
+    if not isinstance(message, dict) or message.get("role") not in _SAFE_MESSAGE_ROLES:
+        return True
+    content = message.get("content")
+    if content is None or isinstance(content, str):
+        return False
+    if not isinstance(content, list):
+        return True
+    return not all(
+        isinstance(block, dict) and block.get("type") in _SAFE_CONTENT_BLOCKS
+        for block in content
     )
 
 MAX_TEXT = 1_048_576
@@ -419,11 +438,14 @@ class PiRuntime:
             try:
                 event = json.loads(line)
             except (ValueError, UnicodeDecodeError):
+                # Unrecognised output: fail closed for timeout classification.
+                effects["started"] = True
                 continue
             if not isinstance(event, dict):
+                effects["started"] = True
                 continue
             kind = event.get("type")
-            if _starts_tool(kind, event):
+            if _may_have_side_effect(kind, event):
                 effects["started"] = True
             if kind == "session":
                 handle = event.get("id")

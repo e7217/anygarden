@@ -2136,6 +2136,12 @@ class AgentTurnAttempt(Base):
     reason: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True, default=None
     )
+    # EXE-10 — set once, on the fenced attempt whose recovery actually
+    # scheduled a transient retry. The transient budget counts this marker,
+    # never the attempt's later state/reason (which other paths may change).
+    transient_retry: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 

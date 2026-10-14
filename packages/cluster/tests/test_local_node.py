@@ -1444,3 +1444,147 @@ dispatch()
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=5)
+
+
+@pytest.mark.req("NODE-10")
+def test_real_cli_shuts_down_cleanly_and_restarts_while_disk_stays_full(tmp_path):
+    """A full disk that outlasts the shutdown must not make it recovery-required.
+
+    #821 made the execution backend's error-path logging best effort, but
+    log calls on the cleanup path (e.g. the spawner's ``drain_complete``)
+    still raised ``OSError(ENOSPC)``; the lifespan then saw an unconfirmed
+    cleanup and refused the next supervisor restart until manual recovery.
+    Here every structlog stdout write fails from just before ``stop`` until
+    the process exits.
+    """
+    import os
+    import socket
+    import time
+    import urllib.request
+
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    environment = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("ANYGARDEN_") and k != "WEB_CONCURRENCY"
+    }
+    for key in (
+        "SKILL_STALE_INTERVAL_HOURS",
+        "ORPHAN_SWEEPER_INTERVAL_SEC",
+        "TURN_RECOVERY_INTERVAL_SEC",
+    ):
+        environment["ANYGARDEN_" + key] = "0"
+    marker = tmp_path / "disk-full"
+    data_dir = tmp_path / "node"
+    full_disk_script = f"""
+import errno, pathlib
+import structlog
+from anygarden.cli import dispatch
+
+marker = pathlib.Path({str(marker)!r})
+original_msg = structlog.PrintLogger.msg
+writes = []
+def msg(self, message):
+    if marker.exists():
+        writes.append(message)
+        pathlib.Path({str(tmp_path / "failed-writes")!r}).write_text(str(len(writes)))
+        raise OSError(errno.ENOSPC, "No space left on device")
+    return original_msg(self, message)
+for name in ("msg", "log", "debug", "info", "warn", "warning", "error", "err",
+             "fatal", "exception", "failure", "critical"):
+    if hasattr(structlog.PrintLogger, name):
+        setattr(structlog.PrintLogger, name, msg)
+dispatch()
+"""
+    command = [sys.executable, "-c", "from anygarden.cli import dispatch; dispatch()"]
+
+    def wait_healthy(process, log_path):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            assert process.poll() is None, log_path.read_text()
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/healthz", timeout=0.2
+                ) as response:
+                    assert response.status == 200
+                    return
+            except OSError:
+                time.sleep(0.05)
+        pytest.fail("CLI startup timed out")
+
+    first_log = tmp_path / "first.log"
+    with first_log.open("w") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-c", full_disk_script, "start", "--data-dir",
+             str(data_dir), "--port", str(port)],
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            wait_healthy(process, first_log)
+            marker.touch()
+            stopped = subprocess.run(
+                command + ["stop", "--data-dir", str(data_dir)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            exited = process.wait(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    output = first_log.read_text()
+    # The disk really was full for the shutdown's log writes.
+    assert int((tmp_path / "failed-writes").read_text()) > 0
+    assert "Node shutdown failed" not in output, output
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr + output
+    assert exited == 0, output
+    assert read_object(data_dir / "node-owner.json")["state"] == "stopped"
+
+    # The next (supervisor) start on the same data dir succeeds.
+    second_log = tmp_path / "second.log"
+    with second_log.open("w") as log:
+        process = subprocess.Popen(
+            command + ["start", "--data-dir", str(data_dir), "--port", str(port)],
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            wait_healthy(process, second_log)
+            stopped = subprocess.run(
+                command + ["stop", "--data-dir", str(data_dir)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+            assert process.wait(timeout=15) == 0, second_log.read_text()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+
+
+@pytest.mark.req("NODE-10")
+def test_configured_structlog_writes_are_best_effort():
+    import errno
+
+    from anygarden.observability.logging import BestEffortPrintLoggerFactory
+
+    class FullDisk:
+        def write(self, _text):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        def flush(self):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    logger = BestEffortPrintLoggerFactory(FullDisk())()
+    for method in ("info", "warning", "error", "exception", "critical", "msg"):
+        getattr(logger, method)("drain_complete")  # must not raise
