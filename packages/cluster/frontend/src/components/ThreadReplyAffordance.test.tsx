@@ -56,6 +56,8 @@ function reply(rootId: string, overrides: Partial<ChatMessage> = {}): ChatMessag
 
 const participants: Record<string, Participant> = {
   p1: { id: 'p1', display_name: 'Alice', kind: 'user' },
+  pm: { id: 'pm', display_name: 'PM', kind: 'agent' },
+  local: { id: 'local', display_name: 'local-agent', kind: 'agent' },
 }
 
 function renderArea(
@@ -136,5 +138,40 @@ describe('ChatArea thread affordances', () => {
     expect(
       screen.queryByRole('button', { name: /thread/i }),
     ).not.toBeInTheDocument()
+  })
+
+  it('[ENG-09] shows thread work on its reply row with a single stop control', async () => {
+    const onCancelTurns = vi.fn().mockResolvedValue(true)
+    renderArea(
+      [
+        msg({ id: 'root', seq: 1, content: 'root body' }),
+        reply('root', { id: 'r1', seq: 2, participant_id: 'pm', content: 'a reply' }),
+      ],
+      {
+        typingUsers: new Set(['pm', 'local']),
+        openTurns: [
+          { request_id: 't1', participant_id: 'pm', thread_root_id: 'root', state: 'leased' },
+          { request_id: 't2', participant_id: 'local', thread_root_id: 'root', state: 'leased' },
+        ],
+        onCancelTurns,
+      },
+    )
+
+    expect(screen.getByText('PM, local-agent working')).toBeInTheDocument()
+    // One stop for the whole thread — no per-agent squares in the timeline.
+    expect(screen.queryByRole('button', { name: /^stop pm$/i })).not.toBeInTheDocument()
+    screen.getByRole('button', { name: 'Stop all work in this thread' }).click()
+    await vi.waitFor(() => expect(onCancelTurns).toHaveBeenCalledWith(['t1', 't2']))
+  })
+
+  it('[ENG-09] keeps main-timeline work at the bottom with a per-agent stop', () => {
+    renderArea([msg({ id: 'root', seq: 1, content: 'root body' })], {
+      typingUsers: new Set(['pm']),
+      openTurns: [{ request_id: 't1', participant_id: 'pm', thread_root_id: null, state: 'leased' }],
+      onCancelTurns: vi.fn(),
+    })
+
+    expect(screen.getByRole('button', { name: 'Stop PM' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop all work in this thread' })).not.toBeInTheDocument()
   })
 })

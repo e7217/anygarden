@@ -77,6 +77,7 @@ async def test_member_cancels_running_turn_and_agent_is_told_to_stop(turn_env) -
         assert listed.status_code == 200
         assert [row["request_id"] for row in listed.json()] == [request_id]
         assert listed.json()[0]["participant_id"] == turn_env["agent_participant"]
+        assert listed.json()[0]["thread_root_id"] is None
 
         res = await client.post(f"/api/v1/turns/{request_id}/cancel", headers=headers["member"])
         assert res.status_code == 200, res.text
@@ -132,6 +133,24 @@ async def test_cancel_pending_turn_cancels_outbox_without_stop_frame(turn_env) -
         assert outbox.state == "cancelled"
         assert attempt.state == "cancelled"
     assert not [f for f in manager.frames if getattr(f, "type", None) == "turn_cancel"]
+
+
+async def test_open_turns_report_the_thread_they_answer_in(turn_env) -> None:
+    async with turn_env["factory"]() as db:
+        root = await append_message(db, turn_env["room"], turn_env["user_participant"], "root")
+        turn = await create_turn(
+            db, room_id=turn_env["room"], participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"], trigger_message_id=root.id, thread_root_id=root.id,
+        )
+        request_id, root_id = turn.request_id, root.id
+        await db.commit()
+    client, headers = await _client(turn_env, None)
+    async with client:
+        listed = await client.get(
+            "/api/v1/turns/open", params={"room_id": turn_env["room"]}, headers=headers["member"],
+        )
+    assert listed.status_code == 200
+    assert [(row["request_id"], row["thread_root_id"]) for row in listed.json()] == [(request_id, root_id)]
 
 
 async def test_cancel_is_idempotent_and_terminal_turns_conflict(turn_env) -> None:

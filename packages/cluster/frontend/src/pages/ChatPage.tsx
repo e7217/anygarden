@@ -15,7 +15,10 @@ import RoomWorkspaceDialog from '@/components/RoomWorkspaceDialog'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
-import ThreadPanel from '@/components/ThreadPanel'
+import ThreadPanel, { type ThreadWorker } from '@/components/ThreadPanel'
+import { useOpenTurns } from '@/hooks/useOpenTurns'
+import { activeTurnByParticipant, threadTurnIds } from '@/lib/openTurns'
+import { stageLabel } from '@/lib/typingStage'
 import { indexThreads, canHostThread } from '@/lib/threads'
 import { clearDraft, threadDraftKey } from '@/lib/composerDrafts'
 import { useElementHeightVar } from '@/hooks/useElementHeightVar'
@@ -87,6 +90,7 @@ function LocalChatPage() {
   // Thread grouping is derived once here so the timeline and the side
   // panel can never disagree about which messages are replies.
   const threadIndex = useMemo(() => indexThreads(messages), [messages])
+  const { turns: openTurns, cancel: cancelTurns } = useOpenTurns(selectedRoom, typingUsers)
   const [threadRootId, setThreadRootId] = useState<string | null>(null)
   // An orphaned reply is in ``roots`` so it stays visible, but it can
   // never host a thread — the server rejects a thread rooted at a reply.
@@ -550,6 +554,23 @@ function LocalChatPage() {
     [rooms],
   )
 
+  // ENG-09 — agents answering inside the open thread, shown and stopped
+  // there rather than at the bottom of the main timeline.
+  const activeTurns = activeTurnByParticipant(openTurns)
+  const threadWorkers: ThreadWorker[] = threadRoot
+    ? Array.from(typingUsers)
+      .filter(pid => pid !== myParticipantId && activeTurns.get(pid)?.thread_root_id === threadRoot.id)
+      .map(pid => {
+        const stage = typingStages[pid]
+        return {
+          participantId: pid,
+          name: participants[pid]?.display_name ?? pid.slice(0, 8),
+          stage: stage ? stageLabel(t, stage, typingProgress[pid]) : undefined,
+          requestIds: threadTurnIds(openTurns, threadRoot.id, pid),
+        }
+      })
+    : []
+
   return (
     <AgentActionsContext.Provider value={!!user?.is_admin}>
     <div ref={setPageEl} className="flex h-dvh overflow-hidden">
@@ -708,6 +729,8 @@ function LocalChatPage() {
               typingUsers={typingUsers}
               typingStages={typingStages}
               typingProgress={typingProgress}
+              openTurns={openTurns}
+              onCancelTurns={cancelTurns}
               threadIndex={threadIndex}
               activeThreadRootId={threadRootId}
               // Re-clicking the open thread's trigger is a close like any
@@ -866,6 +889,8 @@ function LocalChatPage() {
           onSend={(content, metadata) => send(content, metadata, threadRoot.id)}
           onTyping={sendTyping}
           onClose={closeThread}
+          workers={threadWorkers}
+          onCancelTurns={cancelTurns}
         />
       ) : (
         <RightContextRail
