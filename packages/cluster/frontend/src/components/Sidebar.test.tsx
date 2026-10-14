@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
+import { requestAgentAction } from '@/lib/agentActions'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
@@ -274,6 +275,57 @@ describe('Sidebar — add agent entry point', () => {
     renderSidebar()
     expect(screen.getByText('Agents')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add agent' })).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — agent actions requested from chat', () => {
+  beforeEach(() => {
+    authMockState.isAdmin = true
+    agentsMockState.agents = [
+      {
+        id: 'a1',
+        name: 'Agent One',
+        engine: 'claude-code',
+        desired_state: 'running',
+        actual_state: 'running',
+        restart_policy: 'never',
+        machine_online: true,
+      },
+      {
+        id: 'a2',
+        name: 'Agent Two',
+        engine: 'claude-code',
+        desired_state: 'running',
+        actual_state: 'running',
+        restart_policy: 'never',
+        machine_online: true,
+      },
+    ]
+    roomsMockState.agentDMs = [
+      {
+        id: 'dm1',
+        name: 'DM: Agent One',
+        project_id: null,
+        is_dm: true,
+        representative_agent_id: 'a1',
+        has_updates: false,
+      },
+    ]
+  })
+
+  it('opens the existing DM for a direct-message request', () => {
+    renderSidebar()
+    act(() => requestAgentAction('a1', 'direct-message'))
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/rooms/dm1')
+    expect(roomsMockState.createAgentDM).not.toHaveBeenCalled()
+  })
+
+  it('creates a DM when the agent has none', async () => {
+    roomsMockState.createAgentDM.mockResolvedValueOnce({ id: 'dm-new' })
+    renderSidebar()
+    act(() => requestAgentAction('a2', 'direct-message'))
+    await waitFor(() => expect(screen.getByTestId('current-path')).toHaveTextContent('/rooms/dm-new'))
+    expect(roomsMockState.createAgentDM).toHaveBeenCalledWith('a2')
   })
 })
 

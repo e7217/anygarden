@@ -80,7 +80,7 @@ export default function AgentSettingsMenu({
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-label={t('admin.agentSettings.title')}
-          className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]"
+          className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-selected)] hover:text-[var(--color-foreground)] aria-expanded:bg-[var(--color-surface-selected)] aria-expanded:text-[var(--color-foreground)]"
           data-testid="agent-settings-menu-trigger"
         >
           <MoreHorizontal className="h-4 w-4" />
