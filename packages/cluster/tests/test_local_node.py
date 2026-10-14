@@ -1138,3 +1138,309 @@ async def test_node_stops_running_agents_and_shuts_down_without_lock_contention(
             await backend.close()
         owner.release(clean=True)
         await engine.dispose()
+
+
+# ── NODE-10 — transient I/O must not leave the node half-dead ─────────────
+#
+# 2026-10-13 benchmark: the host disk filled for a few seconds. structlog's
+# PrintLogger writes with ``print(..., flush=True)``, so the *log call inside
+# the except handlers* raised ``OSError(ENOSPC)``. It escaped ``_handle_frame``
+# and ``_maintain``'s tolerance, ``_failed`` then raised again from its own
+# log call before reaching the shutdown callback: execution was dead forever
+# while the API kept serving and ``/healthz`` stayed ``ok``.
+
+
+class _FullDiskLog:
+    """Stand-in for the structlog logger whose stdout write hits ENOSPC."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        def emit(event, **kwargs):
+            self.calls.append((name, event))
+            raise OSError(28, "No space left on device")
+
+        return emit
+
+
+def _disk_full():
+    return OSError(28, "No space left on device")
+
+
+@pytest.mark.req("NODE-10")
+async def test_frame_and_log_disk_full_errors_are_survived(tmp_path, monkeypatch):
+    from anygarden.node import execution
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    full_log = _FullDiskLog()
+    monkeypatch.setattr(execution, "log", full_log)
+    handled = []
+
+    async def handle(frame):
+        if frame["n"] == 1:
+            raise _disk_full()
+        handled.append(frame["type"])
+
+    monkeypatch.setattr(backend.daemon, "_handle", handle)
+    task = asyncio.create_task(backend._consume())
+    try:
+        backend.queue.put_nowait({"type": "sync_desired_state", "n": 1})
+        backend.queue.put_nowait({"type": "spawn_agent", "n": 2})
+        await asyncio.wait_for(backend.queue.join(), 2)
+        # The failing frame was reported (attempted), and the later spawn ran.
+        assert ("exception", "local_execution.frame_failed") in full_log.calls
+        assert handled == ["spawn_agent"]
+        assert backend.failed is False
+        assert shutdown == []
+        assert not task.done()
+        assert await backend.send({"type": "spawn_agent", "n": 3}) is True
+    finally:
+        backend.queue.put_nowait(None)
+        await asyncio.wait_for(task, 2)
+        owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-10")
+async def test_stop_request_check_disk_error_is_survived(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from anygarden.node import execution
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    monkeypatch.setattr(execution, "log", _FullDiskLog())
+    checks = []
+    registrations = []
+
+    def stop_requested():
+        checks.append(True)
+        if len(checks) <= 2:
+            raise _disk_full()
+        return False
+
+    async def ensure_registered():
+        registrations.append(True)
+        if len(registrations) == 1:
+            raise OperationalError(
+                "INSERT", {}, Exception("database or disk is full")
+            )
+
+    monkeypatch.setattr(owner, "stop_requested", stop_requested)
+    monkeypatch.setattr(backend, "ensure_registered", ensure_registered)
+    # Three consecutive failures (two checks + one registration) stay
+    # below the bound.
+    monkeypatch.setattr(backend, "MAX_MAINTENANCE_FAILURES", 4)
+    task = asyncio.create_task(backend._maintain())
+    try:
+        while len(registrations) < 3:
+            assert not task.done(), task
+            await asyncio.sleep(0.05)
+        assert backend.failed is False
+        assert shutdown == []
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-10")
+async def test_persistent_stop_request_disk_error_ends_node(tmp_path, monkeypatch):
+    from anygarden.node import execution
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    monkeypatch.setattr(execution, "log", _FullDiskLog())
+
+    def stop_requested():
+        raise _disk_full()
+
+    monkeypatch.setattr(owner, "stop_requested", stop_requested)
+    monkeypatch.setattr(backend, "ensure_registered", AsyncMock())
+    monkeypatch.setattr(backend, "MAX_MAINTENANCE_FAILURES", 3)
+    with pytest.raises(OSError):
+        await asyncio.wait_for(backend._maintain(), 5)
+    assert backend.failed is True
+    # Even though every log write fails, the shutdown is still requested.
+    assert shutdown == [True]
+    owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-10")
+async def test_persistent_frame_failures_end_node(tmp_path, monkeypatch):
+    from anygarden.node import execution
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    monkeypatch.setattr(execution, "log", _FullDiskLog())
+
+    async def handle(frame):
+        raise _disk_full()
+
+    monkeypatch.setattr(backend.daemon, "_handle", handle)
+    monkeypatch.setattr(backend, "MAX_FRAME_FAILURES", 3)
+    task = asyncio.create_task(backend._consume())
+    for n in range(3):
+        backend.queue.put_nowait({"type": "sync_desired_state", "n": n})
+    with pytest.raises(OSError):
+        await asyncio.wait_for(task, 2)
+    assert backend.failed is True
+    assert shutdown == [True]
+    assert await backend.send({"type": "spawn_agent"}) is False
+    owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-10")
+async def test_frame_failure_count_resets_after_success(tmp_path, monkeypatch):
+    backend, owner, shutdown = _bare_backend(tmp_path)
+
+    async def handle(frame):
+        if frame["n"] % 3 != 2:
+            raise _disk_full()
+
+    monkeypatch.setattr(backend.daemon, "_handle", handle)
+    monkeypatch.setattr(backend, "MAX_FRAME_FAILURES", 3)
+    task = asyncio.create_task(backend._consume())
+    try:
+        # fail, fail, ok, fail, fail, ok — never three in a row.
+        for n in range(6):
+            backend.queue.put_nowait({"type": "sync_desired_state", "n": n})
+        await asyncio.wait_for(backend.queue.join(), 2)
+        assert backend.failed is False and shutdown == []
+    finally:
+        backend.queue.put_nowait(None)
+        await asyncio.wait_for(task, 2)
+        owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-10")
+async def test_shutdown_requested_even_when_failure_log_raises(tmp_path, monkeypatch):
+    from anygarden.node import execution
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    monkeypatch.setattr(execution, "log", _FullDiskLog())
+    backend._failed(NodeOwnershipError("mapping mismatch"))
+    assert backend.failed is True
+    assert shutdown == [True]
+    owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-10")
+@pytest.mark.parametrize("failed", [False, True])
+async def test_healthz_reports_failed_local_execution(tmp_path, failed):
+    import secrets
+
+    import httpx
+
+    config = AnygardenSettings(
+        db_url="sqlite+aiosqlite://",
+        jwt_secret=secrets.token_urlsafe(32),
+        log_level="WARNING",
+    )
+    app = create_app(config)
+    engine = build_engine(config.db_url)
+    app.state.session_factory = build_session_factory(engine)
+    app.state.local_execution = SimpleNamespace(failed=failed)
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://node"
+        ) as client:
+            response = await client.get("/healthz")
+        body = response.json()
+        if failed:
+            assert response.status_code == 503
+            assert body["status"] == "unhealthy"
+            assert body["components"]["local_execution"] == "unhealthy"
+        else:
+            assert response.status_code == 200
+            assert body["components"]["local_execution"] == "ok"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.req("NODE-10")
+def test_real_cli_exits_on_its_own_when_local_execution_fails(tmp_path):
+    """The shutdown callback must really stop the process so a supervisor
+    restarts it — not leave the API serving with execution gone. Mirrors the
+    benchmark: disk full for both the stop-request check and stdout logging."""
+    import os
+    import socket
+    import time
+    import urllib.request
+
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    environment = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("ANYGARDEN_") and k != "WEB_CONCURRENCY"
+    }
+    for key in (
+        "SKILL_STALE_INTERVAL_HOURS",
+        "ORPHAN_SWEEPER_INTERVAL_SEC",
+        "TURN_RECOVERY_INTERVAL_SEC",
+    ):
+        environment["ANYGARDEN_" + key] = "0"
+    marker = tmp_path / "fail-now"
+    script = f"""
+import errno, pathlib
+from anygarden.node.execution import LocalExecutionBackend
+from anygarden.node.ownership import NodeOwner
+from anygarden.cli import dispatch
+
+original = NodeOwner.stop_requested
+def stop_requested(self):
+    if pathlib.Path({str(marker)!r}).exists():
+        raise OSError(errno.ENOSPC, "No space left on device")
+    return original(self)
+NodeOwner.stop_requested = stop_requested
+
+# The disk is briefly full for stdout too: structlog's print(..., flush=True)
+# raises for the first writes after the outage starts (the maintenance
+# warnings and the failure report), then space is back for shutdown.
+import structlog
+original_msg = structlog.PrintLogger.msg
+failed_writes = []
+def msg(self, message):
+    if pathlib.Path({str(marker)!r}).exists() and len(failed_writes) < 3:
+        failed_writes.append(message)
+        raise OSError(errno.ENOSPC, "No space left on device")
+    return original_msg(self, message)
+for name in ("msg", "log", "debug", "info", "warn", "warning", "error", "err",
+             "fatal", "exception", "failure", "critical"):
+    if hasattr(structlog.PrintLogger, name):
+        setattr(structlog.PrintLogger, name, msg)
+LocalExecutionBackend.MAX_MAINTENANCE_FAILURES = 3
+dispatch()
+"""
+    with (tmp_path / "server.log").open("w") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, "start", "--data-dir",
+             str(tmp_path / "node"), "--port", str(port)],
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                assert process.poll() is None, (tmp_path / "server.log").read_text()
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/healthz", timeout=0.2
+                    ) as response:
+                        assert response.status == 200
+                        break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                pytest.fail("CLI startup timed out")
+            marker.touch()
+            exited = process.wait(timeout=20)
+            output = (tmp_path / "server.log").read_text()
+            assert exited != 0, output
+            assert "Local execution failed" in output
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)

@@ -697,12 +697,29 @@ class RoomHandlerSupervisor:
             break
 
         send_metadata = _reply_metadata(request_id, delegation_id, outcome, turn_context)
+        # A durable room turn (leased, outside any project execution, not a
+        # delegation) whose native call failed transiently before any side
+        # effect is retried by the server with backoff. A visible failure
+        # notice would be accepted as that turn's answer and pre-empt the
+        # retry; the server posts its own notice if it gives up.
+        server_retries = bool(
+            leased_turn
+            and not response
+            and outcome in ("timeout", "failed")
+            and delegation_id is None
+            and not (turn_context or {}).get("execution_id")
+            and native_proof.get("native_outcome") == "failed"
+            and native_proof.get("native_reason_code") == "MODEL_TRANSIENT_FAILURE"
+            and native_proof.get("native_transient") is True
+        )
         # ``response`` truthy → deliver it. An empty result reaches here
         # only for proactive/untracked turns (request_id is None); those
         # keep the legitimate "no-reply" semantics. Tracked empty turns
         # were already reclassified to ``failed`` above. ``timeout`` and
         # ``failed`` both notify the user so silence never reads as success.
-        if response:
+        if server_retries:
+            pass  # the server's retry or exhaustion notice speaks for it
+        elif response:
             await self._send_room_message(
                 room_id,
                 response,

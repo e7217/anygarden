@@ -36,6 +36,9 @@ _TRANSIENT_SIGNALS = (
     "connection aborted", "connection error", "temporarily unavailable",
     # Codex transport failures (live benchmark 2026-10-12).
     "stream disconnected", "timed out", "internal server error",
+    # "Selected model is at capacity. Please try a different model." (live
+    # benchmark 2026-10-13). Still never transient after a side effect.
+    "model is at capacity", "at capacity",
 )
 # ``"status":400`` in codex's structured error, or ``unexpected status 429``.
 _STATUS_TEXT = re.compile(r"\bstatus(?:\s+code)?[\s:=]+(\d{3})\b")
@@ -100,6 +103,8 @@ def terminal_failure_category(outcome: str | None, reason: str | None) -> tuple[
         "UNSUPPORTED_RUNTIME", "POLICY_DENIED",
     }:
         return "MODEL_CONFIGURATION_INVALID", False
+    # ``TIMEOUT_STOPPED`` is only reported when no side-effecting item or
+    # tool started in the turn; a later timeout is TIMEOUT_AFTER_SIDE_EFFECT.
     if reason in {"MODEL_TRANSIENT_FAILURE", "TIMEOUT_STOPPED"}:
         return "MODEL_TRANSIENT_FAILURE", True
     return "MODEL_EXECUTION_FAILED", False

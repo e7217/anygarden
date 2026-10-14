@@ -425,7 +425,9 @@ class RoomExecutionAdapter(CodexCliAdapter):
         if receipt.outcome == "cancelled":
             raise EngineCancelledError(turn)
         error_cls = (
-            EngineTimeoutError if receipt.reason == "TIMEOUT_STOPPED" else EngineError
+            EngineTimeoutError
+            if receipt.reason in {"TIMEOUT_STOPPED", "TIMEOUT_AFTER_SIDE_EFFECT"}
+            else EngineError
         )
         # Receipt codes only: no provider stderr or credentials in logs/notices.
         reason = receipt.reason or "runtime_error"

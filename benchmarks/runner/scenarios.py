@@ -409,6 +409,12 @@ async def _deliverable_text(api: Api, fx: Fixture, trigger: dict) -> tuple[bool,
             return await _direct_answer(api, fx, "solo", trigger)
         if task["status"] != "done":
             return False, ""
+        # The task can be marked done a moment before the final answer is
+        # posted; judge only once the agent's turns are over.
+        turns = await agent_turns(api, fx.agents["solo"]["id"])
+        if not all(t["state"] in TERMINAL_TURN_STATES for t in turns):
+            return False, ""
+        replies = agent_replies(await messages(api, fx.entry), fx.participants["solo"], trigger.get("seq") or 0)
         return True, "\n".join([task.get("result_markdown") or "", *(m["content"] for m in replies)])
     runs = await executions(api, fx.entry)
     if not runs:

@@ -1,0 +1,235 @@
+{
+  "schema": 1,
+  "suite": "core",
+  "suite_version": 4,
+  "commit": "b9159e42c1763a083345c91f68730f9fcd8a41e8",
+  "started_at": "2026-10-13T06:12:44.207857+00:00",
+  "engine": {
+    "engine": "codex-cli",
+    "model": "gpt-6.1-sol",
+    "permission_level": "trusted"
+  },
+  "k": 3,
+  "runs": [
+    {
+      "scenario": "GT-03",
+      "mode": "solo",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 50,
+      "gates": [
+        {
+          "gate": "G3a task promoted from the trigger",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G3b question in the thread and task blocked",
+          "ok": true,
+          "seconds": 5
+        },
+        {
+          "gate": "G3c exactly one resumed turn, none started by the reply",
+          "ok": true,
+          "value": [
+            [
+              "456c9750-ad9d-4d41-b810-87a045f5f7ec",
+              "91c7571a-58d4-4258-a4b8-04080dd2eb81"
+            ]
+          ]
+        },
+        {
+          "gate": "G3d answer carried into the task spec",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G3e task done",
+          "ok": true,
+          "seconds": 5
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T06:12:44.207962+00:00",
+        "until": "2026-10-13T06:14:19.704333+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 151315,
+          "completion_tokens": 561,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "GT-03",
+      "mode": "solo",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 51,
+      "gates": [
+        {
+          "gate": "G3a task promoted from the trigger",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G3b question in the thread and task blocked",
+          "ok": true,
+          "seconds": 5
+        },
+        {
+          "gate": "G3c exactly one resumed turn, none started by the reply",
+          "ok": true,
+          "value": [
+            [
+              "69840fd4-46cc-4464-aae8-795775b7ddd0",
+              "a2f71c73-7fbc-48bb-ac7e-8780734e138a"
+            ]
+          ]
+        },
+        {
+          "gate": "G3d answer carried into the task spec",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G3e task done",
+          "ok": true,
+          "seconds": 5
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T06:12:44.208410+00:00",
+        "until": "2026-10-13T06:14:19.743024+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 173838,
+          "completion_tokens": 648,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "GT-03",
+      "mode": "solo",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 55,
+      "gates": [
+        {
+          "gate": "G3a task promoted from the trigger",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G3b question in the thread and task blocked",
+          "ok": true,
+          "seconds": 5
+        },
+        {
+          "gate": "G3c exactly one resumed turn, none started by the reply",
+          "ok": true,
+          "value": [
+            [
+              "1db6b6c4-678b-40a3-9278-081c40d09def",
+              "52bf2ae3-30f5-4267-a383-74dbc971bdff"
+            ]
+          ]
+        },
+        {
+          "gate": "G3d answer carried into the task spec",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G3e task done",
+          "ok": true,
+          "seconds": 10
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-13T06:12:44.208867+00:00",
+        "until": "2026-10-13T06:14:24.528096+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 151629,
+          "completion_tokens": 559,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    }
+  ],
+  "finished_at": "2026-10-13T06:14:24.538644+00:00"
+}

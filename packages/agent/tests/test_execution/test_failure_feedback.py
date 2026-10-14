@@ -179,3 +179,27 @@ def test_classify_codex_transient_messages(message):
 def test_classify_codex_structured_4xx_is_not_transient_even_with_signal_words():
     message = _api_error(400, "invalid_request_error", "context too large; retry after timeout 500")
     assert classify_failure("codex-cli", message) != "MODEL_TRANSIENT_FAILURE"
+
+
+_CAPACITY = "Selected model is at capacity. Please try a different model."
+
+
+@pytest.mark.req("EXE-10")
+@pytest.mark.parametrize("message", [_CAPACITY, "The model is at capacity right now", "provider at capacity"])
+def test_classify_codex_model_capacity_is_transient(message):
+    # Live benchmark 2026-10-13: codex ENGINE_ERROR with this text.
+    assert classify_failure("codex-cli", message) == "MODEL_TRANSIENT_FAILURE"
+
+
+@pytest.mark.req("EXE-10")
+def test_tracker_model_capacity_is_transient_only_without_side_effects():
+    tracker = _track(_failed(_CAPACITY))
+    assert tracker.side_effect_started is False
+    assert tracker.transient is True
+    assert tracker.code() == "MODEL_TRANSIENT_FAILURE"
+    # After a side effect started the failure is never retried automatically.
+    after_tool = _track(_failed(_CAPACITY, before=[{"type": "item.started",
+                                                    "item": {"type": "mcp_tool_call"}}]))
+    assert after_tool.side_effect_started is True
+    assert after_tool.transient is False
+    assert after_tool.code() != "MODEL_TRANSIENT_FAILURE"

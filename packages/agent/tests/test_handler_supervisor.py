@@ -1019,3 +1019,62 @@ async def test_cancelled_turn_is_not_retried_and_delegation_gets_notice(
     else:
         assert [s[1] for s in client.sends] == [hw._CANCELLED_NOTICE]
         assert client.sends[0][2]["delegation_outcome"] == "cancelled"
+
+
+_TRANSIENT_PROOF = {
+    "local_execution_id": "00000000-0000-4000-8000-000000000001",
+    "native_outcome": "failed", "native_process_state": "finished",
+    "native_reason_code": "MODEL_TRANSIENT_FAILURE", "native_transient": True,
+}
+_LEASED = {"turn_attempt": 1, "turn_generation": 1, "turn_lease": "lease"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("EXE-10")
+async def test_leased_room_turn_transient_failure_leaves_retry_to_the_server():
+    """A safe transient failure of a durable room turn posts no failure
+    notice: the notice would complete the turn and pre-empt the server's
+    bounded transient retry, which posts its own notice if it gives up."""
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client, "codex-cli", 5.0)
+
+    async def capacity():
+        raise EngineError("Selected model is at capacity", transient=True,
+                          turn=EngineTurn(None, **_TRANSIENT_PROOF))
+
+    await sup.dispatch("room", "req-t", capacity, turn_context=dict(_LEASED))
+    assert client.sends == []
+    finished = next(e for e in client.lifecycle_events if e["event"] == "handler_finished")
+    assert finished["outcome"] == "failed"
+    assert finished["native_transient"] is True
+    assert finished["local_execution_id"] == _TRANSIENT_PROOF["local_execution_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("EXE-10")
+@pytest.mark.parametrize("case", ["execution", "delegated", "unleased", "not_transient", "after_effect"])
+async def test_other_failures_still_notify_the_room(case):
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client, "codex-cli", 5.0)
+    context = dict(_LEASED)
+    proof = dict(_TRANSIENT_PROOF)
+    delegation_id = None
+    if case == "execution":
+        context["execution_id"] = "execution-1"
+    elif case == "delegated":
+        delegation_id = "delegated-1"
+    elif case == "unleased":
+        context = {}
+    elif case == "not_transient":
+        proof.update(native_reason_code="MODEL_EXECUTION_FAILED", native_transient=False)
+    elif case == "after_effect":
+        proof.pop("native_reason_code")
+        proof.pop("native_transient")
+
+    async def failing():
+        raise EngineError("failed", transient=True, turn=EngineTurn(None, **proof))
+
+    await sup.dispatch("room", "req-n", failing, turn_context=context,
+                       delegation_id=delegation_id)
+    assert len(client.sends) == 1
+    assert "생성하지 못했습니다" in client.sends[0][1]

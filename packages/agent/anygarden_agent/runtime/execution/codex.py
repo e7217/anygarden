@@ -23,6 +23,9 @@ from .usage import SOURCE, TOKEN_KEYS, counters
 logger = structlog.get_logger(__name__)
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
+# The turn's failure tracker outlives a timed-out collector, so the timeout
+# path can tell whether a side-effecting item already started.
+_FAILURES: ContextVar[CodexFailureTracker | None] = ContextVar("codex_failures", default=None)
 # Bounded stderr tail of the running CLI — local diagnosis only.
 _STDERR_TAIL: ContextVar[bytearray | None] = ContextVar("stderr_tail", default=None)
 _STDERR_KEEP = 2048
@@ -255,6 +258,7 @@ class CodexRuntime:
                     del errors[:-_STDERR_KEEP]
 
             stderr_task = asyncio.create_task(drain_stderr())
+            failures = CodexFailureTracker()
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
                 launched(proc.pid)
@@ -263,11 +267,13 @@ class CodexRuntime:
                 async def collect():
                     token = _MEASURED_USAGE.set(measured)
                     tail_token = _STDERR_TAIL.set(errors)
+                    failures_token = _FAILURES.set(failures)
                     try:
                         return await self._collect(
                             proc, invocation, session_handle, output, emit, authorized
                         )
                     finally:
+                        _FAILURES.reset(failures_token)
                         _STDERR_TAIL.reset(tail_token)
                         _MEASURED_USAGE.reset(token)
 
@@ -283,7 +289,11 @@ class CodexRuntime:
                     await asyncio.wait({stream}, timeout=min(0.05, remaining))
                 result = stream.result()
             except TimeoutError:
-                result = RuntimeResult("failed", "stopped", "TIMEOUT_STOPPED")
+                # Transient only if no side-effecting item started (same rule
+                # as CodexFailureTracker.code()); otherwise never retried.
+                result = RuntimeResult("failed", "stopped", (
+                    "TIMEOUT_AFTER_SIDE_EFFECT" if failures.side_effect_started
+                    else "TIMEOUT_STOPPED"))
             except asyncio.CancelledError:
                 result = RuntimeResult("cancelled", "stopped", "cancelled")
             except Exception:  # noqa: BLE001 — reap child before reporting unknown
@@ -359,7 +369,7 @@ class CodexRuntime:
         texts: list[str] = []
         text_size = 0
         completed = failed = False
-        failures = CodexFailureTracker()
+        failures = _FAILURES.get() or CodexFailureTracker()
         measured = _MEASURED_USAGE.get()
         usage = measured if measured is not None else {}
         while line := await proc.stdout.readline():

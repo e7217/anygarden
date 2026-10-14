@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from anygarden_agent.runtime.execution import Invocation, SessionScope
     from anygarden_agent.runtime.execution.contracts import Runtime
 
+_WIRE_ERROR_CODES = {"TIMEOUT_AFTER_SIDE_EFFECT": "TIMEOUT_STOPPED"}
+
 
 @dataclass(frozen=True)
 class ExecutionFence:
@@ -505,13 +507,16 @@ class ExecutorBridge:
                         outcome="succeeded",
                         text=receipt.text,
                     )
-                if receipt.outcome == "failed" and receipt.error_code in FAILURE_CODES:
+                # The wire vocabulary predates the local side-effect split
+                # of timeouts; peers still receive the closed TIMEOUT_STOPPED.
+                error_code = _WIRE_ERROR_CODES.get(receipt.error_code, receipt.error_code)
+                if receipt.outcome == "failed" and error_code in FAILURE_CODES:
                     return await self._enqueue(
                         db,
                         binding,
                         "task.result",
                         outcome="failed",
-                        error_code=receipt.error_code,
+                        error_code=error_code,
                     )
                 if receipt.outcome is not None:
                     # Empty/oversized success, spontaneous cancellation: no fabricated result.

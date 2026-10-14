@@ -1651,7 +1651,8 @@ def create_app(
         The server is a switchboard, not a brain — this only inspects
         the wiring it already owns (DB connectivity and background tasks). Returns 200
         for ``ok``/``degraded`` and 503 only when a *critical*
-        dependency is down (DB unreachable).
+        dependency is down (DB unreachable, or an integrated node's local
+        execution has fatally failed).
         Components that are intentionally off (feature flag disabled,
         cron interval 0, tracing off) report ``disabled`` and never
         flip the overall status.
@@ -1679,6 +1680,19 @@ def create_app(
             except Exception:  # noqa: BLE001 — any failure ⇒ unhealthy
                 components["db"] = "unhealthy"
                 critical_down = True
+
+        # ── Integrated-node local execution: once the backend has fatally
+        # failed it accepts no frames, so no agent can ever start again.
+        # That is critical even though the API still answers — report it
+        # so a probe/supervisor does not see a half-dead node as healthy.
+        # Absent outside integrated mode (agents run on machine daemons). ──
+        local_execution = getattr(app.state, "local_execution", None)
+        if local_execution is not None:
+            if getattr(local_execution, "failed", False):
+                components["local_execution"] = "unhealthy"
+                critical_down = True
+            else:
+                components["local_execution"] = "ok"
 
         # ── Background crons: each is conditionally created and may be
         # None when disabled. A task that exists but has already

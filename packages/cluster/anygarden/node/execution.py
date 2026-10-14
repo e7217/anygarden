@@ -19,6 +19,22 @@ from anygarden.ws.machine_handler import handle_machine_frame
 
 log = structlog.get_logger(__name__)
 
+
+def _log_best_effort(level: str, event: str, **kwargs) -> None:
+    """Log without letting the log write itself end the executor.
+
+    structlog's PrintLogger writes with ``print(..., flush=True)``; on a full
+    disk that raises ``OSError(ENOSPC)``. Called from an except handler, such
+    a raise used to escape the transient-failure tolerance and permanently
+    fail local execution (2026-10-13 benchmark). ``exc_info`` still works
+    because this runs inside the caller's except block.
+    """
+    try:
+        getattr(log, level)(event, **kwargs)
+    except Exception:  # noqa: BLE001, S110 — losing a log line beats losing the node
+        pass
+
+
 # Operating-system process/bootstrap values only. Application/provider secrets,
 # Python import hooks and arbitrary server configuration are never inherited.
 AGENT_ENVIRONMENT_KEYS = (
@@ -55,6 +71,11 @@ class LocalExecutionBackend:
     # up (#772). Ticks are 0.25 s apart plus the SQLite lock wait, so this
     # spans far longer than any single writer holds the lock.
     MAX_MAINTENANCE_FAILURES = 40
+    # Consecutive frames that failed to apply before the node gives up. A
+    # single failure loses only that frame (#772); a run of failures with no
+    # success in between means execution is not working at all (e.g. the
+    # disk stays full), and a half-dead node must not keep serving.
+    MAX_FRAME_FAILURES = 40
 
     def __init__(self, app, owner):
         self.app = app
@@ -167,38 +188,62 @@ class LocalExecutionBackend:
                 return
             await handle_machine_frame(self.app, self.machine_id, frame)
 
-    async def _handle_frame(self, frame: dict) -> None:
-        # #772 — match the remote daemon, which logs a frame it cannot
-        # handle and keeps reading. A transient error (e.g. SQLite
-        # "database is locked") loses one frame; the periodic state report
-        # and lifecycle reconciliation converge the rest. Ownership errors
-        # still stop the node.
+    async def _handle_frame(self, frame: dict) -> Exception | None:
+        """Apply one frame; return the error it failed with, if any.
+
+        #772 — match the remote daemon, which logs a frame it cannot handle
+        and keeps reading. A transient error (SQLite "database is locked",
+        ``OSError``/ENOSPC, "database or disk is full") loses one frame; the
+        periodic state report and lifecycle reconciliation converge the rest.
+        Ownership errors still stop the node.
+        """
         try:
             await self.daemon._handle(frame)
         except NodeOwnershipError:
             raise
-        except Exception:
-            log.exception(
-                "local_execution.frame_failed", frame_type=frame.get("type")
+        except Exception as exc:  # noqa: BLE001 — one lost frame, see above
+            _log_best_effort(
+                "exception",
+                "local_execution.frame_failed",
+                frame_type=frame.get("type"),
             )
+            return exc
+        return None
 
-    def _failed(self, exc: Exception) -> None:
-        self.failed = True
-        log.error("local_execution.failed", error=type(exc).__name__)
+    def _request_shutdown(self) -> None:
         callback = getattr(self.app.state, "node_shutdown_callback", None)
         if callback is not None:
             callback()
 
+    def _failed(self, exc: Exception) -> None:
+        # Mark and request shutdown before logging: a failing log write
+        # (full disk) must never leave the node half-dead with execution
+        # gone but the API still serving.
+        self.failed = True
+        try:
+            self._request_shutdown()
+        finally:
+            _log_best_effort(
+                "error", "local_execution.failed", error=type(exc).__name__
+            )
+
     async def _consume(self) -> None:
         try:
+            failures = 0
             while True:
                 frame = await self.queue.get()
                 try:
                     if frame is None:
                         return
-                    await self._handle_frame(frame)
+                    error = await self._handle_frame(frame)
                 finally:
                     self.queue.task_done()
+                if error is None:
+                    failures = 0
+                    continue
+                failures += 1
+                if failures >= self.MAX_FRAME_FAILURES:
+                    raise error
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -210,12 +255,12 @@ class LocalExecutionBackend:
             tick = 0
             failures = 0
             while True:
-                if self.owner.stop_requested():
-                    callback = getattr(self.app.state, "node_shutdown_callback", None)
-                    if callback is not None:
-                        callback()
-                    return
                 try:
+                    # Inside the tolerance: the stop-request check reads a
+                    # file and can hit a transient OSError like any write.
+                    if self.owner.stop_requested():
+                        self._request_shutdown()
+                        return
                     await self.ensure_registered()
                     if self.ready and tick % 20 == 0:
                         await self.daemon._report_actual_state()
@@ -228,7 +273,8 @@ class LocalExecutionBackend:
                     failures += 1
                     if failures >= self.MAX_MAINTENANCE_FAILURES:
                         raise
-                    log.warning(
+                    _log_best_effort(
+                        "warning",
                         "local_execution.maintenance_failed",
                         failures=failures,
                         exc_info=True,

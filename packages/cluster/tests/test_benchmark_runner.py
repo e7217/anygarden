@@ -217,6 +217,8 @@ def _solo_fixture():
         ([], "leased", False),  # still working
         ([{"source_message_id": "t", "status": "in_progress"}], "completed", False),
         ([{"source_message_id": "t", "status": "done", "result_markdown": "R"}], "completed", True),
+        # done, but the final answer is still being written
+        ([{"source_message_id": "t", "status": "done", "result_markdown": "R"}], "leased", False),
     ],
 )
 async def test_solo_deliverable_accepts_a_direct_answer_or_a_done_task(tasks, turn_state, expected):

@@ -1714,14 +1714,20 @@ async def reconcile_execution(
             "This is a final worker recovery notice, not a completed worker result.\n"
             f"Reason: {failure_details['reason_code']}. Recovery phase: {failure_details['phase']}.\n"
             f"Attempts for the same request: {failure_details['attempt_count']}; "
-            f"retries consumed: {failure_details['retry_count']}/{failure_details['max_retries']}.\n"
+            f"retries consumed: {failure_details['retry_count'] - failure_details.get('transient_retry_count', 0)}"
+            f"/{failure_details['max_retries']}; transient model retries consumed: "
+            f"{failure_details.get('transient_retry_count', 0)}"
+            f"/{failure_details.get('max_transient_retries', 0)}.\n"
             f"Last confirmed task stage: {failure_details['last_confirmed_stage']}; "
             f"native started: {failure_details['native_started']}; "
             f"native stop confirmed: {failure_details['native_stop_confirmed']}.\n"
             "No result was accepted from this failed request.\n"
             f"Required action: {failure_details['next_action']}.\n"
         )
-        from anygarden.project_executions.recovery import engine_failure_resume_reason
+        from anygarden.project_executions.recovery import (
+            engine_failure_resume_reason,
+            task_approvals,
+        )
         from anygarden.project_executions.resumes import (
             MAX_LEAD_RESUMES_PER_TASK,
             lead_resume_count,
@@ -1734,6 +1740,22 @@ async def reconcile_execution(
         used = await lead_resume_count(
             db, execution_id=execution.id, task_id=task.id, input_revision=task.input_revision,
         ) if engine_reason else 0
+        approvals = await task_approvals(db, task=task) if engine_reason else []
+        decided = [row for row in approvals if row.status in {"approved", "succeeded", "failed"}]
+        if decided:
+            text += (
+                "This failed turn was continuing a user-approved managed action. Every approval "
+                "of this task is already decided and no user review is pending: "
+                + "; ".join(
+                    f"approval {row.id} is granted and its action "
+                    + ("has not been executed yet" if row.status == "approved"
+                       else "already executed successfully" if row.status == "succeeded"
+                       else "already executed and was rejected by the receiver")
+                    for row in decided
+                )
+                + ". A restarted worker is told this and continues from there; the server "
+                "never sends an approved action twice.\n"
+            )
         if failure_details["phase"] == "exhausted":
             text += "The worker's retry limit is exhausted. Do not create a new task to retry the same work.\n"
         elif engine_reason and used < MAX_LEAD_RESUMES_PER_TASK:
