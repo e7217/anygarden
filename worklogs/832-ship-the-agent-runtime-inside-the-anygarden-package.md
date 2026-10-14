@@ -1,59 +1,46 @@
 # refactor(agent): ship the agent runtime inside the anygarden package (#832)
 
-- Commit: `02263fd` (02263fdb072497aa258544ee011ad4aabeaa38e2)
+- Commit: `02263fd` (45f672c61620ad04a2b22e3cf19a86ccaf75299d)
 - Author: Changyong Um
-- Date: 2026-10-14T16:01:21+09:00
-- PR: #832
+- Date: 2026-10-14T16:02:30+09:00
+- PR: —
 
 ## Situation
 
-The agent runtime lived in a separate distribution (`anygarden-agent`) and the machine daemon resolved it at spawn time either from PATH, from a sibling-binary beside the daemon's interpreter, or — as last resort — via `uvx anygarden-agent` from PyPI. Remote machines are told to install only `anygarden[machine]`, so the agent they actually ran came from PyPI rather than from the same release that was running on the server. This caused version drift between the server and its agents (#683) and forced every release to ship two packages (the cluster package plus the standalone agent package). The machine integration in #754 had already folded the `anygarden-machine` distribution into this same package; the agent was the last remaining split.
+#754 folded `anygarden-machine` into `anygarden.machine` and left "merge `anygarden-agent` the same way" as a follow-up that was never filed. The `anygarden[agent]` extra still pulled the separate `anygarden-agent>=0.8` distribution from PyPI, and the machine spawner looked for an `anygarden-agent` binary on PATH and fell back to `uvx anygarden-agent`. The admin UI tells remote hosts to install only `anygarden[machine]`, so those agents always went through uvx and ran whatever PyPI had, not the build matching the server (#683). Releases had to ship twice too: `anygarden` 0.19.0 and 31 agent commits after `anygarden-agent` 0.13.0 were still unreleased.
 
 ## Task
 
-- Move the full agent runtime (`packages/agent/anygarden_agent/`) into the main cluster package as `packages/cluster/anygarden/agent/`, updating every import across source and tests.
-- Move agent tests, docs, example profiles, and changelog under `packages/cluster/`.
-- Expose the runtime's pip dependencies as a new `agent` extra in `packages/cluster/pyproject.toml`; make the existing `machine` extra depend on `anygarden[agent]`.
-- Change the spawner to launch agents as `sys.executable -m anygarden.agent.cli` so version always matches the running daemon — no PATH lookup, no uvx fallback.
-- Drop the `anygarden-agent` / `anygarden-client` console-script entry points; route through `anygarden agent` / `anygarden client`.
-- Raise `requires-python` to `>=3.12` (agents used 3.12 from uvx; the cancel path drops an API that was removed in 3.12 on 3.11).
-- Remove the agent CI step, `anygarden-agent` release tag, and `release-agent` Makefile target; update README, CONTRIBUTING, and runbooks.
+- One distribution: move the runtime to `anygarden.agent` and its tests into the cluster suite
+- A machine install has to be able to run agents without uvx
+- The daemon has to run the agent version that it ships with
+- Retire the `anygarden-agent` / `anygarden-client` scripts, CI step, release tag and Makefile target
+- Update current-tense docs. Historical design docs, plans, research and migration comments stay as they are
 
 ## Action
 
-- **`packages/cluster/anygarden/agent/`** — all modules moved from `packages/agent/anygarden_agent/`; internal imports rewritten from `anygarden_agent.*` to `anygarden.agent.*` (e.g. `cli.py`, `client.py`, `secrets.py`, `integrations/base.py`, `integrations/codex_cli.py`, `integrations/room_execution.py`, `runtime/execution/failure_feedback.py`, `runtime/execution/launch.py`, `runtime/execution/room.py`).
-- **`packages/cluster/anygarden/machine/spawner.py:1035–1065`** — replaced the three-branch binary resolution block (sibling, `shutil.which`, uvx) with a single `[sys.executable, "-m", "anygarden.agent.cli", ...]` invocation; updated three in-comment references from `anygarden_agent.*` to `anygarden.agent.*`.
-- **`packages/cluster/pyproject.toml`** — bumped `requires-python` to `>=3.12`; rewrote `[agent]` extra to inline the runtime's direct deps (websockets, httpx, pydantic, click, structlog, pyyaml, psutil); added `anygarden[agent]` to the `[machine]` extra; removed the `[tool.uv.sources]` stanza that pointed `anygarden-agent` at the workspace sibling.
-- **`packages/cluster/tests/agent/`** — all agent tests moved from `packages/agent/tests/`; imports updated; `test_cli.py` and `test_client.py` updated to use the new module paths.
-- **`packages/cluster/tests/machine/test_spawner.py`** — removed all `patch("anygarden.machine.spawner.shutil.which", return_value=...)` patches (no longer needed); dropped `test_spawn_falls_back_to_uvx` test (the uvx path no longer exists).
-- **`packages/cluster/docs/agent/`** — CHANGELOG, README, architecture, engines, local-execution docs, and example profiles moved from `packages/agent/`.
-- **`packages/cluster/docs/machine/architecture.md`, `operations.md`** — import references updated to `anygarden.agent.*`.
-- **`.github/workflows/ci.yml`, `release.yml`** — removed the separate agent CI job and `anygarden-agent` release-tag step.
-- **`Makefile`** — removed `release-agent` target.
-- **`README.md`, `CONTRIBUTING.md`, `docs/runbook/`** — install and binary-path references updated.
-- **`uv.lock`** — workspace member `anygarden-agent` removed; lock updated.
-- **`pyproject.toml`** (root) — removed `packages/agent` from workspace members.
-- **`packages/agent/`** — directory fully deleted (pyproject, CI workflow, gitignore, LICENSE, tests/conftest).
+- `git mv packages/agent/anygarden_agent → packages/cluster/anygarden/agent`, tests → `packages/cluster/tests/agent` (added `test_execution/__init__.py`; dropped the agent `conftest.py` whose `req` hook duplicated the cluster one). README, docs, example profiles and CHANGELOG → `packages/cluster/docs/agent/`. Removed `packages/agent/{pyproject.toml,LICENSE,.gitignore,.github/}`
+- `anygarden_agent` → `anygarden.agent` across code, tests and `patch()` targets. Migrations 016/049/080 stay untouched
+- `packages/cluster/pyproject.toml`: the `agent` extra lists the runtime's dependencies; `machine` includes `anygarden[agent]`; workspace source removed; `requires-python = ">=3.12"`. Root `pyproject.toml` and `uv.lock` updated to match
+- `anygarden/machine/spawner.py`: replaced the sibling/PATH/uvx resolution with `[sys.executable, "-m", "anygarden.agent.cli", ...]`. `agent_binary_resolved` now logs `source="interpreter"` and `path=sys.executable`
+- `tests/machine/test_spawner.py`: four uvx/PATH/sibling tests replaced by a parametrized interpreter test and `test_spawned_agent_command_actually_runs`, which executes the built prefix with `--help`. Removed 24 dead `shutil.which` patches; `test_endpoint_transport.py` slices args after the 3-element prefix
+- `tests/test_arch_room_ws_e2e.py` and `test_room_usage_bridge.py` import `tests.agent.test_room_execution` instead of loading it by file path; `test_cli.py` and `test_cli_usability.py` read the moved README
+- `anygarden/agent/cli.py`: click names `agent` / `client`. `anygarden/cli.py` checks `anygarden.agent.cli` for integrated mode
+- CI: removed the agent test step. Release: removed the `anygarden-agent-v*` trigger and mapping. Makefile: removed `release-agent` and the agent `req-report` line. Also updated `scripts/test.ps1` and the `.githooks/post-merge` comment
+- Docs: README packages table (extras plus an uninstall note for retired distributions), CONTRIBUTING, cluster README, machine architecture/operations, the federation-two-node, room-execution-upgrade and retired-engines runbooks, and the EngineGlyph comment
 
 ## Decisions
 
-**Option A — keep `anygarden-agent` as a separate pip package but publish it from the same source tree (monorepo sibling)**
-Rejected: still requires two separate wheel uploads per release and does not eliminate PyPI drift for machines that install `anygarden[machine]` without pinning the agent version.
-
-**Option B — embed the runtime inside `anygarden` and launch via `python -m anygarden.agent.cli`** *(chosen)*
-The daemon's own interpreter always holds the version that was installed, so version drift is structurally impossible. No PATH resolution heuristics, no uvx network round-trip on cold nodes. The approach mirrors how `anygarden-machine` was folded in via #754.
-
-**Option C — keep uvx but pin the version hash**
-Rejected: still requires a second release artifact and adds a network dependency at spawn time; pin management adds toil.
-
-**`requires-python` bump to 3.12** — the agent runtime's cancel-path was already 3.12-only (uses an asyncio API deprecated/removed on 3.11); previously uvx fetched a 3.12 interpreter transparently. With the daemon running the agent under its own interpreter, the whole distribution must guarantee 3.12.
-
-**Assumption**: if a remote machine ever has a legitimate reason to pin a different agent version than the server (e.g., staged rollouts), this decision should be revisited — the old uvx path gave that flexibility at the cost of correctness.
+- **How the daemon launches agents**: chose the daemon's own interpreter over PATH lookup (version can drift through shadowing) and over keeping uvx (a silently different build, which is what #683 reported). The deciding point was that after the merge the runtime sits in the daemon's own wheel.
+- **Entry point**: the plan said `python -m anygarden agent`, but `anygarden/__main__.py` runs `cli:main`, which has no `agent` command. A clean-venv check caught this, not the mocked tests. Switched to `python -m anygarden.agent.cli`, which matches the existing `python -m anygarden.machine.cli run` pattern, and added a test that runs the real command.
+- **`machine` ⊇ `agent`**: without uvx, a `[machine]`-only host could not start agents at all. The dependency sets already overlapped completely, so install size is unchanged.
+- **Python 3.12 floor**: the plan kept `>=3.11`, but on 3.11 two cancel-path usage tests in `test_room_execution` fail (`input_tokens` is None). Agents used to get a 3.12 interpreter from uvx because `anygarden-agent` required it. They now run on the daemon's interpreter, so the whole distribution needs 3.12 to keep that guarantee.
+- **Tests join the cluster suite** (as with `tests/machine/`) rather than keeping a second testpath, CI step and JUnit file.
+- Revisit if `python -m anygarden` is ever pointed at the unified dispatcher, or if 3.11 support is needed again (fix the cancel-path usage first).
 
 ## Result
 
-- Agents now run in the same venv and at the same version as the server daemon; the "which binary actually ran?" forensic log still records the interpreter path.
-- The `packages/agent` workspace member is gone; CI has one fewer job; the release pipeline ships one package.
-- `anygarden[machine]` installs the full agent runtime as a transitive dependency, so no manual agent installation step is needed on remote machines.
-- 157 files changed: 498 insertions, 991 deletions (net −493 lines).
-- A test (`test_cli.py`) runs `python -m anygarden.agent.cli --help` for real, so a broken entry point fails in CI rather than on a remote host.
+- Full cluster suite with the agent tests included: 3691 passed plus 1 failure afterwards fixed (README path); targeted re-run 1376 passed. The agent suite under xdist: 751 passed, 2 skipped (no Node available)
+- Wheel built from source contains `anygarden/agent/**` including `pi_self_tools.{json,mjs}`. In a clean 3.11 `[machine]` venv and a 3.12 `[agent]` venv, `python -m anygarden.agent.cli --help` works and FastAPI/SQLAlchemy are not installed
+- Lint: no new findings in changed files beyond the pre-existing baseline
+- Pending: release `anygarden` 0.19.0 (blocked on the Engine Smoke OpenAI key secret). PyPI `anygarden-agent` is left as is. Existing venvs should `pip uninstall anygarden-agent`
