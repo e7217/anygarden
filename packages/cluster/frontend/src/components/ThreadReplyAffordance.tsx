@@ -1,4 +1,6 @@
 import { MessageSquareReply } from 'lucide-react'
+import BrailleSpinner from '@/components/BrailleSpinner'
+import TurnCancelControl from '@/components/TurnCancelControl'
 import { EntityAvatar, type EntityKind } from '@/components/EntityAvatar'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
@@ -18,6 +20,11 @@ interface ThreadReplyAffordanceProps {
   /** True when this thread is the one open in the side panel. */
   active: boolean
   onOpen: (rootMessageId: string) => void
+  /** ENG-09 — agents answering inside this thread right now. */
+  workingNames?: string[]
+  /** Open turns in this thread; one stop control cancels them all. */
+  stopTurnIds?: string[]
+  onStop?: (requestIds: string[]) => Promise<boolean>
 }
 
 /**
@@ -36,12 +43,18 @@ export default function ThreadReplyAffordance({
   isMine,
   active,
   onOpen,
+  workingNames = [],
+  stopTurnIds = [],
+  onStop,
 }: ThreadReplyAffordanceProps) {
   const { locale, t } = useLocale()
   const count = replyCount(index, root.id)
   const align = isMine ? 'justify-end' : 'justify-start'
+  const working = workingNames.length > 0
 
-  if (count === 0) {
+  // A thread with work under way advertises itself even before its
+  // first reply lands, so the reader can see and stop it from here.
+  if (count === 0 && !working) {
     return (
       <div className={`mt-1 flex ${align} md:pointer-fine:absolute md:pointer-fine:top-0 md:pointer-fine:mt-0 ${isMine ? 'md:pointer-fine:left-0' : 'md:pointer-fine:right-0'}`}>
         <button
@@ -70,7 +83,7 @@ export default function ThreadReplyAffordance({
   const last = lastReplyAt(index, root.id)
 
   return (
-    <div className={`mt-1.5 flex ${align}`}>
+    <div className={`mt-1.5 flex flex-wrap items-center gap-1 ${align}`}>
       <button
         type="button"
         onClick={() => onOpen(root.id)}
@@ -101,20 +114,35 @@ export default function ThreadReplyAffordance({
             )
           })}
         </span>
-        <span className="font-medium text-[var(--color-brand-text)]">
-          {t(count === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count })}
-        </span>
+        {count > 0 && (
+          <span className="font-medium text-[var(--color-brand-text)]">
+            {t(count === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count })}
+          </span>
+        )}
         {overflow > 0 && (
           <span className="text-[var(--color-foreground-subtle)]">
             +{overflow}
           </span>
         )}
-        {last && (
+        {working ? (
+          <span className="flex min-w-0 items-center gap-1.5 text-[var(--color-foreground-muted)]">
+            <BrailleSpinner />
+            <span className="truncate">{t('chat.threadWorking', { names: workingNames.join(', ') })}</span>
+          </span>
+        ) : last && (
           <span className="truncate text-[var(--color-foreground-subtle)]">
             {formatMessageTimestamp(last, new Date(), locale)}
           </span>
         )}
       </button>
+      {working && onStop && (
+        <TurnCancelControl
+          requestIds={stopTurnIds}
+          label={t('chat.stopThreadLabel')}
+          text={t('chat.stopThread')}
+          onCancel={onStop}
+        />
+      )}
     </div>
   )
 }

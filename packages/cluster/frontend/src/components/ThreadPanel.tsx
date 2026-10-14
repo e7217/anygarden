@@ -11,6 +11,18 @@ import { threadDraftKey } from '@/lib/composerDrafts'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
 import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
+import BrailleSpinner from '@/components/BrailleSpinner'
+import TurnCancelControl from '@/components/TurnCancelControl'
+
+/** ENG-09 — an agent answering inside this thread. */
+export interface ThreadWorker {
+  participantId: string
+  name: string
+  /** Localized stage, e.g. "Writing a reply…". */
+  stage?: string
+  /** This agent's open turns in the thread. */
+  requestIds: string[]
+}
 
 interface ThreadPanelProps {
   focusedMessageId?: string | null
@@ -28,6 +40,9 @@ interface ThreadPanelProps {
   onSend: (content: string, metadata?: Record<string, unknown>) => void
   onTyping: (isTyping: boolean) => void
   onClose: () => void
+  workers?: ThreadWorker[]
+  /** Cancels turns; omitted when the viewer may not stop agents. */
+  onCancelTurns?: (requestIds: string[]) => Promise<boolean>
 }
 
 /**
@@ -57,6 +72,8 @@ export default function ThreadPanel({
   onSend,
   onTyping,
   onClose,
+  workers = [],
+  onCancelTurns,
 }: ThreadPanelProps) {
   const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -78,7 +95,7 @@ export default function ThreadPanel({
   useEffect(() => {
     if (focusedMessageId) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [replies.length, focusedMessageId])
+  }, [replies.length, workers.length, focusedMessageId])
 
   return (
     <>
@@ -164,6 +181,25 @@ export default function ThreadPanel({
                 />
               </div>
             ))}
+            {workers.length > 0 && (
+              <ul className="flex flex-col gap-1" data-testid="thread-workers">
+                {workers.map(worker => (
+                  <li key={worker.participantId} className="flex min-h-[var(--control-icon-size)] items-center gap-2">
+                    <BrailleSpinner />
+                    <span className="min-w-0 flex-1 truncate text-caption text-[var(--color-foreground-muted)]">
+                      {worker.stage ? `${worker.name} · ${worker.stage}` : worker.name}
+                    </span>
+                    {onCancelTurns && (
+                      <TurnCancelControl
+                        requestIds={worker.requestIds}
+                        label={t('chat.stopAgentTurn', { name: worker.name })}
+                        onCancel={onCancelTurns}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
             <div ref={bottomRef} />
           </div>
         </ScrollArea>

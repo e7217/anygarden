@@ -245,6 +245,9 @@ export const chatEn = {
   'chat.editMessageHint': 'Enter to save · Esc to cancel',
   'chat.stopAgentTurn': 'Stop {{name}}',
   'chat.stopAgentTurnFailed': 'Could not stop the agent. Try again.',
+  'chat.threadWorking': '{{names}} working',
+  'chat.stopThread': 'Stop',
+  'chat.stopThreadLabel': 'Stop all work in this thread',
 } as const
 
 export const chatKo: Record<keyof typeof chatEn, string> = {
@@ -494,4 +497,7 @@ export const chatKo: Record<keyof typeof chatEn, string> = {
   'chat.editMessageHint': 'Enter 저장 · Esc 취소',
   'chat.stopAgentTurn': '{{name}} 작업 중지',
   'chat.stopAgentTurnFailed': '에이전트를 중지하지 못했습니다. 다시 시도하세요.',
+  'chat.threadWorking': '{{names}} 작업 중',
+  'chat.stopThread': '중지',
+  'chat.stopThreadLabel': '이 스레드의 작업 모두 중지',
 }

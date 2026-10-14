@@ -1,82 +1,53 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
 
-interface OpenTurn {
-  request_id: string
-  participant_id: string | null
-}
-
 interface TurnCancelControlProps {
-  roomId: string
-  participantId: string
-  agentName: string
+  /** Open turns this control cancels; renders nothing when empty. */
+  requestIds: string[]
+  /** Accessible name, e.g. "Stop Helper" or "Stop all work in this thread". */
+  label: string
+  /** Visible text beside the icon; icon-only when omitted. */
+  text?: string
+  onCancel: (requestIds: string[]) => Promise<boolean>
 }
 
-/** ENG-09 — stop button beside an agent's "working" indicator.
+/** ENG-09 — stop button for one agent's turn, or for every turn in a thread.
  *
- *  Looks up the agent's open general-room turn (execution-bound turns are
- *  excluded server-side; they use the execution cancel path) and renders
- *  only while one exists. */
-export default function TurnCancelControl({ roomId, participantId, agentName }: TurnCancelControlProps) {
+ *  Execution-bound turns never reach it: the open-turn listing excludes
+ *  them server-side because they use the execution cancel path. */
+export default function TurnCancelControl({ requestIds, label, text, onCancel }: TurnCancelControlProps) {
   const { t } = useLocale()
-  const [requestId, setRequestId] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [failed, setFailed] = useState(false)
 
-  useEffect(() => {
-    let active = true
-    setRequestId(null)
-    setFailed(false)
-    if (!roomId) return
-    apiFetch(`/api/v1/turns/open?room_id=${encodeURIComponent(roomId)}`, {})
-      .then(resp => (resp.ok ? resp.json() : []))
-      .then((turns: OpenTurn[]) => {
-        if (!active || !Array.isArray(turns)) return
-        const turn = turns.find(row => row.participant_id === participantId)
-        setRequestId(turn?.request_id ?? null)
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-    }
-  }, [roomId, participantId])
-
-  if (!requestId) return null
+  if (requestIds.length === 0) return null
 
   const handleCancel = async () => {
     setPending(true)
     setFailed(false)
     try {
-      const resp = await apiFetch(`/api/v1/turns/${encodeURIComponent(requestId)}/cancel`, { method: 'POST' })
-      if (resp.ok) {
-        setRequestId(null)
-      } else {
-        setFailed(true)
-      }
-    } catch {
-      setFailed(true)
+      setFailed(!(await onCancel(requestIds)))
     } finally {
       setPending(false)
     }
   }
 
-  const label = t('chat.stopAgentTurn', { name: agentName })
   return (
     <div className="flex items-center gap-2">
       <Button
         type="button"
         variant="ghost"
-        size="icon"
+        size={text ? 'sm' : 'icon'}
         aria-label={label}
         title={label}
         disabled={pending}
         onClick={handleCancel}
-        className="text-[var(--color-foreground-muted)] hover:text-[var(--color-danger)]"
+        className="gap-1.5 text-[var(--color-foreground-muted)] hover:text-[var(--color-danger)]"
       >
         <Square aria-hidden="true" />
+        {text && <span className="text-caption">{text}</span>}
       </Button>
       {failed && (
         <span role="alert" className="text-caption text-[var(--color-danger)]">

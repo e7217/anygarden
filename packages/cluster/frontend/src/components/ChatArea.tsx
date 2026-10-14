@@ -16,6 +16,7 @@ import { useRoomFiles } from '@/hooks/useRoomFiles'
 import ThreadReplyAffordance from '@/components/ThreadReplyAffordance'
 import { canHostThread, type ThreadIndex } from '@/lib/threads'
 import { stageLabel, type AgentStage, type PeerProgress } from '@/lib/typingStage'
+import { activeTurnByParticipant, placeWorkingParticipants, threadTurnIds, type OpenTurn } from '@/lib/openTurns'
 import { isHiddenSystemMessage } from '@/lib/systemMessages'
 import { useLocale } from '@/i18n/LocaleProvider'
 
@@ -42,6 +43,11 @@ interface ChatAreaProps {
   /** ENG-09 — show a stop control beside working agents. Off for guests,
    *  whom the cancel endpoint rejects. */
   canCancelTurns?: boolean
+  /** ENG-09 — the room's open general turns (``useOpenTurns``). Work
+   *  answering inside a thread is shown on that thread's reply row, not
+   *  at the bottom of the timeline. */
+  openTurns?: OpenTurn[]
+  onCancelTurns?: (requestIds: string[]) => Promise<boolean>
 }
 
 export default function ChatArea({
@@ -56,6 +62,8 @@ export default function ChatArea({
   activeThreadRootId,
   onOpenThread,
   canCancelTurns = true,
+  openTurns = [],
+  onCancelTurns,
 }: ChatAreaProps) {
   const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -205,17 +213,27 @@ export default function ChatArea({
     [pendingQueries, getViewport],
   )
 
-  const typingNames = Array.from(typingUsers ?? [])
-    .filter(pid => pid !== myParticipantId)
-    .map(pid => {
-      const name = participants[pid]?.display_name ?? pid.slice(0, 8)
-      const stage = typingStages[pid]
-      if (!stage) return name
-      return `${name} · ${stageLabel(t, stage, typingProgress[pid])}`
-    })
+  const typingIds = Array.from(typingUsers ?? []).filter(pid => pid !== myParticipantId)
+  const nameOf = (pid: string) => participants[pid]?.display_name ?? pid.slice(0, 8)
+  // A thread shows its own work only when its reply row is on screen.
+  const shownRootIds = new Set(
+    threadIndex && onOpenThread ? timeline.filter(m => canHostThread(threadIndex, m.id)).map(m => m.id) : [],
+  )
+  const { main: mainTypingIds, byThread: threadTypingIds } = placeWorkingParticipants(
+    typingIds,
+    openTurns,
+    rootId => shownRootIds.has(rootId),
+  )
+  const typingNames = mainTypingIds.map(pid => {
+    const stage = typingStages[pid]
+    if (!stage) return nameOf(pid)
+    return `${nameOf(pid)} · ${stageLabel(t, stage, typingProgress[pid])}`
+  })
 
-  const typingAgentIds = (canCancelTurns ? Array.from(typingUsers ?? []) : [])
-    .filter(pid => pid !== myParticipantId && participants[pid]?.kind === 'agent')
+  const cancellable = canCancelTurns && onCancelTurns
+  const activeTurns = activeTurnByParticipant(openTurns)
+  const typingAgentIds = (cancellable ? mainTypingIds : [])
+    .filter(pid => participants[pid]?.kind === 'agent')
 
   useEffect(() => {
     if (focusedMessageId) return
@@ -272,6 +290,9 @@ export default function ChatArea({
                     isMine={msg.participant_id === myParticipantId}
                     active={activeThreadRootId === msg.id}
                     onOpen={onOpenThread}
+                    workingNames={threadTypingIds.get(msg.id)?.map(nameOf)}
+                    stopTurnIds={cancellable ? threadTurnIds(openTurns, msg.id) : undefined}
+                    onStop={onCancelTurns}
                   />
                 )}
               </div>
@@ -286,16 +307,19 @@ export default function ChatArea({
                 <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] bg-[var(--color-surface)] border border-[var(--color-border)] px-4 py-2.5 sm:max-w-[75%] md:max-w-[70%]">
                   <BrailleSpinner />
                 </div>
-                {/* ENG-09 — stop control per working agent; renders only
-                    while that agent has an open general-room turn. */}
-                {typingAgentIds.map(pid => (
-                  <TurnCancelControl
-                    key={pid}
-                    roomId={currentRoomId}
-                    participantId={pid}
-                    agentName={participants[pid]?.display_name ?? pid.slice(0, 8)}
-                  />
-                ))}
+                {/* ENG-09 — stop control per agent working in the main
+                    timeline; thread work is stopped from its reply row. */}
+                {onCancelTurns && typingAgentIds.map(pid => {
+                  const turn = activeTurns.get(pid)
+                  return (
+                    <TurnCancelControl
+                      key={pid}
+                      requestIds={turn ? [turn.request_id] : []}
+                      label={t('chat.stopAgentTurn', { name: nameOf(pid) })}
+                      onCancel={onCancelTurns}
+                    />
+                  )
+                })}
               </div>
             </div>
           )}

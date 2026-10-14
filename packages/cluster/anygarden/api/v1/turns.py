@@ -127,6 +127,9 @@ class OpenTurnOut(BaseModel):
     room_id: str
     agent_id: str | None
     participant_id: str | None
+    # Root of the thread the turn answers in, or None for the main
+    # timeline — lets the UI show a thread's work inside that thread.
+    thread_root_id: str | None
     state: str
     created_at: str
 
@@ -156,7 +159,8 @@ async def list_open_room_turns(
     return [
         OpenTurnOut(
             request_id=turn.request_id, room_id=turn.room_id, agent_id=turn.agent_id,
-            participant_id=turn.target_participant_id, state=turn.state,
+            participant_id=turn.target_participant_id,
+            thread_root_id=turn.thread_root_id, state=turn.state,
             created_at=turn.created_at.isoformat(),
         )
         for turn in rows
