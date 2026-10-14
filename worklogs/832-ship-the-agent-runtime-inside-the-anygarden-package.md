@@ -1,8 +1,8 @@
 # refactor(agent): ship the agent runtime inside the anygarden package (#832)
 
-- Commit: `02263fd` (45f672c61620ad04a2b22e3cf19a86ccaf75299d)
+- Commit: `02263fd` (02263fdb072497aa258544ee011ad4aabeaa38e2)
 - Author: Changyong Um
-- Date: 2026-10-14T16:02:30+09:00
+- Date: 2026-10-14T16:01:21+09:00
 - PR: —
 
 ## Situation
