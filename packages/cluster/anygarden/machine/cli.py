@@ -28,7 +28,10 @@ from anygarden.machine.daemon import MachineDaemon
 from anygarden.machine.detector import detect_engines
 from anygarden.machine.updater import run_update
 from anygarden.machine.workspace_registry import WorkspaceRegistry
-from anygarden.observability.logging import BestEffortPrintLoggerFactory
+from anygarden.observability.logging import (
+    BestEffortPrintLoggerFactory,
+    settle_standard_streams,
+)
 
 log = structlog.get_logger()
 
@@ -360,7 +363,13 @@ def run(
     try:
         asyncio.run(daemon.run())
     except KeyboardInterrupt:
-        click.echo("Daemon stopped.")
+        try:
+            click.echo("Daemon stopped.")
+        except OSError:  # full disk: the stop notice is best effort
+            pass
+    # A clean stop must exit 0 even when a full disk left unflushable log
+    # bytes behind (the interpreter's failing exit flush would make it 120).
+    settle_standard_streams()
 
 
 @main.command()

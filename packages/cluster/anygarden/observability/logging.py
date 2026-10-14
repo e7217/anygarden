@@ -11,6 +11,8 @@ merged into every record, so logs join the OTEL traces emitted by
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from typing import Any
 
 import structlog
@@ -70,6 +72,38 @@ class BestEffortPrintLoggerFactory:
 
     def __call__(self, *args: Any) -> BestEffortPrintLogger:
         return BestEffortPrintLogger(self._file)
+
+
+def settle_standard_streams() -> None:
+    """Flush stdout/stderr now so the interpreter's exit flush cannot fail.
+
+    Best-effort structlog writes (NODE-10) that hit a full disk leave their
+    bytes in the stream buffers. Python flushes those at interpreter exit
+    and, when that flush fails, exits with status 120 even though shutdown
+    succeeded, which a supervisor misreads as a crash. Call this at the end
+    of a shutdown: a stream that cannot be flushed has its file descriptor
+    pointed at ``os.devnull``, so the pending bytes (already lost to the
+    full disk) are dropped and the exit status reflects the real result.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.flush()
+        except (OSError, ValueError):  # ValueError: flush of a closed stream
+            pass
+        else:
+            continue
+        try:
+            fd = stream.fileno()
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(devnull, fd)
+            finally:
+                os.close(devnull)
+            stream.flush()  # the pending bytes now drain into /dev/null
+        except (OSError, ValueError):
+            pass
 
 
 def configure_logging(log_level: str = "INFO", *, dev: bool = False) -> None:

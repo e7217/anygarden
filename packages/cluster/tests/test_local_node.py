@@ -1588,3 +1588,160 @@ def test_configured_structlog_writes_are_best_effort():
     logger = BestEffortPrintLoggerFactory(FullDisk())()
     for method in ("info", "warning", "error", "exception", "critical", "msg"):
         getattr(logger, method)("drain_complete")  # must not raise
+
+
+@pytest.mark.req("NODE-10")
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["clean", "cleanup-fails"])
+def test_real_cli_exit_status_survives_unflushable_stdout(tmp_path, cleanup_fails):
+    """A full disk at exit must not turn a clean shutdown into exit code 120.
+
+    With stdout/stderr redirected to a file on a full disk, writes that failed
+    (best effort since #822) stay in the stream buffers. Python's final
+    flush at interpreter exit then fails and the process exits 120 although
+    shutdown succeeded. The disk filling is modelled by pointing fds 1/2 at
+    ``/dev/full`` (every write fails with ENOSPC) just before ``stop``, with
+    bytes still buffered. The exit status must reflect the real shutdown:
+    0 when cleanup was confirmed, non-zero when it genuinely failed.
+    """
+    import os
+    import socket
+    import time
+    import urllib.request
+
+    if not os.path.exists("/dev/full"):
+        pytest.skip("needs /dev/full to model a full disk")
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    environment = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("ANYGARDEN_") and k != "WEB_CONCURRENCY"
+    }
+    for key in (
+        "SKILL_STALE_INTERVAL_HOURS",
+        "ORPHAN_SWEEPER_INTERVAL_SEC",
+        "TURN_RECOVERY_INTERVAL_SEC",
+    ):
+        environment["ANYGARDEN_" + key] = "0"
+    marker = tmp_path / "disk-full"
+    filled = tmp_path / "disk-filled"
+    data_dir = tmp_path / "node"
+    script = f"""
+import os, pathlib, sys, threading, time
+from anygarden.cli import dispatch
+
+marker = pathlib.Path({str(marker)!r})
+filled = pathlib.Path({str(filled)!r})
+
+def fill_disk():
+    while not marker.exists():
+        time.sleep(0.01)
+    full = os.open("/dev/full", os.O_WRONLY)
+    os.dup2(full, 1)
+    os.dup2(full, 2)
+    os.close(full)
+    # Bytes the process still holds when the disk is full: block-buffered
+    # stdout keeps them until the interpreter's final flush.
+    sys.stdout.write("pending log tail\\n")
+    filled.touch()
+
+threading.Thread(target=fill_disk, daemon=True).start()
+if {cleanup_fails!r}:
+    from anygarden.node.execution import LocalExecutionBackend
+    original_close = LocalExecutionBackend.close
+    async def close(self):
+        await original_close(self)
+        raise RuntimeError("child cleanup unconfirmed")
+    LocalExecutionBackend.close = close
+dispatch()
+"""
+    command = [sys.executable, "-c", "from anygarden.cli import dispatch; dispatch()"]
+    log_path = tmp_path / "server.log"
+    with log_path.open("w") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, "start", "--data-dir",
+             str(data_dir), "--port", str(port)],
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                assert process.poll() is None, log_path.read_text()
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/healthz", timeout=0.2
+                    ) as response:
+                        assert response.status == 200
+                        break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                pytest.fail("CLI startup timed out")
+            marker.touch()
+            deadline = time.monotonic() + 5
+            while not filled.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert filled.exists(), "disk-full injection did not run"
+            stopped = subprocess.run(
+                command + ["stop", "--data-dir", str(data_dir), "--timeout", "15"],
+                check=False,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            exited = process.wait(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    output = log_path.read_text()
+    if cleanup_fails:
+        # The click failure status, not the interpreter's flush-failure 120.
+        assert exited == 1, output
+        assert read_object(data_dir / "node-owner.json")["state"] != "stopped"
+    else:
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr + output
+        assert exited == 0, output
+        assert read_object(data_dir / "node-owner.json")["state"] == "stopped"
+
+
+@pytest.mark.req("NODE-10")
+def test_machine_daemon_clean_stop_exits_zero_with_unflushable_stdout(tmp_path):
+    """The standalone machine daemon has the same exit shape as the node:
+    a clean stop on a full disk must exit 0, not the flush-failure 120."""
+    import os
+
+    if not os.path.exists("/dev/full"):
+        pytest.skip("needs /dev/full to model a full disk")
+    script = """
+import os, sys
+from anygarden.machine import cli
+from anygarden.machine.daemon import MachineDaemon
+
+async def run(self):
+    # The disk fills while the daemon runs; its last log bytes stay buffered.
+    print("daemon still running")
+    full = os.open("/dev/full", os.O_WRONLY)
+    os.dup2(full, 1)
+    os.dup2(full, 2)
+    os.close(full)
+    sys.stdout.write("pending log tail\\n")
+MachineDaemon.run = run
+cli.main()
+"""
+    environment = {**os.environ, "HOME": str(tmp_path)}
+    with (tmp_path / "daemon.log").open("w") as log:
+        exited = subprocess.run(
+            [sys.executable, "-c", script, "run", "--server", "http://127.0.0.1:9",
+             "--token", "t", "--machine-id", "m"],
+            check=False,
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+        ).returncode
+    assert exited == 0, (tmp_path / "daemon.log").read_text()

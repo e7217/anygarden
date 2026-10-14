@@ -443,3 +443,19 @@ async def test_timeout_is_transient_only_before_any_tool(
         assert terminal_failure_category(receipt.outcome, receipt.reason)[1] is transient
     finally:
         await m.close()
+
+
+@pytest.mark.req("EXE-10")
+def test_safe_event_list_was_reviewed_for_the_pinned_pi_version():
+    """The fail-closed safe-event list is only valid for the Pi it was read
+    against. Bumping the pinned engine must force a re-review of the list."""
+    from anygarden_agent.runtime.execution import pi
+
+    assert pi.PI_SAFE_EVENTS_REVIEWED_FOR == pi.ENGINE_VERSION, (
+        f"Pi is pinned to {pi.ENGINE_VERSION} but the side-effect-free event "
+        f"list (_SAFE_EVENTS, _SAFE_MESSAGE_ROLES, _SAFE_CONTENT_BLOCKS in "
+        f"anygarden_agent/runtime/execution/pi.py) was reviewed for "
+        f"{pi.PI_SAFE_EVENTS_REVIEWED_FOR}. Re-check Pi {pi.ENGINE_VERSION}'s "
+        f"JSON event types and message/content shapes, update the lists, then "
+        f"set PI_SAFE_EVENTS_REVIEWED_FOR = {pi.ENGINE_VERSION!r}."
+    )
