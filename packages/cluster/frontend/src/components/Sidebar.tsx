@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
 import UpdateDot from '@/components/UpdateDot'
@@ -439,8 +439,17 @@ export default function Sidebar({
             : 'md:visible md:static md:z-auto md:translate-x-0 md:w-64'}
         `}
       >
-      {/* The desktop control stays at x=12/y=12 in both rail states. */}
+      {/* Wordmark first; the desktop collapse toggle and the mobile close
+          button share the trailing slot (#827). */}
       <div className="flex h-14 shrink-0 items-center gap-2 px-3">
+        <button
+          type="button"
+          onClick={() => go('/')}
+          aria-label={t('chat.goHome')}
+          className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center rounded-[var(--radius-sm)] px-1 text-left text-body font-semibold tracking-tight text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
+        >
+          <span className="truncate">Anygarden</span>
+        </button>
         <button
           type="button"
           className="hidden h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] md:inline-flex"
@@ -452,14 +461,6 @@ export default function Sidebar({
           title={t('chat.collapseSidebarShortcut')}
         >
           <PanelLeftClose className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() => go('/')}
-          aria-label={t('chat.goHome')}
-          className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center rounded-[var(--radius-sm)] px-1 text-left text-sm font-semibold tracking-tight text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
-        >
-          <span className="truncate">Anygarden</span>
         </button>
         <button
           type="button"
@@ -521,6 +522,24 @@ export default function Sidebar({
               </DndContext>
             </div>
           )}
+
+          {/* Projects section header — same shape as the agents header so
+              project creation reads as part of this section (#827). */}
+          <div className="flex items-center gap-1">
+            <span className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center px-2 text-badge uppercase text-[var(--color-foreground-muted)]">
+              {t('chat.projects')}
+            </span>
+            <button
+              type="button"
+              onClick={() => setProjectDialogOpen(true)}
+              aria-label={t('chat.newProject')}
+              title={t('chat.newProject')}
+              data-testid="sidebar-add-project"
+              className="inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
 
           {projects.map(project => (
             <div key={project.id} className="mb-1">
@@ -661,37 +680,29 @@ export default function Sidebar({
         )}
       </ScrollArea>
 
-      {/* New Project button */}
-      <div className="p-2">
-        <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
-          <DialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="min-h-[var(--control-sm-height)] w-full justify-start text-[var(--color-foreground-muted)]">
-              <Plus className="mr-2 h-4 w-4" />
-              {t('chat.newProject')}
+      {/* New Project dialog — opened from the projects section header. */}
+      <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('chat.createProject')}</DialogTitle>
+            <DialogDescription>{t('workspace.createProjectDescription')}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <Input
+              placeholder={t('chat.projectName')}
+              aria-label={t('chat.projectName')}
+              value={newProjectName}
+              onChange={e => setNewProjectName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
+            />
+          </div>
+          <DialogFooter>
+            <Button onClick={handleCreateProject} disabled={!newProjectName.trim()}>
+              {t('chat.create')}
             </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t('chat.createProject')}</DialogTitle>
-              <DialogDescription>{t('workspace.createProjectDescription')}</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-2">
-              <Input
-                placeholder={t('chat.projectName')}
-                aria-label={t('chat.projectName')}
-                value={newProjectName}
-                onChange={e => setNewProjectName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
-              />
-            </div>
-            <DialogFooter>
-              <Button onClick={handleCreateProject} disabled={!newProjectName.trim()}>
-                {t('chat.create')}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Rename room dialog — reused from ChatPage's room settings
           menu. Rendered only while ``editRoomId`` is set so the
@@ -796,7 +807,7 @@ export default function Sidebar({
       </Dialog>
 
       {/* User info */}
-      <div className="relative flex shrink-0 items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
+      <div data-testid="sidebar-footer" className="min-h-[var(--footer-min-height)] relative flex shrink-0 items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
         <SidebarPreferencesMenu email={user?.email} serverVersion={serverVersion} />
         <div className="flex shrink-0 items-center gap-1">
           {isAdmin && (

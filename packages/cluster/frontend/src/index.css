@@ -124,6 +124,11 @@
   --control-sm-height: 2.75rem;
   --control-lg-height: 2.75rem;
   --control-icon-size: 2.75rem;
+  /* Shared bottom band: the one-line message composer (top border 1 +
+     py-3 24 + composer border 2 + p-1.5 12 = 39px, plus its icon
+     controls). The sidebar footer uses the same minimum so both top
+     dividers form one line (#827). */
+  --footer-min-height: calc(var(--control-icon-size) + 2.4375rem);
 }
 
 @media (min-width: 640px) {
