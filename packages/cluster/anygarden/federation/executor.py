@@ -26,8 +26,8 @@ from .delegation import FAILURE_CODES, TASK_STATUS, DelegationError
 from .delegation_models import DelegationOutbox, ExecutorBinding
 
 if TYPE_CHECKING:
-    from anygarden_agent.runtime.execution import Invocation, SessionScope
-    from anygarden_agent.runtime.execution.contracts import Runtime
+    from anygarden.agent.runtime.execution import Invocation, SessionScope
+    from anygarden.agent.runtime.execution.contracts import Runtime
 
 _WIRE_ERROR_CODES = {"TIMEOUT_AFTER_SIDE_EFFECT": "TIMEOUT_STOPPED"}
 
@@ -85,7 +85,7 @@ class ExecutorBridge:
         self._locks: dict[str, asyncio.Lock] = {}
         if manager is None:
             # Legacy in-process adapter, used by the runtime contract harness.
-            from anygarden_agent.runtime.execution import (
+            from anygarden.agent.runtime.execution import (
                 LocalExecutionManager,
                 SessionScope,
             )

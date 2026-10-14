@@ -1,17 +1,20 @@
 """Loopback TCP WS: human send -> durable lease -> room fake CLI -> ledger."""
 
 import asyncio
-import importlib.util
 import json
 import os
 import secrets as entropy
 import socket
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 import uvicorn
 import websockets
+from sqlalchemy import select
+
+from anygarden.agent.cli import _setup_engine
+from anygarden.agent.client import ChatClient
+from anygarden.agent.runtime.execution.launch import ExecutionLaunch
 from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.auth.token import generate_token, hash_agent_token
@@ -31,18 +34,11 @@ from anygarden.db.models import (
     UsageLedger,
     User,
 )
-from anygarden_agent.cli import _setup_engine
-from anygarden_agent.client import ChatClient
-from anygarden_agent.runtime.execution.launch import ExecutionLaunch
-from sqlalchemy import select
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX subprocess runtime")
-_fixture_path = (
-    Path(__file__).resolve().parents[2] / "agent/tests/test_room_execution.py"
-)
-_spec = importlib.util.spec_from_file_location("_ws_room_fixture", _fixture_path)
-_fixture = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_fixture)
+# Reuse the reviewed agent fake executable and cleanup fixture.
+from tests.agent import test_room_execution as _fixture
+
 setup_room = _fixture.setup_room
 
 

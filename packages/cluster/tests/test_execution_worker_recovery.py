@@ -237,7 +237,7 @@ import importlib.abc, sys
 from types import SimpleNamespace
 class BlockAgent(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == "anygarden_agent" or fullname.startswith("anygarden_agent."):
+        if fullname == "anygarden.agent" or fullname.startswith("anygarden.agent."):
             raise ImportError("Agent package is not installed on this server")
 sys.meta_path.insert(0, BlockAgent())
 from anygarden.ws.manager import ConnectionManager
@@ -247,7 +247,7 @@ from anygarden.federation.remote_execution import RemoteExecutionManager
 transport = ExecutionTransport(None, ConnectionManager())
 worker = FederationExecutionWorker(SimpleNamespace(sessions=None, node_id="server"), transport)
 assert isinstance(worker.bridge.manager, RemoteExecutionManager)
-assert not any(key == "anygarden_agent" or key.startswith("anygarden_agent.") for key in sys.modules)
+assert not any(key == "anygarden.agent" or key.startswith("anygarden.agent.") for key in sys.modules)
 print("server-only")
 """
     result = subprocess.run(

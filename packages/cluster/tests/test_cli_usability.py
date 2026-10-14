@@ -85,7 +85,7 @@ def test_documented_help_commands_smoke(
 def test_readmes_do_not_advertise_removed_or_incomplete_commands() -> None:
     cluster_dir = Path(__file__).parents[1]
     cluster_readme = (cluster_dir / "README.md").read_text()
-    agent_readme = (cluster_dir.parent / "agent" / "README.md").read_text()
+    agent_readme = (cluster_dir / "docs" / "agent" / "README.md").read_text()
 
     assert "--engine openai" not in agent_readme
     assert "dragent[openai]" not in agent_readme

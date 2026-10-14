@@ -17,6 +17,12 @@ from uuid import uuid4
 
 import pytest
 import uvicorn
+from cryptography.fernet import Fernet
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+
+from anygarden.agent.client import ChatClient
+from anygarden.agent.runtime.execution.launch import ExecutionLaunch
 from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.auth.token import generate_token, hash_agent_token
@@ -29,11 +35,6 @@ from anygarden.federation.delegation_wiring import (
 )
 from anygarden.federation.models import Peer
 from anygarden.shared_channels.product import derived_id
-from anygarden_agent.client import ChatClient
-from anygarden_agent.runtime.execution.launch import ExecutionLaunch
-from cryptography.fernet import Fernet
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 
 from . import test_shared_channels
 from .test_delegation_product_mount import _add_remote_actor

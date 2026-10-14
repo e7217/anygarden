@@ -10,9 +10,9 @@ claim a new deployment verification on separate physical hosts.
 ## Prerequisites
 
 - Two hosts (different machines/CTs preferred) with independent storage.
-  Install `anygarden[server]` on server hosts and the matching machine/agent
-  packages on execution hosts; an integrated node installs both server and
-  agent extras. Upgrade the protocol participants together.
+  Install `anygarden[server]` on server hosts and `anygarden[machine]` (which
+  carries the agent runtime) on execution hosts; an integrated node installs
+  both server and agent extras. Upgrade the protocol participants together.
 - Exactly **one** inbound TCP port per node allowed from the other node
   (the mTLS federation listener; deployments typically pin 8451/tcp on both).
   The listener mounts only `/api/v1/federation/*` plus the shared-channel peer
@@ -44,7 +44,6 @@ claim a new deployment verification on separate physical hosts.
    ```sh
    # on the operator host
    uv build --package anygarden
-   uv build --package anygarden-agent
    # Include the matching dependency wheels in dist/ before an offline install.
    scp dist/*.whl node:/tmp/wheels/
    # on the node (root)

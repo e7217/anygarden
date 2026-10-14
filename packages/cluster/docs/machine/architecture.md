@@ -39,7 +39,7 @@ spawner.py ──→ agent directory 구성 (materialize)
     │            └── workspace/ (codex sandbox fallback only)
     │
     ▼
-subprocess ──→ anygarden-agent 실행
+subprocess ──→ python -m anygarden.agent.cli 실행
     │
     ▼
 supervisor.py ──→ 프로세스 감시, crash 보고
@@ -54,9 +54,9 @@ supervisor.py ──→ 프로세스 감시, crash 보고
    - 에이전트별 디렉토리 `~/.anygarden/agents/<agent_id>/`
    - AGENTS.md, 엔진별 설정, memory 디렉토리 작성
    - `skills/`는 agent-owned 디렉토리로 보존하고 manifest skill은 없을 때만 seed
-   - `anygarden-agent` subprocess cwd는 agent root
+   - 에이전트 subprocess cwd는 agent root
    - codex는 `read_only_paths` 미지원 버전 보호를 위해 SDK thread cwd만 `workspace/` fallback 사용
-2. **spawn**: `anygarden-agent` 또는 `uvx anygarden-agent`로 subprocess 시작
+2. **spawn**: 데몬과 같은 인터프리터로 `python -m anygarden.agent.cli` subprocess 시작 (#832 — PATH 탐색·uvx 폴백 없음)
 3. **kill**: SIGTERM → 10초 대기 → SIGKILL 순서로 종료
 
 ### Supervisor (supervisor.py)

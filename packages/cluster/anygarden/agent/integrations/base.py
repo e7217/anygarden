@@ -1,0 +1,925 @@
+"""Base engine adapter — abstract interface for LLM integrations."""
+
+from __future__ import annotations
+
+import os
+import re
+from abc import ABC, abstractmethod
+from datetime import UTC, datetime
+from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+import structlog
+
+from anygarden.agent.coordination.pending_context import (
+    drain_context,
+    resolve_speaker_label,
+    wrap_as_room_conversation,
+)
+from anygarden.agent.integrations.cycle_guard import is_cycle_detected
+from anygarden.agent.observability import metrics
+
+# How old a replayed message may be and still wake this agent. Operators
+# can widen or tighten it with ``ANYGARDEN_AGENT_CATCHUP_MAX_AGE``
+# (seconds); ``0`` disables the guard and answers every replayed wake.
+STALE_CATCHUP_SECONDS = 3600.0
+
+
+def _catchup_max_age() -> float:
+    raw = os.environ.get("ANYGARDEN_AGENT_CATCHUP_MAX_AGE")
+    if raw is None:
+        return STALE_CATCHUP_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return STALE_CATCHUP_SECONDS
+
+
+def _is_stale_catchup(msg: dict[str, Any]) -> bool:
+    """True when this frame is a replay old enough that replying to it
+    would be noise rather than work.
+
+    Frames without a usable ``created_at`` keep the pre-guard behaviour
+    (never stale), so an older server or a synthetic frame is unaffected.
+    """
+    max_age = _catchup_max_age()
+    if max_age <= 0:
+        return False
+    raw = msg.get("created_at")
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        created = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - created).total_seconds() > max_age
+
+
+if TYPE_CHECKING:
+    from anygarden.agent.client import ChatClient
+
+logger = structlog.get_logger(__name__)
+
+
+def _clean_reference_field(value: str) -> str:
+    return " ".join(value.replace("\r", " ").replace("\n", " ").split())
+
+
+def _xml_escape_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def compose_referenced_files_hint(
+    metadata: dict[str, Any] | None, room_id: str | None = None
+) -> str:
+    """Render a user-turn hint for explicitly referenced shared files.
+
+    The shared-file contents are already available through the room's
+    ``memory/shared`` context block. This hint preserves the user's
+    explicit ``$file`` intent without duplicating file contents into the
+    turn payload.
+    """
+    if not metadata:
+        return ""
+
+    references = metadata.get("references")
+    if not isinstance(references, list):
+        return ""
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for ref in references:
+        if not isinstance(ref, dict) or ref.get("type") != "shared_file":
+            continue
+
+        name = ref.get("name")
+        storage_name = ref.get("storage_name")
+        if not isinstance(name, str) or not isinstance(storage_name, str):
+            continue
+
+        name = _clean_reference_field(name)
+        storage_name = _clean_reference_field(storage_name)
+        if not name or not storage_name:
+            continue
+        if "/" in storage_name or "\\" in storage_name:
+            continue
+
+        reference_room_id = ref.get("room_id", room_id)
+        if reference_room_id is not None:
+            if (
+                not isinstance(reference_room_id, str)
+                or reference_room_id in ("", ".", "..")
+                or "/" in reference_room_id
+                or "\\" in reference_room_id
+                or "\x00" in reference_room_id
+            ):
+                continue
+            path = f"memory/shared/{reference_room_id}/{storage_name}"
+        else:
+            path = f"memory/shared/{storage_name}"
+        if path in seen:
+            continue
+        seen.add(path)
+        lines.append(f"- {_xml_escape_text(name)}: {_xml_escape_text(path)}")
+
+    if not lines:
+        return ""
+
+    return "<referenced-files>\n" + "\n".join(lines) + "\n</referenced-files>"
+
+
+def compose_concurrent_call_hint(
+    metadata: dict[str, Any] | None,
+    *,
+    my_pids: set[str],
+    roster: dict[str, Any] | None,
+) -> str:
+    """Tell an agent that the message woke other agents too (#743).
+
+    ``@everyone`` (or a human mentioning several agents) wakes every
+    target at once, so each answers without seeing the others' replies.
+    Left unsaid, a model with a coordinator-like role introduces itself
+    and then asks peers who already answered to do the same. Returns
+    ``""`` unless this agent and at least one other agent are called.
+
+    An entry counts as an agent when the roster says so or when the
+    server added it for ``@everyone`` (it only expands to agents).
+    """
+    if not metadata:
+        return ""
+    mentions = metadata.get("mentions")
+    if not isinstance(mentions, list):
+        return ""
+
+    called: list[str] = []
+    for m in mentions:
+        if not isinstance(m, dict) or m.get("type") != "user":
+            continue
+        pid = m.get("id")
+        if not isinstance(pid, str) or not pid or pid in called:
+            continue
+        brief = roster.get(pid) if roster else None
+        is_agent = (
+            isinstance(brief, dict) and brief.get("kind") == "agent"
+        ) or m.get("via") == "everyone"
+        if is_agent:
+            called.append(pid)
+
+    if len(called) < 2 or not any(pid in my_pids for pid in called):
+        return ""
+
+    names: list[str] = []
+    for pid in called:
+        if pid in my_pids:
+            continue
+        brief = roster.get(pid) if roster else None
+        name = brief.get("display_name") if isinstance(brief, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            names = []
+            break
+        names.append(_xml_escape_text(_clean_reference_field(name)))
+
+    who = f": you, {', '.join(names)}" if names else ""
+    return (
+        "<concurrent-call>\n"
+        f"This message called {len(called)} agents at once{who}.\n"
+        "Each of them is answering it separately right now, and you will "
+        "not see their replies before you finish.\n"
+        "Answer for yourself only. Do not ask the others to answer or "
+        "hand the turn to them.\n"
+        "</concurrent-call>"
+    )
+
+
+class MessagePolicy(Enum):
+    """Decision for how an incoming message should be handled.
+
+    ``decide_policy`` returns one of these three states. The two
+    original boolean outcomes (respond / skip) are still present —
+    ``INGEST_ONLY`` is the new third state that lets a message update
+    the agent's LLM-side context without triggering a response turn.
+
+    - ``RESPOND``: generate a reply. The adapter calls ``on_message``.
+    - ``INGEST_ONLY``: do not reply, but do feed this message into
+      the engine's session as context for the next active turn. The
+      adapter calls ``ingest_context``.
+    - ``SKIP``: ignore the message entirely.
+    """
+
+    RESPOND = "respond"
+    INGEST_ONLY = "ingest_only"
+    SKIP = "skip"
+
+
+def is_leased_task_assignment(msg: dict[str, Any], client) -> bool:
+    """Recognize this agent's task delivery from the authenticated server."""
+    metadata = msg.get("metadata") or {}
+    assignment = metadata.get("task_assignment")
+    return (
+        isinstance(assignment, dict)
+        and isinstance(assignment.get("task_id"), str)
+        and assignment.get("assignee_pid") in client._my_participant_ids
+        and isinstance(metadata.get("request_id"), str)
+        and isinstance(metadata.get("turn_lease"), str)
+        and bool(metadata["turn_lease"])
+        and isinstance(metadata.get("turn_attempt"), int)
+        and isinstance(metadata.get("turn_generation"), int)
+    )
+
+
+class EngineAdapter(ABC):
+    """Abstract base class for engine integrations.
+
+    Each adapter bridges incoming chat messages to an LLM engine
+    and returns the engine's response (or None to skip).
+
+    Issue #286 — session-based adapters (Claude Code, Codex, Gemini
+    CLI) all maintain a per-room ``_pending_context`` buffer for
+    ``INGEST_ONLY`` messages and apply the same drain → wrap → concat
+    pipeline before injecting the result into the next turn. The
+    type annotation here lets the default ``assemble_user_content``
+    method below operate on that buffer; concrete subclasses keep
+    initializing the dict in their own ``__init__`` so init structure
+    stays adapter-specific. Adapters that don't accumulate ambient
+    context simply leave the buffer empty and the default method
+    short-circuits to the bare input.
+    """
+
+    _pending_context: dict[str, list[tuple[float, str]]]
+
+    @abstractmethod
+    async def on_message(self, msg: dict[str, Any]) -> str | None:
+        """Process an incoming message frame.
+
+        Return a response string to send back to the room,
+        or None to not respond.
+        """
+
+    @abstractmethod
+    async def start(self) -> None:
+        """Initialize the engine (API clients, sessions, etc.)."""
+
+    async def stop(self) -> None:
+        """Cleanup resources. Override if the engine needs teardown."""
+
+    def _room_roster(self, room_id: str | None) -> dict[str, Any] | None:
+        """Return the cached participant roster for ``room_id`` (#538).
+
+        Reads ``client._participants_by_room[room_id]`` defensively so
+        adapters (and bare test subclasses) without a wired client fall
+        back to ``None`` — callers then skip name-labelling and keep the
+        pre-#538 behaviour. Same roster the ``compose_roster_suffix``
+        header draws from, keyed by participant_id.
+        """
+        client = getattr(self, "_client", None)
+        if client is None or not room_id:
+            return None
+        roster = getattr(client, "_participants_by_room", None)
+        if isinstance(roster, dict):
+            return roster.get(room_id)
+        return None
+
+    def assemble_user_content(
+        self,
+        room_id: str,
+        raw_content: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        sender_participant_id: str | None = None,
+    ) -> str:
+        """Standard user-content augmentation pipeline (#286).
+
+        Drains the room's pending-context buffer (#74 / #148 Part 3),
+        wraps any ambient lines in ``<room_conversation>`` XML
+        (#284), adds any explicit shared-file references, and prepends
+        those blocks to ``raw_content``. An empty buffer and empty
+        metadata short-circuit the function so the adapter emits
+        ``raw_content`` byte-identical to the bare-input path.
+
+        #538 — when ``sender_participant_id`` resolves to a known
+        roster entry, the addressed message itself is prefixed with
+        ``{display_name}({kind}): `` so the engine can attribute the
+        turn's trigger to its actual sender (human vs peer agent)
+        instead of treating it as an unlabelled user turn — the root
+        cause of self-misattribution and verbatim echo. When the
+        sender is omitted or unknown, ``raw_content`` is passed through
+        unchanged (byte-identical to pre-#538).
+
+        Why this lives on the base class: pre-#286 each session
+        adapter (Claude Code, Codex, Gemini CLI) inlined the same
+        three-step block right above its engine call. Adding a new
+        augmentation in #279 / #283 / #284 cost three identical
+        edits per shipment. Centralising here means the next
+        augmentation lands in one place and propagates to every
+        session adapter automatically. Subclasses may override for
+        engine-specific dedupe (codex's sha-tracked re-injection
+        guard for *system-prompt* augmentation is a separate
+        codepath and not affected).
+        """
+        parts: list[str] = []
+
+        prefix = drain_context(self._pending_context, room_id)
+        if prefix:
+            parts.append(wrap_as_room_conversation(prefix))
+
+        client = getattr(self, "_client", None)
+        context_var = getattr(client, "_execution_input_context", None)
+        execution_context = context_var.get() if context_var is not None else None
+        if execution_context is not None and execution_context.get("room_id") == room_id:
+            from anygarden.agent.runtime.execution.project_turn import (
+                compose_frozen_references,
+            )
+
+            referenced_files = compose_frozen_references(execution_context)
+        else:
+            referenced_files = compose_referenced_files_hint(metadata, room_id=room_id)
+        if referenced_files:
+            parts.append(referenced_files)
+
+        # #743 — a message that woke several agents at once.
+        client = getattr(self, "_client", None)
+        if client is not None:
+            concurrent_call = compose_concurrent_call_hint(
+                metadata,
+                my_pids=set(getattr(client, "_my_participant_ids", ()) or ()),
+                roster=self._room_roster(room_id),
+            )
+            if concurrent_call:
+                parts.append(concurrent_call)
+
+        # #538 — label the addressed message with its sender so the
+        # engine never mistakes a peer/human turn for its own voice.
+        sender_label = resolve_speaker_label(
+            sender_participant_id, self._room_roster(room_id)
+        )
+        labelled_content = (
+            f"{sender_label}: {raw_content}" if sender_label else raw_content
+        )
+
+        if not parts:
+            return labelled_content
+
+        parts.append(labelled_content)
+        return "\n\n".join(parts)
+
+    def _record_turn_input(self, room_id: str | None, text: str | None) -> None:
+        """Stash the augmented input handed to the engine this turn (#433).
+
+        The ``run_engine`` closure reads it back via ``_take_turn_input``
+        right after ``on_message`` returns, so the supervisor can surface
+        it on the ``engine_call_finished`` frame for gateway-free turn-I/O
+        tracing. Keyed by ``room_id`` (per-room single slot, overwritten
+        each turn). The supervisor serializes turns per room and the
+        record→take pair runs within one turn, so a concurrent turn in a
+        *different* room writes a different key and never races. Lazy dict
+        init keeps subclass ``__init__`` unchanged.
+        """
+        if not room_id or text is None:
+            return
+        buf = getattr(self, "_turn_input_buf", None)
+        if buf is None:
+            buf = {}
+            self._turn_input_buf = buf
+        buf[room_id] = text
+
+    def _take_turn_input(self, room_id: str | None) -> str | None:
+        """Pop the stashed turn input for ``room_id`` (None if absent)."""
+        if not room_id:
+            return None
+        buf = getattr(self, "_turn_input_buf", None)
+        if not buf:
+            return None
+        return buf.pop(room_id, None)
+
+    async def ingest_context(self, msg: dict[str, Any]) -> None:
+        """Absorb a message into the engine's context without replying.
+
+        Called by the handler when ``decide_policy`` returns
+        ``INGEST_ONLY``. Default is a no-op so adapters that haven't
+        opted in stay source-compatible — they simply drop the
+        ambient message as before.
+
+        Session-based adapters (Claude Code, Gemini CLI, Codex)
+        override this to stash ``msg`` in a per-room buffer and
+        consume it as a prompt prefix on the next ``on_message``
+        call. Raw-SDK adapters that already own the message history
+        can manage ingestion internally and leave this as a no-op.
+        """
+        return
+
+
+def compose_memory_suffix(
+    client: "ChatClient | None",
+    room_id: str | None,
+) -> str:
+    """Shared helper — assemble the cross-engine memory / ephemeral block.
+
+    Issue #237 — three engine adapters (Claude Code, Codex, Gemini CLI)
+    all inject the same memory / ephemeral instructions into their
+    respective system prompts. Centralising the read-from-client and
+    ``compose_memory_block`` call here avoids duplicated logic and
+    ensures all engines see the same content.
+
+    Returns an empty string when the client is absent or the welcome
+    frame has not arrived yet — adapters concatenate the result so a
+    leading newline is only emitted when the block is non-empty.
+    """
+    if client is None:
+        return ""
+
+    # Both attributes are populated by the welcome frame handler in
+    # ``anygarden.agent.client``. Fall back defensively so pre-#237 clients
+    # stay source-compatible.
+    from anygarden.agent.memory.scope import room_memory_snapshot
+
+    snapshot = (
+        room_memory_snapshot(
+            (getattr(client, "_room_memory", {}) or {}).get(room_id),
+            room_id=room_id, generation=getattr(client, "_generation", None),
+        ) if room_id else None
+    )
+    memory_md = snapshot["memory_md"] if snapshot else None
+    room_ephemeral_map = getattr(client, "_room_ephemeral", {}) or {}
+    ephemeral = bool(room_ephemeral_map.get(room_id, False)) if room_id else False
+
+    # #246 / #345 — room shared files live under
+    # ``<agent_root>/memory/shared`` and the agent subprocess cwd is now
+    # ``<agent_root>``. Codex may use a narrower SDK thread cwd later,
+    # but this Python-side prompt assembly reads from the process cwd.
+    from pathlib import Path
+
+    from anygarden.agent.memory import (
+        compose_memory_block,
+        compose_shared_context_block,
+    )
+
+    context_var = getattr(client, "_execution_input_context", None)
+    execution_context = context_var.get() if context_var is not None else None
+    if execution_context is not None and execution_context.get("room_id") == room_id:
+        from anygarden.agent.runtime.execution.project_turn import (
+            compose_frozen_context,
+        )
+
+        shared_block = compose_frozen_context(execution_context)
+    else:
+        shared_block = (
+            compose_shared_context_block(Path.cwd() / "memory" / "shared", room_id=room_id)
+            if room_id is not None else ""
+        )
+
+    # Skip the suffix entirely when nothing would be rendered — keeping
+    # pre-#237 / pre-#246 prompts byte-for-byte identical in that case.
+    if not snapshot and not ephemeral and not shared_block:
+        return ""
+
+    memory_block = (
+        compose_memory_block(memory_md, ephemeral, room_id=room_id)
+        if (snapshot or ephemeral) else ""
+    )
+    return memory_block + shared_block
+
+
+def compose_session_context_suffix(
+    client: "ChatClient | None",
+    room_id: str | None,
+) -> str:
+    """Combine memory + roster into a single session-context suffix.
+
+    Issue #293 — three CLI engines (claude_code, codex, gemini_cli) all
+    inject the same two contextual blocks ahead of the user's turn:
+    the memory / shared-context block (#237 / #246 / #255) and the
+    room roster (#221 / #288). Each adapter previously inlined the same
+    compose-and-concat block; this helper centralises the assembly so a
+    future block (a fourth context layer) lands in one file.
+
+    Order is **memory then roster**, matching the natural reading
+    order ("here's the working set, then here's the team"). All three
+    adapters now produce this order; pre-#293 codex inlined them in
+    the reverse order as an artifact of the prepend implementation,
+    which #293 normalises.
+
+    #644 — the roster is unconditional. It used to be gated per
+    adapter on ``agents.collaboration_mode`` (and, for claude_code,
+    additionally on being the room's orchestrator), which left each
+    engine with a different answer to "does this agent know who else is
+    here". openhands ignored the gate outright, so the roster was
+    already shipping unconditionally on one engine. Knowing the team is
+    now the baseline; the server's peer-mention budget — which never
+    consulted the column — remains the actual cap on peer traffic.
+
+    Parameters
+    ----------
+    client:
+        The owning ``ChatClient``, or ``None`` for adapters that did
+        not wire one. Memory and roster both no-op without the client.
+    room_id:
+        The active room. Required to pick the room-specific ephemeral
+        flag and roster.
+
+    Returns
+    -------
+    The joined suffix or ``""`` when both blocks are empty. The output
+    never has a leading or trailing newline so callers can choose how
+    to attach it (system-prompt append vs turn-prefix prepend) without
+    accumulating blank lines.
+    """
+    parts: list[str] = []
+
+    memory = compose_memory_suffix(client, room_id)
+    if memory:
+        parts.append(memory)
+
+    if client is not None and room_id is not None:
+        roster = client.compose_roster_suffix(room_id)
+        if roster:
+            parts.append(roster)
+
+    return "\n\n".join(parts)
+
+
+class ShaTrackedInjector:
+    """Per-room sha tracker for delta-labelled context re-injection.
+
+    Issue #293 — engines whose session natively accumulates message
+    history (codex's ``thread.run_text``) must avoid re-injecting an
+    unchanged memory or roster block every turn — the LLM would see
+    the same text repeated as fresh user content. Sha-track each
+    block per room and re-emit only when it changes, with a delta
+    label on every emission after the first so the model treats the
+    repeat as an explicit update rather than a duplicate paste.
+
+    Engines that *don't* accumulate (``claude_code`` rebuilds
+    ``ClaudeAgentOptions`` per turn, ``gemini_cli`` spawns a fresh
+    subprocess per turn) bypass this class — they call
+    :func:`compose_session_context_suffix` directly and apply the
+    output without delta tracking.
+
+    Two independent sha dicts (memory, roster) so a change in one
+    block doesn't invalidate the other.
+
+    Order on emission is **memory then roster**, matching the
+    standard order in :func:`compose_session_context_suffix`.
+    """
+
+    def __init__(self) -> None:
+        self._system_sha: dict[str, str] = {}
+        self._memory_sha: dict[str, str] = {}
+        self._roster_sha: dict[str, str] = {}
+
+    def forget(self, room_id: str) -> None:
+        """Treat the next :meth:`apply` for ``room_id`` as the first one.
+
+        #805 — the sha record assumes the engine resumes the session that
+        saw the blocks. When no session will be resumed (a failed first
+        turn stores none), the fresh session must get every block again.
+        """
+        self._system_sha.pop(room_id, None)
+        self._memory_sha.pop(room_id, None)
+        self._roster_sha.pop(room_id, None)
+
+    def apply(
+        self,
+        room_id: str,
+        *,
+        memory_suffix: str,
+        roster_suffix: str,
+        memory_label: str,
+        roster_label: str,
+        system_suffix: str = "",
+        system_label: str = "",
+    ) -> str:
+        """Return the prefix to prepend to this turn's user content.
+
+        Returns ``""`` when no block changed since the last call
+        for ``room_id`` — the caller should leave the user content
+        untouched in that case. When a block did change, the
+        returned text starts with that block's delta label (omitted
+        on the very first emission per room) and ends without a
+        trailing newline so the caller can join with the user
+        content using its own separator.
+
+        Order on emission is **system, then memory, then roster**.
+
+        #540 — ``system_suffix`` carries the engine's system prompt
+        (identity + base instructions). codex ``exec`` has no native
+        system-prompt channel, so the prompt is seeded into turn
+        content on the first turn per process and suppressed thereafter
+        (codex ``resume`` keeps it in history). Optional + defaulted so
+        pre-#540 callers (memory/roster only) stay byte-identical.
+        """
+        import hashlib
+
+        parts: list[str] = []
+
+        if system_suffix:
+            new_sha = hashlib.sha256(system_suffix.encode("utf-8")).hexdigest()
+            last_sha = self._system_sha.get(room_id)
+            if new_sha != last_sha:
+                if last_sha is None:
+                    parts.append(system_suffix)
+                else:
+                    parts.append(f"{system_label}\n{system_suffix}")
+                self._system_sha[room_id] = new_sha
+
+        if memory_suffix:
+            new_sha = hashlib.sha256(memory_suffix.encode("utf-8")).hexdigest()
+            last_sha = self._memory_sha.get(room_id)
+            if new_sha != last_sha:
+                if last_sha is None:
+                    parts.append(memory_suffix)
+                else:
+                    parts.append(f"{memory_label}\n{memory_suffix}")
+                self._memory_sha[room_id] = new_sha
+
+        if roster_suffix:
+            new_sha = hashlib.sha256(roster_suffix.encode("utf-8")).hexdigest()
+            last_sha = self._roster_sha.get(room_id)
+            if new_sha != last_sha:
+                if last_sha is None:
+                    parts.append(roster_suffix)
+                else:
+                    parts.append(f"{roster_label}\n{roster_suffix}")
+                self._roster_sha[room_id] = new_sha
+
+        return "\n\n".join(parts)
+
+
+# #739 — literal ``@everyone`` as the server's ``parse_mentions`` reads it
+# (lowercase, not part of a longer name or an e-mail address).
+_EVERYONE_IN_CONTENT = re.compile(r"(?<!\w)@everyone(?![\w-])")
+
+
+def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
+    """Unified 3-state gate: how should the agent handle this message?
+
+    Returns ``MessagePolicy.{RESPOND, INGEST_ONLY, SKIP}``.
+
+    Rules (evaluated in order):
+    1. Own message → SKIP (self-echo prevention).
+    2. Thread replies wake only on a server-derived explicit mention.
+       Unmentioned replies become INGEST_ONLY before task-init or
+       room-query fallbacks can run.
+    3. For root messages, ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or
+       ``room_query`` metadata → RESPOND.
+    2d. Cycle detection (#157 Phase B) → SKIP when the same
+        (sender, content_hash) repeats within a small window.
+    4. Server-parsed explicit mention matching this agent → RESPOND.
+       The server's ``parse_mentions`` (``orchestration/rules.py``)
+       drops non-word ``@`` tokens — e.g. ``alice@example.com`` or
+       ``@dataclass`` — so we only see addressable mentions here.
+       This mirrors how Slack/Discord route via resolved mentions
+       instead of having every client re-parse raw text.
+    4. ``metadata.ingest_only`` flag → INGEST_ONLY. The server or
+       a broadcasting agent (typically the room representative's
+       ``_deliver_result``) marks a message with this flag to say
+       "every other listener should absorb this into their engine
+       session context without replying". The canonical producers
+       are the ``[취합 결과]`` broadcast on issue #74 and the ambient
+       chatter stamp on #148 Part 3.
+    5. **Explicit mentions present but NOT for us → SKIP.**
+       Previously this rule fired for every agent in the room
+       regardless of mention target, so a multi-agent room echoed N
+       responses to a single-addressed message. When the server saw
+       at least one addressable mention, treat the message as
+       targeted and stay out unless rule 3 matched.
+    6. No addressable mentions + human sender → INGEST_ONLY (SKIP when
+       the agent opted out of the context window) (#739). The server
+       expands ``@everyone`` and the implicit call in a one-agent
+       room into explicit ``user`` mentions
+       (``via: "everyone" | "sole_agent"``), which rule 4 answers, so
+       an unmentioned message here is addressed to nobody.
+    7. Agent sender, no mention → SKIP (ignore unaddressed agent
+       chatter so agents don't ping-pong forever).
+    """
+    content = msg.get("content", "")
+    sender = msg.get("participant_id")
+    metadata = msg.get("metadata") or {}
+
+    # The server binds an explicit task to this leased invocation. Historical
+    # assignment senders and catch-up/cycle guards must not turn that delivery
+    # into an idle context message. The runtime still validates its lease.
+    if is_leased_task_assignment(msg, client):
+        return MessagePolicy.RESPOND
+    if metadata.get("system_origin") == "project_execution_response" and metadata.get("ingest_only"):
+        return MessagePolicy.INGEST_ONLY
+
+    # 1. Self-message — already filtered in _process_frame but
+    #    belt-and-suspenders here too.
+    if sender and sender in client._my_participant_ids:
+        return MessagePolicy.SKIP
+
+    # 1b. Catch-up guard. A durable room cursor
+    # (``room_cursor_store``) makes the server replay everything that
+    # arrived while this agent was down, which is what we want for
+    # context — but answering an hours-old request as if it were live
+    # produces a burst of stale replies on restart. Anything older than
+    # ``STALE_CATCHUP_SECONDS`` is absorbed instead. Live traffic is
+    # never this old, so this only ever fires on replay.
+    if _is_stale_catchup(msg):
+        return MessagePolicy.INGEST_ONLY
+
+    agent_name = client._agent_name
+    raw_mentions = metadata.get("mentions") or []
+
+    # Only ``user``/``legacy`` mentions route to a specific participant.
+    # Room mentions drive cross-room queries and are handled separately
+    # above via ``room_query`` metadata, so they shouldn't force a skip
+    # here (e.g. ``<#room:xyz>`` alone should not silence the room).
+    addressable: list[dict[str, Any]] = [
+        m
+        for m in raw_mentions
+        if isinstance(m, dict) and m.get("type") in ("user", "legacy")
+    ]
+
+    # Normalise both sides so "alice" / "Alice" match. Without this
+    # the bug we're fixing would flip polarity: if the server's
+    # legacy regex captured "@alice" but the agent registered as
+    # "Alice", rule 3 would miss and rule 4 would silence the
+    # agent. Casefold handles Unicode case-insensitivity.
+    agent_key = agent_name.casefold() if agent_name else None
+
+    def _targets_me(m: dict[str, Any]) -> bool:
+        if m.get("type") == "legacy":
+            name = m.get("name")
+            return (
+                bool(agent_key)
+                and isinstance(name, str)
+                and name.casefold() == agent_key
+            )
+        if m.get("type") == "user":
+            # ID-based mention from the frontend autocomplete — the
+            # ``id`` is a ``participant_id``, which is exactly what
+            # the server puts in our welcome frame and we cache in
+            # ``_my_participant_ids``. Same namespace both ends, so
+            # ``in`` is an exact match (no casefold, no substring
+            # trap). Previously this branch returned False and the
+            # gate silenced every agent whenever the UI's token
+            # format was in play — including the ``@<guest>`` case
+            # where the addressee isn't an agent at all.
+            target = m.get("id")
+            return bool(target) and target in client._my_participant_ids
+        return False
+
+    def _is_reflected_in_content(m: dict[str, Any]) -> bool:
+        """Reject forged mention metadata on the thread wake boundary."""
+        if m.get("type") == "user" and m.get("via") == "everyone":
+            # #739 — the server expanded ``@everyone`` into this entry, so
+            # the literal keyword (not a ``<@user:ID>`` token) is what the
+            # content carries.
+            return _EVERYONE_IN_CONTENT.search(content) is not None
+        if m.get("type") == "user":
+            target = m.get("id")
+            return isinstance(target, str) and f"<@user:{target}>" in content
+        if m.get("type") == "legacy":
+            name = m.get("name")
+            if not isinstance(name, str):
+                return False
+            pattern = rf"@{re.escape(name)}(?![\w:])"
+            return re.search(pattern, content, re.IGNORECASE) is not None
+        return False
+
+    is_thread_reply = msg.get("root_message_id") is not None
+    wake_mentions = (
+        [m for m in addressable if _is_reflected_in_content(m)]
+        if is_thread_reply
+        else addressable
+    )
+    mentioned_me = any(_targets_me(m) for m in wake_mentions)
+    # Backward-compat: the server's legacy pattern ``@([\w-]+)`` can't
+    # span whitespace, so names like "@테스트 에이전트" never land in
+    # ``addressable`` as a single mention. The content scan is a
+    # last-resort fallback that recognises *this agent* directly.
+    #
+    # ``(?![\w:])`` is load-bearing: without it the scan matches
+    # substrings, so an agent literally named ``user`` would
+    # falsely flag the ID-based token ``<@user:<pid>>`` as a hit,
+    # re-opening the fan-out bug. A word-or-colon lookahead stops
+    # the match at ``@user`` followed by ``:``, while still
+    # allowing ``@테스트 에이전트 안녕`` (space after the name).
+    if not is_thread_reply and not mentioned_me and agent_name:
+        pattern = rf"@{re.escape(agent_name)}(?![\w:])"
+        if re.search(pattern, content, re.IGNORECASE):
+            mentioned_me = True
+
+    # Directed delegations execute only on the nominated agent's leased
+    # delivery, including thread requests. Raw broadcasts remain context.
+    if content.startswith("[DELEGATED]") and metadata.get("delegation_target_participant_id"):
+        target = metadata["delegation_target_participant_id"]
+        return (
+            MessagePolicy.RESPOND
+            if target in client._my_participant_ids and f"<@user:{target}>" in content
+            and isinstance(metadata.get("request_id"), str)
+            and isinstance(metadata.get("turn_lease"), str)
+            else MessagePolicy.INGEST_ONLY
+        )
+
+    # Thread replies are room-wide context, but only a canonical explicit
+    # mention wakes this agent. This precedes every legacy routing fallback.
+    if is_thread_reply and not mentioned_me:
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
+        return MessagePolicy.INGEST_ONLY
+
+    # Root-message task-init prefixes retain their legacy eager behaviour.
+    if not is_thread_reply and content.startswith(("[DELEGATED]", "[ROOM_QUERY]")):
+        return MessagePolicy.RESPOND
+
+    # Root-message room_query metadata → only the representative forwards.
+    room_query = metadata.get("room_query")
+    if not is_thread_reply and room_query:
+        rep_id = room_query.get("representative_agent_id")
+        my_agent_id = getattr(client, "_agent_id", None)
+        if rep_id and my_agent_id:
+            return (
+                MessagePolicy.RESPOND if my_agent_id == rep_id else MessagePolicy.SKIP
+            )
+        return MessagePolicy.RESPOND
+
+    # 2d. Semantic cycle detection (#157 Phase B). The same (sender,
+    # content_hash) pair repeating within a small window is a loop
+    # that ``max_agent_turns`` and the task-init reset guard can't
+    # catch — agents can emit distinct non-task-init content each
+    # turn and still be repeating the same idea. Runs *before* the
+    # mention rule so a determined @-chain can't force an agent to
+    # restate the same reply forever. Short content has ``hash=None``
+    # and is skipped inside ``is_cycle_detected``.
+    room_id = msg.get("room_id")
+    recent = (
+        client._recent_msgs.get(room_id, ())
+        if room_id and hasattr(client, "_recent_msgs")
+        else ()
+    )
+    if is_cycle_detected(msg, recent):
+        logger.warning(
+            "decide_policy.cycle_detected",
+            room_id=room_id,
+            sender=sender,
+        )
+        # #482 — count the cycle-suppression SKIP so its rate is
+        # alertable; previously only the warning above marked it, which
+        # reads like normal flow in a busy log.
+        metrics.decide_policy_cycle_skip_total.inc()
+        return MessagePolicy.SKIP
+
+    # 3. Directly mentioned → respond. Evaluated before the
+    # ingest_only flag check so addressability always wins over
+    # passive ingestion: a broadcast tagged for context that also
+    # happens to mention us is still actionable work.
+    if mentioned_me:
+        return MessagePolicy.RESPOND
+
+    # 4. Explicit ingest-only flag (#74 Stage A, #148 Part 3). Placed
+    # *after* the addressability rule so a direct mention still gets
+    # RESPOND. From this point the legacy gate would return SKIP or
+    # RESPOND based on sender kind; the ingest_only flag short-
+    # circuits that into passive ingestion instead. Producers:
+    # - ``room_query._deliver_result`` (``[취합 결과]``)
+    # - #148 Part 3: cluster ``ws/handler.py`` on ambient broadcasts
+    #   in rooms where ``context_window_enabled`` is True.
+    # #148 Part 3 opt-out: when this agent has the DB flag set, even
+    # an ingest_only broadcast is dropped. The flag is refreshed on
+    # every welcome frame (client.py) so a UI toggle + respawn
+    # propagates without a protocol round-trip.
+    if metadata.get("ingest_only"):
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
+        return MessagePolicy.INGEST_ONLY
+
+    # 5. Explicit mention list exists and does not include us →
+    # someone else is being addressed, so we stay out. Stage B
+    # (#74) promoted peer-mention messages here to INGEST_ONLY when
+    # the local env accumulator opted in; with #148 Part 3 that
+    # decision is made server-side via ``metadata.ingest_only``
+    # (handled in rule 4 above), so we no longer need a second
+    # agent-side gate.
+    if addressable:
+        return MessagePolicy.SKIP
+
+    # 6. No addressable mention from a human (#739). The message is
+    # addressed to nobody in particular, so keep it as context without
+    # replying — the same treatment as an unmentioned thread reply. The
+    # server already turned ``@everyone`` and a one-agent room into
+    # explicit mentions (rule 3), so a 1:1 room still gets its answer.
+    sender_is_agent = bool(metadata.get("_nonce"))
+    if not sender_is_agent:
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
+        return MessagePolicy.INGEST_ONLY
+
+    # 7. Agent sender, no mention → skip. The ambient-ingestion
+    # promotion that Stage B performed here has moved to the
+    # server-side ``ingest_only`` stamp (see rule 4 and cluster
+    # ``ws/handler.py::_is_ambient_candidate``).
+    return MessagePolicy.SKIP
+
+
+def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
+    """Back-compat wrapper: does ``decide_policy`` say RESPOND?
+
+    Existing call sites (adapters, tests) keep the boolean contract.
+    New handlers should call ``decide_policy`` directly to access the
+    three-way ``INGEST_ONLY`` state introduced by #74.
+    """
+    return decide_policy(msg, client) == MessagePolicy.RESPOND

@@ -202,7 +202,7 @@ def _run_server(
         # agent's post-turn ``send`` hits a dead socket and the
         # answer is silently lost. These values need to match the
         # client-side keepalive extension in
-        # ``anygarden_agent.client.ChatClient._room_loop``.
+        # ``anygarden.agent.client.ChatClient._room_loop``.
         ws_ping_interval=60,
         ws_ping_timeout=600,
     )
@@ -295,7 +295,7 @@ def _agent(ctx: click.Context) -> None:
     """Run an agent (requires ``anygarden[agent]``)."""
     agent_main = _load_or_hint(
         "agent",
-        lambda: __import__("anygarden_agent.cli", fromlist=["agent_main"]).agent_main,
+        lambda: __import__("anygarden.agent.cli", fromlist=["agent_main"]).agent_main,
     )
     agent_main(args=ctx.args, prog_name="anygarden agent", standalone_mode=True)
 
@@ -306,7 +306,7 @@ def _client(ctx: click.Context) -> None:
     """Run the interactive client (requires ``anygarden[agent]``)."""
     client_main = _load_or_hint(
         "agent",
-        lambda: __import__("anygarden_agent.cli", fromlist=["client_main"]).client_main,
+        lambda: __import__("anygarden.agent.cli", fromlist=["client_main"]).client_main,
     )
     client_main(args=ctx.args, prog_name="anygarden client", standalone_mode=True)
 
@@ -409,7 +409,7 @@ def start_node(
             'Install the node with: pip install "anygarden[server,agent]"'
         )
     try:
-        import anygarden_agent  # noqa: F401 — installed in the same execution environment
+        import anygarden.agent.cli  # noqa: F401 — needs the [agent] extra's dependencies
         import uvicorn
         from anygarden.app import create_app
         from anygarden.config import AnygardenSettings

@@ -101,7 +101,7 @@ async def test_stale_crash_watcher_cannot_retire_replacement(spawner: Spawner) -
 class TestSpawnEnvSecrets:
     """#184 follow-up: engine_secrets must NOT end up in the agent
     process env (``/proc/self/environ``). They are delivered via
-    stdin instead and the agent's ``anygarden_agent.secrets`` module
+    stdin instead and the agent's ``anygarden.agent.secrets`` module
     stores them in private memory.
     """
 
@@ -142,9 +142,6 @@ class TestSpawnEnvSecrets:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
@@ -186,9 +183,6 @@ class TestSpawnEnvSecrets:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
@@ -218,9 +212,6 @@ class TestSpawnEnvSecrets:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
@@ -271,9 +262,6 @@ class TestSpawnEnvSecrets:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
@@ -314,9 +302,6 @@ class TestSpawnEnvSecrets:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(msg)
 
@@ -341,9 +326,6 @@ class TestSpawn:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(spawn_msg)
 
@@ -366,9 +348,6 @@ class TestSpawn:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(spawn_msg)
 
@@ -394,9 +373,6 @@ class TestSpawn:
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=fake_exec,
         ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
-        ), patch(
             "anygarden.machine.spawner.watch_process",
             side_effect=capture_watch,
         ):
@@ -408,121 +384,64 @@ class TestSpawn:
             spawner._agent_dirs_root / spawn_msg.agent_id / "agent.log"
         )
 
-    async def test_spawn_falls_back_to_uvx(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
-        """When anygarden-agent is not in PATH, spawner should use uvx."""
-        mock_proc = MagicMock()
-        mock_proc.pid = 50
-        mock_proc.wait = AsyncMock(return_value=0)
-        mock_proc.stderr = None
-        mock_proc.stdin = AsyncMock()
-        captured_cmd = []
-
-        async def capture_exec(*args, **kwargs):
-            captured_cmd.extend(args)
-            return mock_proc
-
-        with patch(
-            "anygarden.machine.spawner.asyncio.create_subprocess_exec",
-            side_effect=capture_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value=None,  # anygarden-agent NOT found
-        ):
-            result = await spawner.spawn(spawn_msg)
-
-        assert result.success is True
-        assert "uvx" in captured_cmd[0]
-
-    async def test_spawn_logs_agent_binary_path_source(
-        self, spawner: Spawner, spawn_msg: SpawnManifest
+    @pytest.mark.parametrize("base_environment", [None, {"PATH": "/usr/bin"}])
+    async def test_spawn_runs_agent_with_daemon_interpreter(
+        self,
+        tmp_path: Path,
+        spawn_msg: SpawnManifest,
+        base_environment: dict[str, str] | None,
     ) -> None:
-        """PATH hit path: the spawn must emit
-        ``agent_binary_resolved`` with source=path and the discovered
-        binary path. This is the forensic trail operators rely on when
-        debugging which ``anygarden-agent`` actually ran."""
-        mock_proc = MagicMock()
-        mock_proc.pid = 60
-        mock_proc.wait = AsyncMock(return_value=0)
-        mock_proc.stderr = None
-        mock_proc.stdin = AsyncMock()
-
-        with patch(
-            "anygarden.machine.spawner.asyncio.create_subprocess_exec",
-            return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
-        ), patch("anygarden.machine.spawner.log") as mock_log:
-            await spawner.spawn(spawn_msg)
-            calls = [
-                c
-                for c in mock_log.info.call_args_list
-                if c.args and c.args[0] == "agent_binary_resolved"
-            ]
-            assert len(calls) == 1
-            assert calls[0].kwargs["source"] == "path"
-            assert calls[0].kwargs["path"] == "/usr/local/bin/anygarden-agent"
-
-    async def test_integrated_node_uses_agent_beside_interpreter(
-        self, tmp_path: Path, spawn_msg: SpawnManifest
-    ) -> None:
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        agent_binary = bin_dir / "anygarden-agent"
-        agent_binary.write_text("#!/bin/sh\n")
-        agent_binary.chmod(0o755)
+        """#832 — the agent runtime ships inside ``anygarden``, so the daemon
+        runs it with its own interpreter: same venv, same version. Nothing
+        is looked up on PATH and nothing is fetched with uvx (#683)."""
         spawner = Spawner(
             agent_dirs_root=tmp_path / "agents",
-            base_environment={"PATH": "/usr/bin"},
+            base_environment=base_environment,
         )
-        mock_proc = _mock_proc(62)
         with patch(
-            "anygarden.machine.spawner.sys.executable", str(bin_dir / "python")
+            "anygarden.machine.spawner.sys.executable", "/venv/bin/python"
         ), patch(
-            "anygarden.machine.spawner.shutil.which"
-        ) as which, patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
-            return_value=mock_proc,
+            return_value=_mock_proc(50),
         ) as create, patch("anygarden.machine.spawner.log") as mock_log:
             result = await spawner.spawn(spawn_msg)
 
         assert result.success is True
-        assert create.call_args.args[0] == str(agent_binary)
-        which.assert_not_called()
+        cmd = list(create.call_args.args)
+        assert cmd[:3] == ["/venv/bin/python", "-m", "anygarden.agent.cli"]
+        assert cmd[3] == "--engine"
+        assert "uvx" not in cmd
         resolved = [
             c for c in mock_log.info.call_args_list
             if c.args and c.args[0] == "agent_binary_resolved"
         ]
-        assert resolved[0].kwargs["source"] == "interpreter_sibling"
+        assert len(resolved) == 1
+        assert resolved[0].kwargs["source"] == "interpreter"
+        assert resolved[0].kwargs["path"] == "/venv/bin/python"
 
-    async def test_spawn_logs_agent_binary_uvx_source(
-        self, spawner: Spawner, spawn_msg: SpawnManifest
+    async def test_spawned_agent_command_actually_runs(
+        self, tmp_path: Path, spawn_msg: SpawnManifest
     ) -> None:
-        """uvx fallback path: same event key, ``source=uvx`` and
-        ``path=None`` (the binary is fetched on demand so no stable
-        filesystem path exists at spawn time)."""
-        mock_proc = MagicMock()
-        mock_proc.pid = 61
-        mock_proc.wait = AsyncMock(return_value=0)
-        mock_proc.stderr = None
-        mock_proc.stdin = AsyncMock()
-
+        """The command the spawner builds must start the real agent CLI.
+        Mocks above only pin its shape; this runs its module prefix for
+        real so a wrong entry point fails here, not on a remote machine."""
+        spawner = Spawner(agent_dirs_root=tmp_path / "agents")
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
-            return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value=None,
-        ), patch("anygarden.machine.spawner.log") as mock_log:
+            return_value=_mock_proc(51),
+        ) as create:
             await spawner.spawn(spawn_msg)
-            calls = [
-                c
-                for c in mock_log.info.call_args_list
-                if c.args and c.args[0] == "agent_binary_resolved"
-            ]
-            assert len(calls) == 1
-            assert calls[0].kwargs["source"] == "uvx"
-            assert calls[0].kwargs["path"] is None
+
+        prefix = list(create.call_args.args[:3])
+        proc = await asyncio.create_subprocess_exec(
+            *prefix,
+            "--help",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        assert proc.returncode == 0, stderr.decode()
+        assert "--engine" in stdout.decode()
 
     async def test_spawn_duplicate_agent_kills_old_and_respawns(
         self, spawner: Spawner, spawn_msg: SpawnManifest
@@ -538,9 +457,6 @@ class TestSpawn:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ), patch(
             "anygarden.machine.spawner.terminate_tree"
         ) as mock_terminate:
@@ -568,9 +484,6 @@ class TestSpawn:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=mock_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(spawn_msg)
 
@@ -609,9 +522,6 @@ class TestSpawn:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=mock_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
@@ -657,9 +567,6 @@ class TestSpawn:
             with patch(
                 "anygarden.machine.spawner.asyncio.create_subprocess_exec",
                 side_effect=mock_exec,
-            ), patch(
-                "anygarden.machine.spawner.shutil.which",
-                return_value="/usr/local/bin/anygarden-agent",
             ):
                 result = await spawner.spawn(msg)
 
@@ -704,9 +611,6 @@ class TestSpawn:
             with patch(
                 "anygarden.machine.spawner.asyncio.create_subprocess_exec",
                 side_effect=mock_exec,
-            ), patch(
-                "anygarden.machine.spawner.shutil.which",
-                return_value="/usr/local/bin/anygarden-agent",
             ):
                 result = await spawner.spawn(msg)
 
@@ -737,10 +641,6 @@ class TestSpawn:
                 "anygarden.machine.spawner.asyncio.create_subprocess_exec",
                 return_value=mock_proc,
             ),
-            patch(
-                "anygarden.machine.spawner.shutil.which",
-                return_value="/usr/local/bin/anygarden-agent",
-            ),
         ):
             result = await spawner.spawn(spawn_msg)
 
@@ -765,9 +665,6 @@ class TestGetRunning:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -799,9 +696,6 @@ class TestKill:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -825,9 +719,6 @@ class TestKill:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -859,9 +750,6 @@ class TestCleanup:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -1087,9 +975,6 @@ class TestSpawnRecordsRuntime:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -1113,9 +998,6 @@ class TestSpawnRecordsRuntime:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -1221,9 +1103,6 @@ class TestKillWithLingeringPipes:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -1267,7 +1146,7 @@ async def test_direct_endpoint_cold_restart_requires_fresh_server_config(spawner
     cold.save(frame)
     msg.engine_secrets = cold.get_secrets("direct-agent")
     proc = _mock_proc()
-    with patch("anygarden.machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as create, patch("anygarden.machine.spawner.shutil.which", return_value="/bin/anygarden-agent"):
+    with patch("anygarden.machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as create:
         result = await spawner.spawn(msg)
     assert result.success
     create.assert_awaited_once()
@@ -1304,7 +1183,7 @@ async def test_pi_native_auth_cold_restart_requires_fresh_server_config(spawner,
     cold.save(frame)
     msg.engine_secrets = cold.get_secrets("native-pi")
     proc = _mock_proc()
-    with patch("anygarden.machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as create, patch("anygarden.machine.spawner.shutil.which", return_value="/bin/anygarden-agent"):
+    with patch("anygarden.machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as create:
         result = await spawner.spawn(msg)
     assert result.success
     assert "--pi-auth-configured" in create.call_args.args
@@ -1362,9 +1241,6 @@ class TestManagedPiExecutable:
         with patch(
             "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
-        ), patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
         assert result.success is True

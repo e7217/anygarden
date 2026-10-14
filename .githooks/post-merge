@@ -4,11 +4,10 @@
 # Runs after ``git merge`` and ``git pull`` (fast-forward or real
 # merge) to keep the editable installs in ``.venv/bin/*`` in sync
 # with the checked-out source. Without this, ``git pull`` on main
-# can leave ``.venv/bin/anygarden-agent`` missing or stale, and the
-# machine daemon's spawner silently falls back to ``uvx anygarden-agent``
-# (PyPI cached version) which lags behind recent engine-adapter
-# fixes — exactly the symptom that kept Issue #142 diagnosis going
-# for hours.
+# can leave the venv's dependency set behind the lockfile, and the
+# machine daemon (which runs agents with this same interpreter, #832)
+# then fails on a missing or stale dependency — the kind of skew that
+# kept Issue #142 diagnosis going for hours.
 #
 # Idempotent: ``uv sync`` is a no-op when the lock and the installed
 # set already agree, so the cost of running it on every merge is

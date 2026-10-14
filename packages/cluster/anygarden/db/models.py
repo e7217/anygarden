@@ -320,7 +320,7 @@ class Agent(Base):
     # (default behaviour) | "trusted" (host access). NULL means
     # "fall back to the standard tier" — chosen so pre-#309 rows
     # stay byte-identical without a backfill migration. See
-    # ``anygarden_agent.integrations.codex_cli._resolve_codex_flags`` for the
+    # ``anygarden.agent.integrations.codex_cli._resolve_codex_flags`` for the
     # codex translation; gemini-cli + claude-code mappings land in
     # the follow-up PR (#309 PR-B).
     permission_level: Mapped[Optional[str]] = mapped_column(
@@ -328,7 +328,7 @@ class Agent(Base):
     )
     # Issue #493 — per-agent turn timeout in seconds. NULL means fall back
     # to the global env / hardcoded engine default (see
-    # ``anygarden_agent.integrations._turn_timeout``). The cluster API
+    # ``anygarden.agent.integrations._turn_timeout``). The cluster API
     # validates the range so it stays below the orphan-sweep threshold
     # (``ANYGARDEN_REQUEST_LIVENESS_SEC``); chosen NULL-default so pre-#493
     # rows need no backfill, mirroring ``permission_level``.

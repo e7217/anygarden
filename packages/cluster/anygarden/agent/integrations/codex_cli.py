@@ -1,0 +1,714 @@
+"""Codex CLI integration — subprocess adapter using ``codex exec --json``.
+
+Unlike the SDK-based ``codex`` engine (``integrations/codex.py``), this
+adapter shells out to the host ``codex`` binary's ``codex exec`` command
+and parses its JSONL event stream. The binary is managed externally (on
+PATH), so the engine is **decoupled from the codex-python SDK's bundled
+binary version** — the root cause of the 2026-06-24 gpt-5.5 outage where
+an old vendored binary rejected the model. See #496 and
+``docs/paperclip-vs-anygarden-agent-integration.md`` (proposal 5).
+
+Why a separate engine instead of replacing ``codex``:
+
+- Zero risk to running SDK-codex agents; the two coexist and can be
+  A/B compared (engine name ``codex-cli`` vs ``codex``).
+- JSONL is a stable wire contract, so the ``parse_notification``
+  monkeypatch shim (#190) the SDK needs is unnecessary here — unknown
+  event ``type``s are simply skipped.
+
+Session continuity uses codex's native ``resume``: the first turn in a
+room captures ``thread.started.thread_id`` from the JSONL stream and
+later turns pass it to ``codex exec resume <id>`` so conversation history
+is preserved by codex itself (no per-turn transcript rebuild). A failed resume
+is surfaced without a fresh retry: the CLI may already have performed tool
+effects before exiting.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import structlog
+
+from anygarden.agent.client import ChatClient
+from anygarden.agent.coordination.pending_context import (
+    append_context_line,
+    format_context_line,
+)
+from anygarden.agent.integrations._turn_timeout import (
+    resolve_supervisor_timeout,
+    resolve_turn_timeout,
+)
+from anygarden.agent.integrations.base import EngineAdapter, ShaTrackedInjector
+from anygarden.agent.integrations.engine_session_store import (
+    load_sessions,
+    save_sessions,
+)
+from anygarden.agent.integrations.process_helpers import (
+    _subprocess_group_kwargs,
+    _terminate_tree,
+)
+from anygarden.agent.runtime.execution.failure_feedback import (
+    CodexFailureTracker,
+    stderr_tail,
+)
+from anygarden.agent.runtime.handler_wrapper import (
+    EngineError,
+    EngineTimeoutError,
+    EngineTurn,
+    RoomHandlerSupervisor,
+    is_transient_error,
+)
+
+logger = structlog.get_logger(__name__)
+
+
+# Issue #309 — semantic permission tier → codex native dial mapping.
+# Moved here from the (removed) SDK codex adapter (#506); codex-cli is now
+# the sole consumer. Knobs: ``sandbox`` (read-only / workspace-write /
+# danger-full-access) and ``approval_policy``.
+_CODEX_TIER_FLAGS: dict[str, tuple[str, str]] = {
+    "restricted": ("read-only", "untrusted"),
+    "standard":   ("workspace-write", "never"),
+    "trusted":    ("danger-full-access", "never"),
+}
+
+
+def _resolve_codex_flags(permission_level: str | None) -> tuple[str, str]:
+    """Translate a ``permission_level`` tier into ``(sandbox, approval_policy)``.
+
+    ``None`` falls back to ``standard`` (pre-#309 behaviour). Anything else
+    raises ``ValueError`` so a typo fails loud rather than silently
+    downgrading the agent's privilege.
+    """
+    if permission_level is None:
+        return _CODEX_TIER_FLAGS["standard"]
+    try:
+        return _CODEX_TIER_FLAGS[permission_level]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown permission_level: {permission_level!r} — "
+            f"expected one of {sorted(_CODEX_TIER_FLAGS)}"
+        ) from exc
+
+
+def _codex_thread_cwd() -> Path:
+    """Return the cwd codex should use for its sandbox root.
+
+    The machine materializer creates ``workspace/`` for codex-cli agents;
+    older or test layouts fall back to ``agent_root`` (the process cwd).
+    """
+    workspace = Path.cwd() / "workspace"
+    if workspace.is_dir():
+        return workspace
+    return Path.cwd()
+
+
+# Same turn-timeout profile as the (removed) SDK codex engine (#190/#492):
+# codex tool turns can reason for minutes. Uses the ``codex`` env override
+# key (``ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC``).
+_CODEX_CLI_TIMEOUT = resolve_turn_timeout("codex")
+
+
+def _resolve_codex_cli_args(permission_level: str | None) -> list[str]:
+    """Translate a permission tier into ``codex exec`` CLI flags.
+
+    Reuses the SDK adapter's ``_CODEX_TIER_FLAGS`` table (via
+    ``_resolve_codex_flags``) so both codex engines share one permission
+    model: ``restricted`` → ``read-only``/``untrusted``, ``standard`` →
+    ``workspace-write``/``never``, ``trusted`` → ``danger-full-access``/
+    ``never``.
+
+    Both knobs ride the ``-c`` config form rather than ``-s``: the
+    ``codex exec resume`` subcommand rejects ``-s``/``-C`` (exec-only),
+    so passing ``-s`` there fails with ``unexpected argument`` and breaks
+    session continuity (#498). ``-c sandbox_mode=<s>`` and
+    ``-c approval_policy=<p>`` are accepted by BOTH exec and resume
+    (verified against codex exec 0.140/0.141: sandbox values
+    read-only|workspace-write|danger-full-access). An unknown tier raises
+    ``ValueError`` (fail-loud, same as the SDK adapter).
+    """
+    sandbox, approval_policy = _resolve_codex_flags(permission_level)
+    return [
+        "-c", f"sandbox_mode={sandbox}",
+        "-c", f"approval_policy={approval_policy}",
+    ]
+
+
+_OPERATING_LEAD_WORKFLOW = (
+    "\n\n[프로젝트 운영실 작업]\n"
+    "위임은 서브룸의 권한·도구·분업이 실제로 필요할 때만 하세요. 사용자가 담당자에게 맡기라고 했거나, "
+    "외부 제출·배포처럼 승인된 관리 작업이 필요하거나, 여러 담당의 결과가 필요할 때가 그렇습니다. "
+    "짧은 글 작성·요약·질답처럼 혼자 끝낼 수 있는 요청은 실행을 만들지 말고 이 방에서 직접 답하세요. "
+    "검토(QA) 작업은 사용자가 요청했거나 외부 동작 직전에만 추가하세요.\n"
+    "담당 서브룸에 업무를 위임할 때 begin_project_execution으로 현재 사용자 요청을 "
+    "실행에 연결하고 반환된 subrooms/assignees로 delegate_project_task를 호출하세요. "
+    "도구가 실제 작업을 만들고 입력 자료를 전달합니다. 텍스트 /delegate는 실행이 아닙니다. "
+    "모든 필수 담당 작업을 만든 뒤 seal_project_plan으로 계획을 확정하고 담당 결과를 기다리세요. "
+    "재개된 실행은 get_project_execution으로 실제 결과를 읽고 필요한 후속 작업을 이어가세요. "
+    "담당자가 작업을 막거나(TASK_BLOCKED) 담당자의 엔진 호출이 실패해 멈추면(MODEL_EXECUTION_FAILED) "
+    "resume_project_task에 구체적 지침을 담아 같은 작업을 "
+    "이어가게 하거나, 사용자에게 묻거나, 중단하세요. "
+    "미완료 작업을 완료로 보고하지 말고, 모든 필수 결과를 검토한 뒤 "
+    "complete_project_execution으로 최종 결과·산출물·검증 근거·제한사항·다음 행동을 보고하세요."
+)
+
+
+def operating_lead_workflow(metadata: dict[str, Any] | None) -> str:
+    """Return the operating-room workflow for an operating lead's turn.
+
+    #802 — only a leased delivery to an operating room's lead carries
+    ``operating_lead``; the server derives it, so it cannot be forged. A
+    delegated execution task runs as a worker even on the lead.
+    """
+    if not metadata or not metadata.get("operating_lead"):
+        return ""
+    assignment = metadata.get("task_assignment") or {}
+    if assignment.get("execution_id") and assignment.get("role") != "orchestration":
+        return ""
+    return _OPERATING_LEAD_WORKFLOW
+
+
+_GENERAL_TASK_RULE = (
+    "\n\n[작업 추적]\n"
+    "도구를 실행하거나, 파일·코드를 바꾸거나, 조사가 필요한 요청이면 작업을 시작하기 전에 "
+    "claim_current_request를 호출해 지금 답하는 요청을 내 task로 만드세요. "
+    "질문에 답하거나 대화만 하는 경우에는 호출하지 마세요. "
+    "작업이 끝나면 mark_task_status로 결과를 보고하세요. "
+    "진행에 꼭 필요한 사실이 없으면 request_task_input으로 한 번에 하나만 질문하고, "
+    "완료로 표시하지 말고 턴을 끝내세요. 사용자의 답이 오면 같은 task로 다시 깨어납니다."
+)
+
+
+def general_task_rule(metadata: dict[str, Any] | None) -> str:
+    """Return the #806 task-claim rule for a turn outside project work.
+
+    An operating lead delegates with project executions, and a project
+    execution task already has its own workflow, so neither gets the rule.
+    """
+    if metadata is None or metadata.get("operating_lead"):
+        return ""
+    assignment = metadata.get("task_assignment") or {}
+    if assignment.get("execution_id"):
+        return ""
+    return _GENERAL_TASK_RULE
+
+
+def turn_workflow(metadata: dict[str, Any] | None) -> str:
+    """The workflow block for this turn: operating room or general tasks."""
+    return operating_lead_workflow(metadata) or general_task_rule(metadata)
+
+
+class CodexCliAdapter(EngineAdapter):
+    """Adapter that calls the host ``codex exec`` CLI via subprocess.
+
+    The host machine must have ``codex`` installed and authenticated
+    (ChatGPT login under ``~/.codex/auth.json`` or the machine's
+    ``.codex`` overlay), exactly like the SDK ``codex`` engine.
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        system_prompt: str = "You are a helpful team member in a multi-agent chat. Answer concisely.",
+        reasoning_effort: str | None = None,
+        permission_level: str | None = None,
+    ) -> None:
+        # Fallback when no model is passed. Keep in sync with the codex-cli
+        # ``default_model`` in anygarden.engines.catalog (currently the
+        # GPT-6.1 workhorse tier). Production paths always pass an explicit
+        # model from the catalog/DB; this only bites the no-arg construction
+        # path.
+        self._model = model or "gpt-6.1-sol"
+        self._system_prompt = system_prompt
+        self._reasoning_effort = reasoning_effort
+        self._permission_level = permission_level
+        self._codex_path: str | None = None
+        # Per-room codex session id (``thread.started.thread_id``) for
+        # ``codex exec resume <id>``. Absent → next turn starts fresh.
+        self._room_thread_ids: dict[str, str] = {}
+        # Per-room pending context buffer (#74 Stage B) — INGEST_ONLY
+        # breadcrumbs drained as the next active turn's prompt prefix.
+        self._pending_context: dict[str, list[tuple[float, str]]] = {}
+        # #237 — owning client for memory/roster suffix composition.
+        self._client: ChatClient | None = None
+        # #461 — last turn's usage parsed from ``turn.completed``.
+        self._last_usage: dict[str, Any] | None = None
+        # #293 — sha-tracked memory/roster injector. resume preserves
+        # history natively, so re-injecting identical blocks would
+        # pollute the conversation; only changed blocks re-emit.
+        self._injector = ShaTrackedInjector()
+
+    async def start(self) -> None:
+        """Verify the ``codex`` binary is installed and reachable."""
+        self._codex_path = shutil.which("codex")
+        if self._codex_path:
+            logger.info("codex_cli.found", path=self._codex_path)
+        else:
+            logger.warning(
+                "codex_cli.not_found",
+                hint="Install codex: npm i -g @openai/codex",
+            )
+        # #526 — restore per-room resume handles persisted by a prior
+        # process so a respawned adapter can ``resume`` instead of starting
+        # cold. Missing/corrupt store → empty map (fresh start).
+        self._room_thread_ids = load_sessions(Path.cwd(), scope_version="room-memory-v1")
+
+    async def on_message(self, msg: dict[str, Any]) -> str | None:
+        """Forward the message to ``codex exec`` and return the reply."""
+        if self._codex_path is None:
+            return None
+
+        content = msg.get("content", "")
+        if not content:
+            return None
+
+        room_id = msg.get("room_id", "_default")
+
+        # Issue #286 — shared drain → ``<room_conversation>`` wrap →
+        # concat pipeline (same as codex/gemini/claude adapters).
+        metadata = msg.get("metadata")
+        turn_content = self.assemble_user_content(
+            room_id,
+            content,
+            metadata if isinstance(metadata, dict) else None,
+            sender_participant_id=msg.get("participant_id"),
+        )
+
+        # Issue #237/#293 — sha-tracked memory + roster injection. codex
+        # resume preserves history, so identical repeats are suppressed;
+        # a changed block re-emits with a delta label.
+        from anygarden.agent.integrations.base import compose_memory_suffix
+
+        memory_suffix = compose_memory_suffix(self._client, room_id)
+        # #644 — roster is unconditional (was gated on
+        # ``is_collaborative``). Kept separate from ``memory_suffix``
+        # rather than folded into ``compose_session_context_suffix``
+        # because codex sha-tracks each block independently so an
+        # unchanged one isn't re-pasted into the accumulating thread.
+        client = self._client
+        roster_suffix = (
+            client.compose_roster_suffix(room_id) if client is not None else ""
+        )
+        workflow = turn_workflow(
+            metadata if isinstance(metadata, dict) else None
+        )
+        context_scope = self._context_scope(msg)
+        # #805 — the blocks live in the engine session. A turn that starts
+        # a fresh one (e.g. after a failed first turn) needs all of them.
+        if not self._has_resumable_session(msg):
+            self._injector.forget(context_scope)
+        prefix = self._injector.apply(
+            context_scope,
+            # #540 — codex exec has no system-prompt channel, so seed the
+            # system prompt (identity + base instructions) into turn content.
+            # Unconditional (unlike roster): a solo agent still must know who
+            # it is. Injected once per process/room, then sha-suppressed.
+            system_suffix=(self._system_prompt or "") + workflow,
+            memory_suffix=memory_suffix,
+            roster_suffix=roster_suffix,
+            system_label="[시스템 지침 업데이트]",
+            memory_label="[공유 자료 업데이트]",
+            roster_label="[팀 구성 업데이트]",
+        )
+        if prefix:
+            turn_content = f"{prefix}\n\n{turn_content}"
+
+        # #433 — stash the exact text handed to the engine.
+        self._record_turn_input(room_id, turn_content)
+
+        try:
+            response = await self._call_codex(turn_content, room_id)
+            return response if response else None
+        except EngineError:
+            raise
+        except Exception as exc:
+            logger.error("codex_cli.turn_failed", room_id=room_id, error=str(exc))
+            raise EngineError(
+                str(exc), transient=is_transient_error(str(exc))
+            ) from exc
+
+    def _context_scope(self, msg):
+        from anygarden.agent.memory.scope import memory_session_scope
+
+        room_id = msg.get("room_id", "_default")
+        return room_id, memory_session_scope(self._client, room_id)
+
+    def _has_resumable_session(self, msg) -> bool:
+        from anygarden.agent.memory.scope import room_session_key
+
+        room_id = msg.get("room_id", "_default")
+        return room_session_key(self._client, room_id) in self._room_thread_ids
+
+    async def _call_codex(self, prompt: str, room_id: str) -> str | None:
+        """Run one ``codex exec`` turn (resume when a session exists).
+
+        Returns the agent reply text (``-o`` last-message file, falling
+        back to concatenated ``agent_message`` items) or ``None``. On a
+        nonzero exit the outcome requires reconciliation; the same input is
+        never automatically retried in a fresh session.
+        """
+        from anygarden.agent.memory.scope import room_session_key
+
+        session_key = room_session_key(self._client, room_id)
+        thread_id = self._room_thread_ids.get(session_key)
+        response, new_thread_id, usage, resume_failed = await self._exec_once(
+            prompt, thread_id
+        )
+        if resume_failed:
+            raise EngineError(
+                "codex-cli resume outcome requires reconciliation", transient=False
+            )
+
+        if new_thread_id:
+            self._room_thread_ids[session_key] = new_thread_id
+        self._last_usage = self._extract_usage(usage, self._model)
+        # #526 — persist resume handles so a future respawn can restore them.
+        save_sessions(Path.cwd(), self._room_thread_ids, scope_version="room-memory-v1")
+        return response
+
+    async def _exec_once(
+        self, prompt: str, thread_id: str | None
+    ) -> tuple[str | None, str | None, dict[str, Any] | None, bool]:
+        """One subprocess invocation. Returns (reply, thread_id, usage, resume_failed)."""
+        agent_root = _codex_thread_cwd()
+        # ``-o`` writes the final agent message to a file — the most
+        # robust way to recover the reply regardless of JSONL drift.
+        fd, last_msg_path = tempfile.mkstemp(prefix="codex-cli-", suffix=".txt")
+        os.close(fd)
+        try:
+            cmd: list[str] = [self._codex_path or "codex", "exec"]
+            if thread_id:
+                cmd += ["resume", thread_id]
+            # No ``-C``: ``codex exec resume`` doesn't accept it (exec-only,
+            # #498). The subprocess ``cwd=agent_root`` below sets the working
+            # dir for both the fresh-exec and resume paths.
+            cmd += ["--json", "--skip-git-repo-check"]
+            cmd += _resolve_codex_cli_args(self._permission_level)
+            if self._model:
+                cmd += ["-m", self._model]
+            if self._reasoning_effort:
+                cmd += ["-c", f"model_reasoning_effort={self._reasoning_effort}"]
+            cmd += ["-o", last_msg_path, "-"]  # prompt via stdin
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(agent_root),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                **_subprocess_group_kwargs(),
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(input=prompt.encode()),
+                    timeout=_CODEX_CLI_TIMEOUT,
+                )
+            except asyncio.CancelledError:
+                await asyncio.to_thread(_terminate_tree, proc.pid, 5.0)
+                await proc.wait()
+                raise
+            except TimeoutError as exc:
+                await asyncio.to_thread(_terminate_tree, proc.pid, 5.0)
+                await proc.wait()
+                logger.error("codex_cli.timeout", timeout=_CODEX_CLI_TIMEOUT)
+                raise EngineTimeoutError(
+                    f"codex-cli turn exceeded {_CODEX_CLI_TIMEOUT}s"
+                ) from exc
+
+            raw = stdout.decode(errors="replace")
+            parsed_thread_id, jsonl_text, usage = self._parse_codex_jsonl(raw)
+
+            if proc.returncode != 0:
+                raise self._nonzero_exit_error(proc.returncode, raw, stderr)
+
+            # Prefer the ``-o`` file; fall back to JSONL agent_message.
+            file_text = ""
+            try:
+                file_text = Path(last_msg_path).read_text(errors="replace").strip()
+            except OSError:
+                pass
+            response = file_text or jsonl_text
+            return (response or None), parsed_thread_id, usage, False
+        finally:
+            try:
+                os.unlink(last_msg_path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _nonzero_exit_error(
+        returncode: int, raw: str, stderr: bytes | None
+    ) -> EngineError:
+        """Diagnose a failed ``codex exec`` from its JSONL ``turn.failed``/``error``.
+
+        The failure is transient (eligible for the bounded auto-retry) only
+        when the provider error looks transient (429/5xx, rate limit, stream
+        disconnected, ...) AND no side-effecting item (command_execution,
+        file_change, mcp_tool_call, ...) started in this turn. Anything else,
+        including unparseable output, still requires reconciliation. This
+        never retries in-process, so a failed resume is never re-run fresh.
+        """
+        failures = CodexFailureTracker()
+        for line in raw.splitlines():
+            try:
+                failures.observe(json.loads(line))
+            except (ValueError, TypeError):
+                continue
+        code = failures.code()
+        transient = code == "MODEL_TRANSIENT_FAILURE"
+        reason = failures.reason
+        logger.error(
+            "codex_cli.nonzero_exit",
+            exit_code=returncode,
+            status=failures.status,
+            reason=reason,
+            code=code or "ENGINE_ERROR",
+            transient=transient,
+            side_effect_started=failures.side_effect_started,
+            stderr_tail=stderr_tail(stderr) if stderr else "",
+        )
+        message = f"codex-cli exited with code {returncode}"
+        if reason:
+            message += f": {reason}"
+        if not transient:
+            message += "; reconciliation required"
+        return EngineError(message, transient=transient)
+
+    @staticmethod
+    def _parse_codex_jsonl(
+        raw: str,
+    ) -> tuple[str | None, str | None, dict[str, Any] | None]:
+        """Parse ``codex exec --json`` JSONL into (thread_id, text, usage).
+
+        Only three event types matter: ``thread.started`` (session id),
+        ``item.completed`` with ``item.type == 'agent_message'`` (reply
+        text, concatenated), and ``turn.completed`` (usage). Unknown
+        types — and unparsable lines — are skipped, which is exactly why
+        this adapter needs no SDK-style protocol shim (#190).
+        """
+        thread_id: str | None = None
+        texts: list[str] = []
+        usage: dict[str, Any] | None = None
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            etype = obj.get("type")
+            if etype == "thread.started":
+                tid = obj.get("thread_id")
+                if isinstance(tid, str) and tid:
+                    thread_id = tid
+            elif etype == "item.completed":
+                item = obj.get("item")
+                if isinstance(item, dict) and item.get("type") == "agent_message":
+                    txt = item.get("text")
+                    if isinstance(txt, str) and txt:
+                        texts.append(txt)
+            elif etype == "turn.completed":
+                u = obj.get("usage")
+                if isinstance(u, dict):
+                    usage = u
+        return thread_id, ("\n".join(texts) if texts else None), usage
+
+    @staticmethod
+    def _extract_usage(
+        usage: dict[str, Any] | None, model: str | None
+    ) -> dict[str, Any]:
+        """Map ``turn.completed.usage`` to the EngineTurn usage shape.
+
+        codex reports ``input_tokens``/``output_tokens`` (plus
+        ``cached_input_tokens``/``reasoning_output_tokens`` we don't
+        surface yet) and NO cost, so ``cost_usd`` stays None. Defensive:
+        a missing/odd usage yields model-only with None tokens.
+        """
+
+        def _int(v: Any) -> int | None:
+            if isinstance(v, bool):
+                return None
+            if isinstance(v, int):
+                return v
+            if isinstance(v, float):
+                return int(v)
+            return None
+
+        if not isinstance(usage, dict):
+            return {
+                "model": model,
+                "input_tokens": None,
+                "output_tokens": None,
+                "cost_usd": None,
+            }
+        return {
+            "model": model,
+            "input_tokens": _int(usage.get("input_tokens")),
+            "output_tokens": _int(usage.get("output_tokens")),
+            "cost_usd": None,
+        }
+
+    def _take_last_usage(self) -> dict[str, Any] | None:
+        """Pop the usage parsed during the last ``_call_codex`` (#461)."""
+        usage = self._last_usage
+        self._last_usage = None
+        return usage
+
+    async def ingest_context(self, msg: dict[str, Any]) -> None:
+        """Buffer an INGEST_ONLY message for the next active turn."""
+        room_id = msg.get("room_id") or "_default"
+        line = format_context_line(msg, roster=self._room_roster(room_id))
+        if line is None:
+            return
+        append_context_line(self._pending_context, room_id, line)
+
+    async def stop(self) -> None:
+        self._room_thread_ids.clear()
+        self._pending_context.clear()
+
+
+async def integrate_with_codex_cli(
+    client: ChatClient,
+    model: str | None = None,
+    system_prompt: str = "You are a helpful team member in a multi-agent chat. Answer concisely.",
+    reasoning_effort: str | None = None,
+    permission_level: str | None = None,
+) -> CodexCliAdapter:
+    """Hook incoming messages to the ``codex exec`` CLI.
+
+    The host machine must have ``codex`` installed and authenticated.
+    Returns the adapter for lifecycle management. ``permission_level``
+    (#309) falls back to the spawner's ``ANYGARDEN_AGENT_PERMISSION_LEVEL``
+    env var when None (cluster pushes the tier as env; the adapter
+    resolves it to native CLI flags).
+    """
+    if permission_level is None:
+        env_tier = os.environ.get("ANYGARDEN_AGENT_PERMISSION_LEVEL")
+        if env_tier:
+            permission_level = env_tier
+    adapter = CodexCliAdapter(
+        model=model,
+        system_prompt=system_prompt,
+        reasoning_effort=reasoning_effort,
+        permission_level=permission_level,
+    )
+    adapter._client = client
+    await adapter.start()
+
+    return register_room_adapter(client, adapter, "codex-cli", _CODEX_CLI_TIMEOUT)
+
+
+def register_room_adapter(client, adapter, engine_name, turn_timeout):
+    """Shared policy, delegation, typing and lifecycle handler for room engines."""
+    engine_timeout = resolve_supervisor_timeout(turn_timeout)
+    supervisor = RoomHandlerSupervisor(
+        client=client, engine_name=engine_name, engine_timeout=engine_timeout
+    )
+    client._turn_supervisor = supervisor
+
+    @client.on_message
+    async def _handle(msg: dict[str, Any]) -> None:
+        room_id = msg.get("room_id", "")
+
+        from anygarden.agent.integrations.base import MessagePolicy, decide_policy
+
+        policy = decide_policy(msg, client)
+        if policy is not MessagePolicy.RESPOND:
+            if policy is MessagePolicy.INGEST_ONLY:
+                await adapter.ingest_context(msg)
+            # #720 — close a delivered turn we decline; left open it stays
+            # leased and blocks our later deliveries in this room. Frames
+            # without a turn (peer broadcasts, context) carry no request_id.
+            declined_rid = (msg.get("metadata") or {}).get("request_id")
+            if isinstance(declined_rid, str):
+                await client.sendLifecycle(
+                    room_id, declined_rid, event="handler_finished", outcome="skipped",
+                )
+            return
+
+        from anygarden.agent.integrations.delegate import (
+            execute_delegate,
+            parse_delegate,
+        )
+
+        delegate = parse_delegate(msg.get("content", ""))
+        if delegate:
+            await execute_delegate(client, msg, delegate)
+            return
+
+        from anygarden.agent.integrations.room_query import (
+            execute_room_query,
+            parse_room_query,
+        )
+
+        rq = parse_room_query(msg)
+        if rq:
+            await execute_room_query(client, msg, rq)
+            return
+
+        request_id = (msg.get("metadata") or {}).get("request_id")
+
+        async def run_engine() -> EngineTurn:
+            typing_active = True
+
+            async def _typing_loop() -> None:
+                while typing_active:
+                    stage = getattr(adapter, "progress_stage", lambda _room: None)(room_id)
+                    if stage is None:
+                        await client.sendTyping(room_id, True)
+                    else:
+                        await client.sendTyping(room_id, True, stage)
+                    await asyncio.sleep(2)
+
+            typing_task = asyncio.create_task(_typing_loop())
+            try:
+                response = await adapter.on_message(msg)
+                usage = adapter._take_last_usage() or {}
+                return EngineTurn(
+                    response or "",
+                    adapter._take_turn_input(room_id),
+                    model=usage.get("model"),
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                    cost_usd=usage.get("cost_usd"),
+                    usage_metadata=usage.get("usage_metadata"),
+                    local_execution_id=usage.get("local_execution_id"),
+                    native_outcome=usage.get("native_outcome"),
+                    native_process_state=usage.get("native_process_state"),
+                    native_reason_code=usage.get("native_reason_code"),
+                    native_transient=usage.get("native_transient"),
+                )
+            finally:
+                typing_active = False
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+                await client.sendTyping(room_id, False)
+                adapter._take_turn_input(room_id)
+                adapter._take_last_usage()
+
+        await supervisor.dispatch(
+            room_id=room_id,
+            request_id=request_id,
+            run_engine=run_engine,
+            thread_root_id=msg.get("root_message_id"),
+            delegation_id=(msg.get("metadata") or {}).get("delegation_id"),
+            turn_context={
+                key: value for key, value in (msg.get("metadata") or {}).items()
+                if key in {"turn_attempt", "turn_generation", "turn_lease", "turn_protocol", "turn_idempotency_key", "execution_id", "input_revision"}
+            },
+        )
+
+    return adapter

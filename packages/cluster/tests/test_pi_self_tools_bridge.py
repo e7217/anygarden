@@ -11,6 +11,16 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 import uvicorn
+from cryptography.fernet import Fernet
+from sqlalchemy import select
+
+from anygarden.agent.runtime.execution.pi_self_tools import (
+    ALLOWED_TOOL_NAMES,
+    CONFIG_ENV,
+    EXTENSION_PATH,
+    TOKEN_ENV,
+    prepare_pi_self_tools,
+)
 from anygarden.app import create_app
 from anygarden.auth.dependencies import get_identity
 from anygarden.config import AnygardenSettings
@@ -34,15 +44,6 @@ from anygarden.mcp_templates.service import MCPTemplateService
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.skills_library.service import SkillLibraryService
-from anygarden_agent.runtime.execution.pi_self_tools import (
-    ALLOWED_TOOL_NAMES,
-    CONFIG_ENV,
-    EXTENSION_PATH,
-    TOKEN_ENV,
-    prepare_pi_self_tools,
-)
-from cryptography.fernet import Fernet
-from sqlalchemy import select
 
 HARNESS = (
     Path(__file__).parents[2]

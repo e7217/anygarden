@@ -5,10 +5,8 @@ frames are passed to its existing writer. No real model or gateway is involved.
 """
 
 import asyncio
-import importlib.util
 import os
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 from anygarden.budgets.ledger import compute_observed_tokens
@@ -20,13 +18,9 @@ from sqlalchemy import select
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX subprocess runtime")
 
-# Reuse the reviewed agent fake executable and cleanup fixture across packages.
-_fixture_path = (
-    Path(__file__).resolve().parents[2] / "agent/tests/test_room_execution.py"
-)
-_spec = importlib.util.spec_from_file_location("_room_bridge_fixture", _fixture_path)
-_fixture = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_fixture)
+# Reuse the reviewed agent fake executable and cleanup fixture.
+from tests.agent import test_room_execution as _fixture
+
 setup_room = _fixture.setup_room
 
 

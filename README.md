@@ -21,7 +21,7 @@ usage API and preserved data; the embedded model gateway is removed.
 
 | | Version | Needed for |
 |---|---|---|
-| Python | 3.12+ | the workspace and CI; `anygarden` alone also runs on 3.11 |
+| Python | 3.12+ | the workspace, CI and every `anygarden` install |
 | [uv](https://docs.astral.sh/uv/) | any current release | installing and running the Python packages |
 | Node.js | 20+ | building the web UI |
 
@@ -102,12 +102,17 @@ checkout, run the integrated node instead. See
 
 ## Packages
 
-Anygarden is a `uv` workspace of two packages:
+Anygarden ships as one distribution, `anygarden`, from [`packages/cluster/`](packages/cluster).
+Extras pick what a host runs:
 
-| Package | Path | What it is |
+| Extra | Module | What it is |
 |---|---|---|
-| `anygarden` | [`packages/cluster/`](packages/cluster) | server, REST/WebSocket API, web UI, and the per-host machine daemon (`anygarden.machine`, installed with `anygarden[machine]`) |
-| `anygarden-agent` | [`packages/agent/`](packages/agent) | Python agent runtime and engine adapters |
+| `anygarden[server]` | `anygarden` | server, REST/WebSocket API and web UI |
+| `anygarden[machine]` | `anygarden.machine` | per-host machine daemon; includes the agent runtime it launches |
+| `anygarden[agent]` | `anygarden.agent` | agent runtime and engine adapters (`anygarden agent`, `anygarden client`) — [docs](packages/cluster/docs/agent/README.md) |
+
+The separate `anygarden-machine` and `anygarden-agent` distributions are retired;
+if an old venv still has them, `pip uninstall anygarden-machine anygarden-agent`.
 
 ## Docs
 

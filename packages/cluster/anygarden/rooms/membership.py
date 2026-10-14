@@ -4,7 +4,7 @@ notification in lockstep.
 Every path that adds someone to a room must (a) insert a ``Participant``
 row and (b) poke the newcomer's other WS sessions so they can sync —
 agents auto-connect to the new room via ``JoinRoomOut`` (see
-``anygarden_agent/client.py``) and users refresh their sidebar via
+``anygarden/agent/client.py``) and users refresh their sidebar via
 ``RoomMembershipChangedOut``. Historically this pair was duplicated in
 three places (``rooms/router.py`` add_participant, sub-room creation,
 and the ``#room`` auto-join block in ``ws/handler.py``); the last one

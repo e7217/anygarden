@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - 'anygarden-v*'
-      - 'anygarden-agent-v*'
 
 permissions:
   contents: read
@@ -87,8 +86,9 @@ jobs:
         id: parse
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # Format: anygarden-v<ver>, anygarden-agent-v<ver>. #754 — the machine
-          # daemon ships inside anygarden; anygarden-machine is no longer released.
+          # Format: anygarden-v<ver>. The machine daemon (#754) and the agent
+          # runtime (#832) ship inside anygarden; anygarden-machine and
+          # anygarden-agent are no longer released.
           DIST_NAME="${TAG%-v*}"
           VERSION="${TAG##*-v}"
           # PyPI distribution name → packages/<dir> mapping. The cluster
@@ -96,7 +96,6 @@ jobs:
           # packages/cluster/ so the source layout stays stable.
           case "${DIST_NAME}" in
             anygarden)         PKG="cluster" ;;
-            anygarden-agent)   PKG="agent" ;;
             *)
               echo "::error::Unknown tag prefix: ${DIST_NAME}"
               exit 1
@@ -173,9 +172,8 @@ jobs:
           VERSION="${{ steps.parse.outputs.version }}"
           PREV_TAG="${{ steps.prev.outputs.tag }}"
           # uv normalizes hyphens to underscores in wheel/sdist
-          # filenames (PEP 491/625), so anygarden-agent ships as
-          # anygarden_agent-<ver>-*.whl. Translate the distribution
-          # name to the filename form before globbing.
+          # filenames (PEP 491/625). Translate the distribution name to
+          # the filename form before globbing.
           FILE_PREFIX="${DIST_NAME//-/_}"
           ARGS=(
             "${GITHUB_REF_NAME}"

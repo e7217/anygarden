@@ -8,6 +8,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import WebSocketDisconnect
+
+from anygarden.agent.runtime.workspace_receipt import report_workspace
 from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
 from anygarden.db.models import Agent, Machine, MachineToken
 from anygarden.machine.daemon import MachineDaemon
@@ -15,8 +18,6 @@ from anygarden.machine.managed_workspace import CAPABILITY, EDIT_CAPABILITY, sup
 from anygarden.node.execution import LocalExecutionBackend
 from anygarden.scheduler.machine_bus import MachineBus, MachineRequestError
 from anygarden.ws.machine_handler import ws_machine
-from anygarden_agent.runtime.workspace_receipt import report_workspace
-from fastapi import WebSocketDisconnect
 
 from .test_agents_api import agents_env as _agents_env
 
