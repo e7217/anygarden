@@ -277,18 +277,12 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                     # frame (so the 1차/2차 task views reflect todo again).
                     for w_task, w_room, w_msg in woken_payloads:
                         if manager is not None and w_msg is not None:
-                            if w_task.execution_id:
-                                from anygarden.mcp.project_tools import (
-                                    broadcast_project_messages,
-                                )
+                            # #824 — the assignee gets the leased outbox copy.
+                            from anygarden.mcp.project_tools import (
+                                broadcast_project_messages,
+                            )
 
-                                await broadcast_project_messages(db, request=request, messages=[w_msg])
-                            else:
-                                from anygarden.messages.serialization import (
-                                    message_to_frame as _message_to_frame,
-                                )
-
-                                await manager.broadcast(w_task.room_id, _message_to_frame(w_msg))
+                            await broadcast_project_messages(db, request=request, messages=[w_msg])
                         await _fanout_task_event(
                             db,
                             manager=manager,

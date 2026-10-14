@@ -24,7 +24,6 @@ from anygarden.db.models import (
     User,
 )
 from anygarden.dependencies import get_current_identity, get_db
-from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import (
     fanout_task_event,
     inject_task_assignment_message,
@@ -46,7 +45,6 @@ from anygarden.task_service import (
 # never expects. Sourced from the import-light module to avoid dragging
 # the MCP router into this module's import graph.
 from anygarden.tasks_status import TASK_STATUS_VALUES
-from anygarden.ws.protocol import MessageOut
 
 router = APIRouter(tags=["tasks"])
 
@@ -367,8 +365,19 @@ def _connection_manager(request: Request):
     return getattr(request.app.state, "connection_manager", None)
 
 
-def _message_to_frame(msg: Message) -> MessageOut:
-    return message_to_frame(msg)
+async def _broadcast_assignment(
+    db: AsyncSession, request: Request, msg: Message
+) -> None:
+    """Publish a committed assignment message to the room live.
+
+    #824 — the assignee is left out: its durable turn delivers the same
+    message through the outbox with the turn lease. A lease-less copy that
+    arrives first starts the turn without that lease, and every execution
+    tool is refused for the rest of it.
+    """
+    from anygarden.mcp.project_tools import broadcast_project_messages
+
+    await broadcast_project_messages(db, request=request, messages=[msg])
 
 
 @router.post("/api/v1/rooms/{room_id}/tasks", status_code=201, response_model=TaskOut)
@@ -438,7 +447,7 @@ async def create_task(
     if injected is not None and manager is not None:
         # Refresh in case the seq/created_at populated post-commit.
         await db.refresh(injected)
-        await manager.broadcast(room_id, _message_to_frame(injected))
+        await _broadcast_assignment(db, request, injected)
     await fanout_task_event(
         db, manager=manager, event="created", task=task, room_name=room.name
     )
@@ -541,7 +550,7 @@ async def create_message_task(
     manager = _connection_manager(request)
     if injected is not None and manager is not None:
         await db.refresh(injected)
-        await manager.broadcast(room_id, _message_to_frame(injected))
+        await _broadcast_assignment(db, request, injected)
     await fanout_task_event(
         db,
         manager=manager,
@@ -801,13 +810,13 @@ async def update_task(
     manager = _connection_manager(request)
     if injected is not None and manager is not None:
         await db.refresh(injected)
-        await manager.broadcast(task.room_id, _message_to_frame(injected))
+        await _broadcast_assignment(db, request, injected)
 
     # #459 — broadcast each woken dependent: its mention frame (wakes the
     # assignee agent) + a task.updated frame (so task views show todo).
     for w_task, w_room, w_match in woken_payloads:
         if manager is not None and w_match is not None:
-            await manager.broadcast(w_task.room_id, _message_to_frame(w_match))
+            await _broadcast_assignment(db, request, w_match)
         await fanout_task_event(
             db,
             manager=manager,
@@ -944,7 +953,7 @@ async def requeue_task(
     manager = _connection_manager(request)
     if injected is not None and manager is not None:
         await db.refresh(injected)
-        await manager.broadcast(changed.room_id, _message_to_frame(injected))
+        await _broadcast_assignment(db, request, injected)
     await fanout_task_event(
         db,
         manager=manager,

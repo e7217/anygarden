@@ -941,3 +941,262 @@ class TestMessageLinkedTasksAndClaims:
             )
             assert audit is not None
             assert audit.details["reason"] == "agent unavailable"
+
+
+class _RecordingManager:
+    """Records which room participants receive each assignment frame."""
+
+    def __init__(self, participant_ids: list[str]) -> None:
+        self.participant_ids = participant_ids
+        self.assignment_recipients: list[tuple[str, str]] = []  # (pid, message id)
+        self.sent: list = []
+
+    def _record(self, pid: str, frame) -> None:
+        metadata = getattr(frame, "metadata", None) or {}
+        if metadata.get("task_assignment"):
+            self.assignment_recipients.append((pid, frame.id))
+
+    async def broadcast(self, room_id, frame, **_kwargs) -> None:
+        for pid in self.participant_ids:
+            self._record(pid, frame)
+
+    async def broadcast_tailored(self, room_id, make_frame, **_kwargs) -> set[str]:
+        sent = set()
+        for pid in self.participant_ids:
+            frame = make_frame(pid)
+            if frame is not None:
+                self._record(pid, frame)
+                sent.add(pid)
+        return sent
+
+    async def is_connected(self, participant_id: str) -> bool:
+        return True
+
+    async def participant_generation(self, participant_id: str) -> int | None:
+        return 0
+
+    async def send_to(self, participant_id, frame, *, expected_generation=None):
+        self.sent.append((participant_id, frame))
+        return True
+
+    def __getattr__(self, name):
+        async def _noop(*_args, **_kwargs):
+            return None
+
+        return _noop
+
+
+@pytest_asyncio.fixture()
+async def delivery_env(tasks_env):
+    """``tasks_env`` with running agents and a recording connection manager."""
+    async with tasks_env["factory"]() as db:
+        for pid in (tasks_env["agent_a_p_id"], tasks_env["agent_b_p_id"]):
+            participant = await db.get(Participant, pid)
+            agent = await db.get(Agent, participant.agent_id)
+            agent.desired_state = "running"
+        await db.commit()
+    manager = _RecordingManager([
+        tasks_env["creator_p_id"],
+        tasks_env["bystander_p_id"],
+        tasks_env["agent_a_p_id"],
+        tasks_env["agent_b_p_id"],
+    ])
+    app = tasks_env["client"]._transport.app
+    app.state.connection_manager = manager
+    return {**tasks_env, "manager": manager}
+
+
+def _recipients(manager: _RecordingManager, message_id: str) -> set[str]:
+    return {pid for pid, mid in manager.assignment_recipients if mid == message_id}
+
+
+@pytest.mark.req("EXE-22")
+class TestAssignmentDeliveryOnlyThroughOutbox:
+    """#824 — REST assignment paths must not hand the assignee a lease-less
+    copy of the assignment; the assignee gets the leased outbox frame only,
+    while everyone else still sees the message live."""
+
+    async def _create(self, env, assignee: str | None, title: str = "work") -> str:
+        body: dict = {"title": title}
+        if assignee is not None:
+            body["assignee_participant_id"] = assignee
+        resp = await env["client"].post(
+            f"/api/v1/rooms/{env['room'].id}/tasks",
+            json=body,
+            headers=_auth(env["token"]),
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    def _others(self, env, assignee: str) -> set[str]:
+        return set(env["manager"].participant_ids) - {assignee}
+
+    @pytest.mark.asyncio
+    async def test_create_task_skips_the_assignee(self, delivery_env) -> None:
+        env = delivery_env
+        await self._create(env, env["agent_a_p_id"])
+        msg = await _last_task_message(env["factory"], env["room"].id)
+        assert _recipients(env["manager"], msg.id) == self._others(
+            env, env["agent_a_p_id"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_message_task_skips_the_assignee(self, delivery_env) -> None:
+        env = delivery_env
+        async with env["factory"]() as db:
+            source = await append_message(
+                db, env["room"].id, env["creator_p_id"], "source"
+            )
+            await db.commit()
+        resp = await env["client"].post(
+            f"/api/v1/rooms/{env['room'].id}/messages/{source.id}/task",
+            json={"title": "from message", "assignee_participant_id": env["agent_a_p_id"]},
+            headers=_auth(env["token"]),
+        )
+        assert resp.status_code == 201, resp.text
+        msg = await _last_task_message(env["factory"], env["room"].id)
+        assert _recipients(env["manager"], msg.id) == self._others(
+            env, env["agent_a_p_id"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_reassign_skips_the_new_assignee(self, delivery_env) -> None:
+        env = delivery_env
+        task_id = await self._create(env, env["agent_a_p_id"])
+        resp = await env["client"].put(
+            f"/api/v1/tasks/{task_id}",
+            json={"assignee_participant_id": env["agent_b_p_id"]},
+            headers=_auth(env["token"]),
+        )
+        assert resp.status_code == 200, resp.text
+        msg = await _last_task_message(env["factory"], env["room"].id)
+        assert msg.extra_metadata["task_assignment"]["event"] == "reassigned"
+        assert _recipients(env["manager"], msg.id) == self._others(
+            env, env["agent_b_p_id"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_requeue_skips_the_assignee(self, delivery_env) -> None:
+        env = delivery_env
+        task_id = await self._create(env, env["agent_a_p_id"])
+        async with env["factory"]() as db:
+            task = await db.get(Task, task_id)
+            task.status = "in_progress"
+            await db.commit()
+        resp = await env["client"].post(
+            f"/api/v1/tasks/{task_id}/requeue",
+            json={"reason": "retry", "assignee_participant_id": env["agent_b_p_id"]},
+            headers=_auth(env["token"]),
+        )
+        assert resp.status_code == 200, resp.text
+        msg = await _last_task_message(env["factory"], env["room"].id)
+        assert msg.extra_metadata["task_assignment"]["assignee_pid"] == env["agent_b_p_id"]
+        assert _recipients(env["manager"], msg.id) == self._others(
+            env, env["agent_b_p_id"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_rest_resolve_wake_skips_the_dependent_assignee(
+        self, delivery_env
+    ) -> None:
+        from anygarden.db.models import TaskBlocker
+
+        env = delivery_env
+        blocker_id = await self._create(env, env["agent_a_p_id"], "blocker")
+        dep_id = await self._create(env, env["agent_b_p_id"], "dependent")
+        async with env["factory"]() as db:
+            db.add(TaskBlocker(task_id=dep_id, blocked_by_task_id=blocker_id))
+            (await db.get(Task, blocker_id)).status = "in_progress"
+            (await db.get(Task, dep_id)).status = "blocked"
+            await db.commit()
+
+        resp = await env["client"].put(
+            f"/api/v1/tasks/{blocker_id}",
+            json={"status": "done"},
+            headers=_auth(env["token"]),
+        )
+        assert resp.status_code == 200, resp.text
+        msg = await _last_task_message(env["factory"], env["room"].id)
+        assert msg.extra_metadata["task_assignment"]["task_id"] == dep_id
+        assert _recipients(env["manager"], msg.id) == self._others(
+            env, env["agent_b_p_id"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_assignee_reports_status_with_the_outbox_lease(
+        self, delivery_env
+    ) -> None:
+        """REST assignment → leased outbox frame → mark_task_status works,
+        both for the task itself and for the dependent it wakes over MCP."""
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken, TaskBlocker
+        from anygarden.turns.service import deliver_pending_outbox
+
+        env = delivery_env
+        manager = env["manager"]
+        tokens = {}
+        async with env["factory"]() as db:
+            for key in ("agent_a_p_id", "agent_b_p_id"):
+                participant = await db.get(Participant, env[key])
+                plain = generate_token()
+                token_hash, hint = hash_agent_token(plain)
+                db.add(AgentToken(
+                    agent_id=participant.agent_id, token_hash=token_hash,
+                    lookup_hint=hint,
+                ))
+                tokens[env[key]] = plain
+            await db.commit()
+
+        task_id = await self._create(env, env["agent_a_p_id"], "host resources")
+        # The dependent waits blocked with no turn of its own; the wake is
+        # its only assignment.
+        dep_id = await self._create(env, None, "follow-up")
+        async with env["factory"]() as db:
+            db.add(TaskBlocker(task_id=dep_id, blocked_by_task_id=task_id))
+            dep = await db.get(Task, dep_id)
+            dep.status = "blocked"
+            dep.assignee_participant_id = env["agent_b_p_id"]
+            await db.commit()
+
+        def lease_headers(pid: str, task: str) -> dict:
+            frames = [
+                f for p, f in manager.sent
+                if p == pid and f.metadata["task_assignment"]["task_id"] == task
+            ]
+            assert len(frames) == 1, frames
+            md = frames[-1].metadata
+            assert md["turn_lease"]
+            return {
+                "Authorization": f"Bearer {tokens[pid]}",
+                "X-Anygarden-Turn-Request-Id": md["request_id"],
+                "X-Anygarden-Turn-Attempt": str(md["turn_attempt"]),
+                "X-Anygarden-Turn-Generation": str(md["turn_generation"]),
+                "X-Anygarden-Turn-Lease": md["turn_lease"],
+            }
+
+        async def mark(headers: dict, task: str, status: str) -> None:
+            resp = await env["client"].post("/mcp/rpc", headers=headers, json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "mark_task_status",
+                           "arguments": {"task_id": task, "status": status}},
+            })
+            assert resp.status_code == 200, resp.text
+            result = resp.json()["result"]
+            assert result["isError"] is False, result
+
+        await deliver_pending_outbox(env["factory"], manager)
+        headers = lease_headers(env["agent_a_p_id"], task_id)
+        await mark(headers, task_id, "in_progress")
+        await mark(headers, task_id, "done")
+
+        # The blocker's completion over MCP woke the dependent; its assignee
+        # also receives the assignment through the outbox only.
+        wake = await _last_task_message(env["factory"], env["room"].id)
+        assert wake.extra_metadata["task_assignment"]["task_id"] == dep_id
+        assert env["agent_b_p_id"] not in _recipients(manager, wake.id)
+        await deliver_pending_outbox(env["factory"], manager)
+        dep_headers = lease_headers(env["agent_b_p_id"], dep_id)
+        await mark(dep_headers, dep_id, "in_progress")
+        async with env["factory"]() as db:
+            assert (await db.get(Task, task_id)).status == "done"
+            assert (await db.get(Task, dep_id)).status == "in_progress"

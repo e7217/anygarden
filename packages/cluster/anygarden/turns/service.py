@@ -1350,6 +1350,15 @@ async def record_lifecycle(
             reason="native_terminal_receipt_mismatch", attempt_number=attempt_number,
             generation=generation)
         return False
+    if attempt.state == "pending":
+        # #824 — the outbox leases an attempt before sending it, so a frame
+        # for a still-pending attempt came from a copy delivered outside the
+        # outbox. Applying it would move the attempt past ``pending`` and the
+        # dispatcher would then skip the lease the real delivery needs.
+        await _audit_stale(db, turn=turn, agent_id=agent_id,
+            reason="lifecycle_before_lease", attempt_number=attempt_number,
+            generation=generation)
+        return False
     if legacy:
         turn.protocol_version = 0
     now = _now()
