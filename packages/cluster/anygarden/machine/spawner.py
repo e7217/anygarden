@@ -800,7 +800,7 @@ class Spawner:
         # ``writable_roots`` but no read-only path exceptions, so making
         # agent_root the codex workspace would let a standard codex agent
         # rewrite AGENTS.md, .mcp.json, or skills during the current
-        # session. Keep the machine-level anygarden-agent cwd collapsed to
+        # session. Keep the machine-level agent process cwd collapsed to
         # agent_root, but give the codex SDK thread a narrow workspace
         # child with read bridges back to managed context. The codex
         # adapter pins ThreadStartOptions.cwd at this directory.
@@ -944,11 +944,11 @@ class Spawner:
         # Build environment: inherit current env + set ANYGARDEN_TOKEN.
         #
         # ``engine_secrets`` are deliberately NOT merged into this env.
-        # ``anygarden-agent`` would inherit them and an LLM tool call
+        # The agent process would inherit them and an LLM tool call
         # inside the agent (Bash, Read) could then exfiltrate every
         # API key by dumping ``/proc/self/environ`` or running ``env``.
         # Instead the secrets are piped via stdin below and consumed
-        # by ``anygarden_agent.secrets.load_from_stdin()`` at startup —
+        # by ``anygarden.agent.secrets.load_from_stdin()`` at startup —
         # the agent process's /proc/self/environ stays clean (#184).
         #
         # ``ANYGARDEN_TOKEN`` stays in env because the agent's auth
@@ -1000,7 +1000,7 @@ class Spawner:
         # Issue #493 — per-agent turn timeout. Unlike permission_level this is
         # set ONLY when present: the engine adapter's resolution chain treats a
         # missing env as "fall back to the global per-engine env / hardcoded
-        # default" (see ``anygarden_agent.integrations._turn_timeout``), so an
+        # default" (see ``anygarden.agent.integrations._turn_timeout``), so an
         # unset value must not shadow that fallback.
         if msg.turn_timeout_sec is not None:
             env["ANYGARDEN_AGENT_TURN_TIMEOUT_SEC"] = str(msg.turn_timeout_sec)
@@ -1035,65 +1035,30 @@ class Spawner:
         # didn't provide one (older versions).
         agent_server = self._agent_server_url or msg.server_url
 
-        # Build command: local anygarden-agent with uvx fallback.
+        # Build command: run the agent with the daemon's own interpreter.
         #
-        # Log which source was picked so operators can later answer
-        # the "which binary actually ran?" question without rebuilding
-        # the environment. Two different spawns on the same machine
-        # can end up with different binaries (PATH shadowing, uvx
-        # cache drift) and the log is our only forensic trail.
-        #
-        # An integrated node has the agent package installed beside its
-        # own interpreter. Prefer that binary even when its bin directory
-        # was omitted from PATH by the shell that launched the node.
-        sibling_agent = Path(sys.executable).parent / "anygarden-agent"
-        if (
-            self._base_environment is not None
-            and sibling_agent.is_file()
-            and os.access(sibling_agent, os.X_OK)
-        ):
-            anygarden_agent = str(sibling_agent)
-            binary_source = "interpreter_sibling"
-        else:
-            anygarden_agent = (
-                shutil.which("anygarden-agent") if self._base_environment is None
-                else shutil.which("anygarden-agent", path=env.get("PATH", os.defpath))
-            )
-            binary_source = "path"
-        if anygarden_agent:
-            cmd = [
-                anygarden_agent,
-                "--engine",
-                msg.engine,
-                "--name",
-                msg.name or f"agent-{agent_id[:8]}",
-                "--server",
-                agent_server,
-            ]
-            log.info(
-                "agent_binary_resolved",
-                agent_id=agent_id,
-                source=binary_source,
-                path=anygarden_agent,
-            )
-        else:
-            # anygarden-agent not in PATH — use uvx to fetch from PyPI
-            cmd = [
-                "uvx",
-                "anygarden-agent",
-                "--engine",
-                msg.engine,
-                "--name",
-                msg.name or f"agent-{agent_id[:8]}",
-                "--server",
-                agent_server,
-            ]
-            log.info(
-                "agent_binary_resolved",
-                agent_id=agent_id,
-                source="uvx",
-                path=None,
-            )
+        # #832 — the agent runtime ships inside ``anygarden`` (it was the
+        # separate ``anygarden-agent`` package), so the daemon's venv always
+        # holds the matching version. Looking it up on PATH or fetching it
+        # with uvx could run a different build (#683). The log line stays as
+        # the forensic answer to "which interpreter actually ran?".
+        cmd = [
+            sys.executable,
+            "-m",
+            "anygarden.agent.cli",
+            "--engine",
+            msg.engine,
+            "--name",
+            msg.name or f"agent-{agent_id[:8]}",
+            "--server",
+            agent_server,
+        ]
+        log.info(
+            "agent_binary_resolved",
+            agent_id=agent_id,
+            source="interpreter",
+            path=sys.executable,
+        )
         if msg.profile_yaml.strip():
             cmd.extend(["--profile", str(profile_path)])
         for room in msg.rooms:
@@ -1116,7 +1081,7 @@ class Spawner:
         agent_cwd = str(agent_root) if agent_root else None
 
         # Pipe ``msg.engine_secrets`` to the agent via stdin. The agent
-        # reads the JSON payload once at startup (``anygarden_agent.secrets
+        # reads the JSON payload once at startup (``anygarden.agent.secrets
         # .load_from_stdin``) and stores it in a private module rather
         # than ``os.environ``. Closing stdin after the write signals EOF
         # so the agent's ``sys.stdin.read`` returns cleanly. Empty dicts

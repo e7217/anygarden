@@ -125,7 +125,7 @@ class TestAgentsAPI:
         assert data["engine"] == "echo"
         # DM room auto-created → agent starts immediately
         assert data["desired_state"] == "running"
-        # #746 — the runtime selector is gone; every agent runs anygarden-agent.
+        # #746 — the runtime selector is gone; every agent runs the bundled agent runtime.
         assert "runtime" not in data
 
     @pytest.mark.asyncio

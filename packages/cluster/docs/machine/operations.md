@@ -97,9 +97,9 @@ uv run anygarden machine run --server ws://localhost:8001
 ## 트러블슈팅
 
 ### 에이전트가 spawn되지 않음
-- `anygarden-agent`가 PATH에 있는지 확인 (`which anygarden-agent`)
-- 없으면 `uvx`로 PyPI에서 가져옴 — 네트워크 연결 확인
-- 서버 로그에서 spawn 명령 확인
+- 데몬 로그의 `agent_binary_resolved` 이벤트로 실행한 인터프리터(`path`) 확인
+- 같은 인터프리터로 `python -m anygarden.agent.cli --help`가 동작하는지 확인 — 실패하면 `pip install "anygarden[machine]"`로 의존성 재설치
+- 에이전트 디렉토리의 `agent.log`에서 기동 오류 확인
 
 ### 에이전트가 반복 crash
 - crash budget 초과 시 자동으로 spawn 중단

@@ -54,8 +54,8 @@ anygarden machine --help
 
 `anygarden machine` 서브커맨드는 뒤따르는 머신 데몬 CLI(`anygarden.machine.cli`) 명령/인수(예: `run`, `run --config PATH`)를 그대로 전달합니다. 별도의 `--` 구분자는 필요하지 않습니다.
 
-- `anygarden agent`는 `anygarden-agent` CLI의 `--engine`, `--name`, `--server`, `--room`, `--token`을 그대로 사용합니다.
-- `anygarden client`는 `anygarden-client` CLI의 `--server`, `--user`, `--room`, `--token`을 그대로 사용합니다.
+- `anygarden agent`는 에이전트 런타임(`anygarden.agent.cli`)의 `--engine`, `--name`, `--server`, `--room`, `--token`을 그대로 사용합니다. 자세한 옵션은 [`docs/agent/README.md`](docs/agent/README.md)를 참고하세요.
+- `anygarden client`는 같은 모듈의 텍스트 클라이언트로 `--server`, `--user`, `--room`, `--token`을 그대로 사용합니다.
 
 ```bash
 # 서버 구동

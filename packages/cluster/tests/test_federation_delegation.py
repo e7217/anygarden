@@ -14,12 +14,12 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from anygarden_agent.runtime.execution import (
+from anygarden.agent.runtime.execution import (
     Capabilities,
     Invocation,
     SessionScope,
 )
-from anygarden_agent.runtime.execution.contracts import RuntimeResult
+from anygarden.agent.runtime.execution.contracts import RuntimeResult
 from jsonschema import Draft202012Validator, FormatChecker
 from sqlalchemy import (
     JSON,

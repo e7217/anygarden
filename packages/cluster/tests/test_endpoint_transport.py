@@ -5,15 +5,16 @@ Only process creation and the room runner are replaced; no model is invoked.
 
 import asyncio
 import json
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from click.testing import CliRunner
 
 from anygarden.db.models import Agent
-from anygarden_agent import secrets
-from anygarden_agent.cli import agent_main
-from anygarden_agent.runtime.execution.contracts import Invocation, SessionScope
-from anygarden_agent.runtime.execution.endpoint import CHILD_KEY, CONFIG_KEY, INPUT_KEY
+from anygarden.agent import secrets
+from anygarden.agent.cli import agent_main
+from anygarden.agent.runtime.execution.contracts import Invocation, SessionScope
+from anygarden.agent.runtime.execution.endpoint import CHILD_KEY, CONFIG_KEY, INPUT_KEY
 from anygarden.machine.daemon import MachineDaemon
 from .test_engine_endpoints import endpoint_env, config
 from .test_agents_api import agents_env
@@ -72,10 +73,6 @@ async def test_db_to_invocation_preserves_explicit_selection(
             new_callable=AsyncMock,
             return_value=process,
         ) as create,
-        patch(
-            "anygarden.machine.spawner.shutil.which",
-            return_value="/bin/anygarden-agent",
-        ),
     ):
         try:
             await daemon._handle(frame)
@@ -103,15 +100,16 @@ async def test_db_to_invocation_preserves_explicit_selection(
     assert persisted.provider == "local" and persisted.endpoint_configured
     assert persisted.engine_secrets == {}
     # The actual entry point reads private stdin and parses generated arguments.
+    assert list(args[:3]) == [sys.executable, "-m", "anygarden.agent.cli"]
     monkeypatch.setenv("ANYGARDEN_AGENT_GENERATION", env["ANYGARDEN_AGENT_GENERATION"])
     monkeypatch.setenv("ANYGARDEN_TOKEN", "fixture-agent-token")
     monkeypatch.setenv(INPUT_KEY, "ambient-must-not-win")
     runner = AsyncMock()
     secrets.clear()
     try:
-        with patch("anygarden_agent.cli._run_agent", runner):
+        with patch("anygarden.agent.cli._run_agent", runner):
             result = await asyncio.to_thread(
-                CliRunner().invoke, agent_main, list(args[1:]), input=stdin
+                CliRunner().invoke, agent_main, list(args[3:]), input=stdin
             )
         assert result.exit_code == 0, result.output
         launch = runner.call_args.kwargs["execution_launch"]

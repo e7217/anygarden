@@ -50,13 +50,10 @@ jobs:
       - name: Sync workspace
         run: uv sync --frozen --all-packages --all-extras
 
-      - name: Test agent
-        working-directory: packages/agent
-        run: uv run pytest -x --junitxml=${{ github.workspace }}/junit/agent.xml
-
       - name: Test cluster
         working-directory: packages/cluster
-        # ~2,600 tests; one worker per logical CPU (#753). ``-n auto``
+        # ~3,700 tests, the agent runtime's included (#832); one worker
+        # per logical CPU (#753). ``-n auto``
         # counts physical cores when psutil is installed, which gives
         # only 2 workers on the 4-vCPU runner.
         run: uv run pytest -x -n logical --junitxml=${{ github.workspace }}/junit/cluster.xml

@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 # a legitimately long turn records ``handler_finished`` before the sweeper
 # would orphan it. ``None`` means "use the global env / hardcoded default".
 _TURN_TIMEOUT_MIN_SEC = 30
-# mirrors anygarden_agent.integrations._turn_timeout.SUP_SLACK
+# mirrors anygarden.agent.integrations._turn_timeout.SUP_SLACK
 _SUPERVISOR_SLACK_SEC = 300
 _ORPHAN_THRESHOLD_DEFAULT_SEC = 1200
 

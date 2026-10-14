@@ -277,7 +277,7 @@ class TestEngineModelsEndpoint:
 
 def test_supported_versions_match_agent_adapters() -> None:
     """The catalog mirrors which adapters enforce exact version gates."""
-    pi = pytest.importorskip("anygarden_agent.runtime.execution.pi")
-    codex = pytest.importorskip("anygarden_agent.runtime.execution.codex")
+    pi = pytest.importorskip("anygarden.agent.runtime.execution.pi")
+    codex = pytest.importorskip("anygarden.agent.runtime.execution.codex")
     assert ENGINE_CATALOG["pi-cli"].supported_versions == pi.SUPPORTED_VERSIONS
     assert ENGINE_CATALOG["codex-cli"].supported_versions == codex.SUPPORTED_VERSIONS

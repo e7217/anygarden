@@ -49,9 +49,10 @@ stopping and restarting the node — `anygarden stop` takes the same `--data-dir
 
 ## Project layout
 
-Anygarden is a `uv` workspace of two packages — `cluster` (server, web UI and
-the per-host machine daemon under `anygarden/machine/`) and `agent` (Python
-runtime). See [Packages](README.md#packages) for paths and distribution names.
+Anygarden is a single package under `packages/cluster/` — the server and web UI,
+the per-host machine daemon under `anygarden/machine/` and the agent runtime under
+`anygarden/agent/` (tests in `tests/machine/` and `tests/agent/`). See
+[Packages](README.md#packages) for the extras.
 
 ## Workflow
 

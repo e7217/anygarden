@@ -11,8 +11,9 @@ from __future__ import annotations
 from dataclasses import asdict, fields
 
 import pytest
+
+from anygarden.agent.runtime.execution.contracts import SessionScope
 from anygarden.federation.remote_execution import RemoteScope
-from anygarden_agent.runtime.execution.contracts import SessionScope
 
 BASE = dict(
     execution_node_id="node-b",

@@ -1,6 +1,6 @@
 # Moving from retired engines
 
-Claude Code (`claude-code`), Gemini CLI (`gemini-cli`), and OpenHands (`openhands`) execution adapters have been removed. Codex (`codex-cli`) and Pi (`pi-cli`) run through the Python agent runtime. The TypeScript agent package has been removed (#746); every agent process is the Python `anygarden-agent`.
+Claude Code (`claude-code`), Gemini CLI (`gemini-cli`), and OpenHands (`openhands`) execution adapters have been removed. Codex (`codex-cli`) and Pi (`pi-cli`) run through the Python agent runtime. The TypeScript agent package has been removed (#746); every agent process is the Python runtime in `anygarden.agent`.
 
 Existing agent rows, profiles, files, role instructions, permissions, and conversation history are preserved. Retired agents are excluded from available engine choices. Starting them returns migration guidance; automatic starts and reconnect manifests cannot launch them. The machine refuses old manifests before writing files or spawning a process. There is no automatic engine conversion.
 

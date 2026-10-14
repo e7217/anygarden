@@ -64,7 +64,7 @@ def test_machine_delegates_to_machine_cli(runner, monkeypatch) -> None:
 
 def test_agent_delegates_to_agent_cli(runner, monkeypatch) -> None:
     calls = _install_fake_module(
-        monkeypatch, "anygarden_agent.cli", agent_main="agent", client_main="client"
+        monkeypatch, "anygarden.agent.cli", agent_main="agent", client_main="client"
     )
     result = runner.invoke(cli.dispatch, ["agent", "--engine", "codex"])
     assert result.exit_code == 0
@@ -73,7 +73,7 @@ def test_agent_delegates_to_agent_cli(runner, monkeypatch) -> None:
 
 def test_client_delegates_to_client_cli(runner, monkeypatch) -> None:
     calls = _install_fake_module(
-        monkeypatch, "anygarden_agent.cli", agent_main="agent", client_main="client"
+        monkeypatch, "anygarden.agent.cli", agent_main="agent", client_main="client"
     )
     result = runner.invoke(cli.dispatch, ["client", "--room", "r1"])
     assert result.exit_code == 0
@@ -93,8 +93,8 @@ def test_machine_missing_extra_hint(runner, monkeypatch) -> None:
 
 
 def test_agent_missing_extra_hint(runner, monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "anygarden_agent.cli", None)
-    monkeypatch.setitem(sys.modules, "anygarden_agent", None)
+    monkeypatch.setitem(sys.modules, "anygarden.agent.cli", None)
+    monkeypatch.setitem(sys.modules, "anygarden.agent", None)
     result = runner.invoke(cli.dispatch, ["agent"])
     assert result.exit_code != 0
     assert 'pip install "anygarden[agent]"' in result.output

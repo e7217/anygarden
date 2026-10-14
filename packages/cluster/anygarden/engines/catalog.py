@@ -57,7 +57,7 @@ class EngineCatalogEntry:
     supported_versions: tuple[str, ...] = ()
     """#687 — exact CLI versions the agent adapter's version gate accepts.
 
-    Mirrors ``SUPPORTED_VERSIONS`` in ``anygarden_agent.runtime.execution``
+    Mirrors ``SUPPORTED_VERSIONS`` in ``anygarden.agent.runtime.execution``
     (kept in sync by test; the server does not depend on the agent
     package). The admin UI compares a machine's detected engine version
     against this list to warn before an agent fails with

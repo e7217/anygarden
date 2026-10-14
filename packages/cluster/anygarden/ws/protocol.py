@@ -167,7 +167,7 @@ class LifecycleFrame(BaseModel):
     """Agent-emitted handler/engine lifecycle event (cluster mirror).
 
     MUST stay field-compatible with
-    ``anygarden_agent.protocol.frames.LifecycleFrame``. The cluster
+    ``anygarden.agent.protocol.frames.LifecycleFrame``. The cluster
     persists these verbatim into ``ActivityLog`` under the
     propagated ``request_id``.
 

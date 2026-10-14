@@ -8,6 +8,10 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from starlette.websockets import WebSocket
+
+from anygarden.agent.client import ChatClient
+from anygarden.agent.runtime.execution.launch import ExecutionLaunch
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import Agent, AgentToken, Participant, Room
 from anygarden.federation.execution_transport import (
@@ -18,9 +22,6 @@ from anygarden.orchestration.rules import CooldownManager, TypingTracker
 from anygarden.ws.handler import ws_room
 from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import ExecutionControlResultFrame
-from anygarden_agent.client import ChatClient
-from anygarden_agent.runtime.execution.launch import ExecutionLaunch
-from starlette.websockets import WebSocket
 
 from .test_agents_api import agents_env as _agents_env
 

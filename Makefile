@@ -1,4 +1,4 @@
-.PHONY: install setup test lint clean dev release-agent release-cluster req-report bench-report
+.PHONY: install setup test lint clean dev release-cluster req-report bench-report
 
 install:                ## Install all packages (workspace)
 	uv sync --all-packages --all-extras
@@ -13,7 +13,6 @@ test:                   ## Run tests across all packages
 
 req-report:             ## Requirement coverage from pytest JUnit (frontend layers need CI's vitest/e2e JUnit)
 	mkdir -p .tmp/junit
-	cd packages/agent && uv run pytest -q --junitxml=../../.tmp/junit/agent.xml
 	cd packages/cluster && uv run pytest -q -n logical --junitxml=../../.tmp/junit/cluster.xml
 	python3 scripts/req_report.py .tmp/junit/*.xml --spec docs/requirements.md
 
@@ -25,9 +24,6 @@ lint:                   ## Run ruff across all packages
 
 dev:                    ## Run cluster dev server + frontend
 	$(MAKE) -C packages/cluster dev
-
-release-agent:          ## Build and publish anygarden-agent to PyPI
-	rm -rf dist/ && uv build --package anygarden-agent && twine upload dist/anygarden_agent-*
 
 release-cluster:        ## Build and publish anygarden to PyPI (source dir kept as packages/cluster/)
 	rm -rf dist/ && uv build --package anygarden && twine upload dist/anygarden-*

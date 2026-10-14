@@ -172,7 +172,7 @@ class PipVenv:
     """pip channel: ``<python> -m pip install -U <pkg>``; PyPI JSON API.
 
     Interpreter-scoped: ``python`` must point at the venv that hosts the
-    in-process SDK engine (e.g. the anygarden-agent venv for ``openhands``).
+    in-process SDK engine (e.g. the agent venv for ``openhands``).
     """
 
     kind = "pip"

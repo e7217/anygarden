@@ -1,0 +1,1396 @@
+"""ChatClient — WebSocket client with reconnection and callback support."""
+
+from __future__ import annotations
+
+import asyncio
+import collections
+import json
+import os
+import random
+import uuid
+from contextvars import ContextVar
+from pathlib import Path
+from typing import Any, Callable, Coroutine
+
+import httpx
+import structlog
+import websockets
+from websockets.asyncio.client import connect as ws_connect
+
+from anygarden.agent.integrations.cycle_guard import hash_content
+from anygarden.agent.observability import metrics
+from anygarden.agent.protocol.frames import (
+    LifecycleFrame,
+    SendFrame,
+    TurnStartFrame,
+    TurnCancelOut,
+    TurnStartPermitOut,
+    TurnStopOut,
+    TurnStopResultFrame,
+)
+from anygarden.agent.protocol.versioning import build_subprotocols
+from anygarden.agent.room_cursor_store import load_cursors, save_cursors
+
+logger = structlog.get_logger(__name__)
+
+# Type alias for message handlers
+MessageHandler = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
+
+# #482 — operator opt-in: when ``ANYGARDEN_SURFACE_SILENT_PATHS`` is
+# truthy the ``max_agent_turns`` drop posts this one-line system notice
+# into the room so a human can see *why* the agent went quiet. Default
+# OFF (counter/log only) keeps chat UX clean.
+_AGENT_TURN_LIMIT_NOTICE = (
+    "(시스템) 에이전트 간 연속 턴 한도에 도달해 이 메시지에는 응답하지 않습니다."
+)
+
+
+def _is_truthy(value: str | None) -> bool:
+    """Parse an env flag: ``1/true/yes/on`` (case-insensitive) → True."""
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _is_task_init_content(content: str) -> bool:
+    """Return True when ``content`` starts a new task and should reset
+    the per-room agent-only turn counter.
+
+    Issue #67 — agent-only rooms accumulate the counter across task
+    boundaries because the hard/soft filter paths (for self-sent and
+    nonce-echo messages) only know how to ``+1`` and early return.
+    A representative agent that emits consecutive ``[ROOM_QUERY]``
+    rounds therefore drives the counter past ``max_agent_turns`` and
+    later replies are dropped.
+
+    The two recognised task-init prefixes are:
+
+    - ``[ROOM_QUERY]`` — the representative agent forwards a room
+      query to another room. Each forward is an independent task.
+    - ``[DELEGATED]``  — a user/agent delegates a subtask to another
+      agent. Each delegation is an independent task.
+    """
+    return content.startswith(("[ROOM_QUERY]", "[DELEGATED]"))
+
+
+# Issue #445 Wave 0 — terminal WS close code. The server uses 4040 to
+# signal an auth/terminal close (e.g. revoked token, agent retired):
+# unlike a transient network drop, retrying forever just hammers a
+# connection that will never succeed. The reconnect loop applies a
+# cooldown and gives up after ``_TERMINAL_GIVE_UP_ATTEMPTS`` of these.
+_TERMINAL_CLOSE_CODE = 4040
+_TERMINAL_GIVE_UP_ATTEMPTS = 3
+_TERMINAL_COOLDOWN = 5.0
+
+
+def _close_code(exc: BaseException) -> int | None:
+    """Best-effort extraction of the WS close code from a websockets
+    ``ConnectionClosed`` (or similar) exception.
+
+    Returns ``None`` when no close frame was received (e.g. an abrupt
+    socket error). ``exc.rcvd`` carries the peer's close frame in
+    websockets >= 13; the deprecated ``exc.code`` shim is avoided.
+    """
+    rcvd = getattr(exc, "rcvd", None)
+    code = getattr(rcvd, "code", None)
+    return code if isinstance(code, int) else None
+
+
+def _backoff_with_jitter(delay: float, cap: float) -> float:
+    """Return ``delay`` with additive jitter, clamped to ``[0, cap]``.
+
+    Issue #445 Wave 0 — a fleet of agents that all dropped at once
+    (server restart) would otherwise reconnect in lockstep and
+    thundering-herd the server. Full +/-25% jitter de-synchronises the
+    retries. The result never exceeds ``cap`` so the backoff stays
+    bounded, and never goes negative.
+    """
+    jitter = delay * 0.25
+    jittered = delay + random.uniform(-jitter, jitter)
+    return max(0.0, min(jittered, cap))
+
+
+class ChatClient:
+    """Async WebSocket client for Anygarden chat rooms.
+
+    Supports:
+    - Multi-room connections
+    - Automatic reconnection with exponential backoff
+    - since_seq recovery on reconnect
+    - Decorator-based message callbacks
+    """
+
+    def __init__(
+        self,
+        server_url: str,
+        token: str,
+        agent_name: str = "",
+        *,
+        max_reconnect_delay: float = 60.0,
+        ping_timeout: float = 600.0,
+        state_dir: Path | None = None,
+        execution_launch=None,
+    ) -> None:
+        # Trusted startup snapshot; room wire messages never mutate this.
+        self.execution_launch = execution_launch
+        self.execution_launch_ready = False
+        self._execution_control = None
+        self._server_url = server_url.rstrip("/")
+        self._token = token
+        self._agent_name = agent_name
+        self._max_reconnect_delay = max_reconnect_delay
+        # Issue #492 — WS ping_timeout derived from the engine's turn timeout
+        # (set by the agent CLI) so a long turn can't be cut by keepalive.
+        # Defaults to 600s for the plain text client, which has no engine.
+        self._ping_timeout = ping_timeout
+        raw_generation = os.environ.get("ANYGARDEN_AGENT_GENERATION")
+        try:
+            self._generation = (
+                int(raw_generation) if raw_generation is not None else None
+            )
+        except ValueError:
+            self._generation = None
+
+        # Where the room cursors are persisted. The agent CLI passes its
+        # working directory (the machine-materialized agent dir, which
+        # survives respawn); callers that leave it unset — the plain text
+        # client, tests — keep the cursors in memory only.
+        self._state_dir = state_dir
+        # room_id -> last seen sequence number. Restored from
+        # ``state_dir`` so a respawn reconnects with ``since_seq`` where
+        # it left off and the server replays what arrived while it was
+        # down (before this, every respawn asked for ``since_seq=0``,
+        # which replays nothing).
+        self._last_seq: dict[str, int] = (
+            load_cursors(state_dir) if state_dir is not None else {}
+        )
+        # Issue #445 Wave 0 — bounded per-room set of already-dispatched
+        # message seqs. ``since_seq`` recovery on reconnect can replay a
+        # frame that was already delivered live (the server may resend
+        # the boundary message), so we de-dup on seq to guarantee each
+        # message reaches the handlers exactly once. Bounded so a long-
+        # lived room can't grow this set without limit; old seqs age out
+        # via the deque and are evicted from the set in lock-step.
+        self._seen_seqs: dict[str, set[Any]] = {}
+        self._seen_seq_order: dict[str, collections.deque[Any]] = {}
+        self._seen_seqs_maxlen: int = 256
+        # room_id -> websocket connection
+        self._connections: dict[str, Any] = {}
+        self._ready_rooms: set[str] = set()
+        # request_id -> server-issued durable turn lease metadata.
+        self._turn_context: dict[str, dict[str, Any]] = {}
+        # room_id -> asyncio task
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._handler_tasks: set[asyncio.Task] = set()
+        self._turn_start_waiters: dict[tuple, asyncio.Future] = {}
+        self._turn_stop_tasks: dict[str, asyncio.Task] = {}
+        self._execution_input_context = ContextVar("execution_input_context", default=None)
+
+        # Callbacks
+        self._message_handlers: list[MessageHandler] = []
+        self._delegate_result_handlers: list[MessageHandler] = []
+        self._delegation_cleanups: set[Callable[[], None]] = set()
+        self._join_handlers: list[Callable[..., Any]] = []
+
+        # Self-echo filtering: nonces of messages we sent
+        self._sent_nonces: set[str] = set()
+        # Hard self-message filter: participant IDs assigned to us by
+        # the server (one per room).  Messages from any of these IDs
+        # are always skipped, even if the nonce was lost (e.g. after a
+        # reconnect or when a duplicate process shares our token).
+        self._my_participant_ids: set[str] = set()
+
+        # Issue #61 — the agent identity this client is bound to.
+        # Populated from the welcome frame (server sends ``agent_id``
+        # only for agent-authenticated connections). ``None`` when the
+        # connection is authenticated as a user/guest, or when the
+        # server is running a pre-#61 build that doesn't send the
+        # field. ``should_respond`` uses this to gate ``room_query``
+        # forwarding: only the representative agent should forward the
+        # [ROOM_QUERY], otherwise N agents in the source room send N
+        # duplicates to the target room.
+        self._agent_id: str | None = None
+
+        # Issue #148 Part 3 — cached agent-side opt-out from ambient
+        # context ingestion. Refreshed from every welcome frame the
+        # server sends, so toggling the flag via the admin UI plus a
+        # ``bump_generation`` (which respawns the agent subprocess)
+        # propagates on the next ws connect. ``decide_policy`` reads
+        # this to demote ``ingest_only`` broadcasts to ``SKIP`` for
+        # opt-out agents.
+        self._context_window_opt_out: bool = False
+
+        # Issue #237 — per-room ephemeral flag and agent-level memory
+        # snapshot cached from welcome frames. Adapters read these in
+        # their system-prompt composition step so every engine receives
+        # the same cross-engine memory block (see
+        # ``anygarden.agent.memory.compose_memory_block``). ``memory_md``
+        # is a single agent-level scalar (same on every WS for the same
+        # agent); ``ephemeral`` is per-room because the user can toggle
+        # it per DM.
+        self._room_ephemeral: dict[str, bool] = {}
+        self._memory_md: str | None = None  # Legacy archive; never used as room context.
+        self._room_memory: dict[str, dict] = {}
+
+        # Per-room agent-only consecutive message counter.
+        # Counts how many messages in a row came from agents (non-human)
+        # without a human message in between.  When the count exceeds
+        # max_agent_turns, the handler skips the message to prevent
+        # infinite agent-to-agent loops.  A human message resets to 0.
+        self._agent_turn_count: dict[str, int] = {}
+        self.max_agent_turns: int = 6
+
+        # Issue #157 Phase A — reset-prefix abuse guard.
+        # ``[ROOM_QUERY]`` / ``[DELEGATED]`` frames reset the agent-
+        # turn counter (issue #67), which a looping agent can exploit
+        # to evade ``max_agent_turns`` by emitting task-init prefixes
+        # in a loop. This counter tracks consecutive task-init resets
+        # per room; once it exceeds ``max_task_init_resets`` the reset
+        # no longer fires and ``max_agent_turns`` regains its bite.
+        # A non-self, non-nonce (human) message resets the streak.
+        self._consecutive_task_init: dict[str, int] = {}
+        self.max_task_init_resets: int = 5
+
+        # Issue #221 — per-room participant roster stamped by the
+        # server on every welcome. ``room_id -> {participant_id: brief}``
+        # where ``brief`` mirrors ``ParticipantBrief`` on the wire
+        # (keys: ``id``, ``display_name``, ``kind``, ``agent_id``).
+        # ``compose_roster_suffix`` renders it into the LLM prompt so the
+        # model can pass a valid participant id to the ``ask_peer`` tool
+        # (#737) instead of guessing a display name. Pre-#221 servers omit
+        # ``participants`` entirely — those rooms cache an empty dict
+        # so the adapter's iteration stays safe.
+        self._participants_by_room: dict[str, dict[str, dict[str, Any]]] = {}
+
+        # Issue #157 Phase B — per-room ring buffer of recent message
+        # fingerprints (sender, hash). Feeds ``cycle_guard`` in
+        # ``decide_policy``: when the same (sender, hash) pair has
+        # appeared ``min_repetitions`` times within ``window`` entries,
+        # the agent skips the message to break semantic loops that
+        # ``max_agent_turns`` / reset-guard can't catch. Short messages
+        # hash to None and never enter the buffer, protecting "ok"-style
+        # legitimate repeats.
+        self._recent_msgs: dict[
+            str, collections.deque[dict[str, str]]
+        ] = {}
+        self._recent_msgs_maxlen: int = 10
+
+        # HTTP client for REST calls
+        self._http: httpx.AsyncClient | None = None
+        self._running = False
+
+    def __repr__(self) -> str:
+        return (
+            f"ChatClient(server={self._server_url!r}, "
+            f"agent={self._agent_name!r}, "
+            f"rooms={list(self._tasks.keys())!r})"
+        )
+
+    # ── Callback decorators ──────────────────────────────────────────
+
+    def on_message(self, handler: MessageHandler) -> MessageHandler:
+        """Register a message callback (decorator)."""
+        self._message_handlers.append(handler)
+        return handler
+
+    def on_join_room(self, handler: Callable[..., Any]) -> Callable[..., Any]:
+        """Register a join room callback (decorator)."""
+        self._join_handlers.append(handler)
+        return handler
+
+    # ── Room operations ──────────────────────────────────────────────
+
+    async def join_room(self, room_id: str) -> None:
+        """Start listening on a room via WebSocket."""
+        if room_id in self._tasks:
+            logger.warning("room.already_joined", room_id=room_id)
+            return
+        self._last_seq.setdefault(room_id, 0)
+        task = asyncio.create_task(self._room_loop(room_id))
+        self._tasks[room_id] = task
+
+    async def wait_for_room(self, room_id: str, timeout: float = 10) -> None:
+        """Wait for an active subscription before sending a delegated task."""
+        async def connected() -> None:
+            while room_id not in self._connections or room_id not in self._ready_rooms:
+                task = self._tasks.get(room_id)
+                if task is None or task.done():
+                    raise RuntimeError(f"Not connected to room {room_id}")
+                await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(connected(), timeout)
+
+    def _note_seq(self, room_id: str, seq: int) -> None:
+        """Advance this room's cursor and persist it for the next process.
+
+        Monotonic: a replayed frame carrying an older seq never rewinds
+        the cursor, so the next reconnect still asks for the newest gap.
+        """
+        if not isinstance(seq, int) or seq <= self._last_seq.get(room_id, 0):
+            return
+        self._last_seq[room_id] = seq
+        if self._state_dir is not None:
+            save_cursors(self._state_dir, self._last_seq)
+
+    def _seed_cursor(self, room_id: str, last_seq: int) -> None:
+        """Adopt the room's head seq as this room's starting point.
+
+        Only for a room we have no cursor for: a cold agent would
+        otherwise reconnect at 0 forever, and the server replays nothing
+        at 0, so anything sent while it was down would stay undelivered.
+        A cursor we already hold is deliberately behind the head — that
+        gap is exactly what the next reconnect asks to be replayed — so
+        it is never overwritten.
+        """
+        if not isinstance(last_seq, int) or last_seq <= 0:
+            return
+        if self._last_seq.get(room_id, 0) > 0:
+            return
+        self._last_seq[room_id] = last_seq
+        if self._state_dir is not None:
+            save_cursors(self._state_dir, self._last_seq)
+
+    async def send(
+        self,
+        room_id: str,
+        content: str,
+        metadata: dict | None = None,
+        thread_root_id: str | None = None,
+    ) -> None:
+        """Send a message to a room."""
+        ws = self._connections.get(room_id)
+        if ws is None:
+            raise RuntimeError(f"Not connected to room {room_id}")
+        # Attach a nonce so we can filter our own echo on receive
+        nonce = str(uuid.uuid4())
+        metadata = dict(metadata) if metadata else {}
+        request_id = metadata.get("request_id")
+        if isinstance(request_id, str):
+            for key, value in self._turn_context.get(request_id, {}).items():
+                metadata.setdefault(key, value)
+        metadata["_nonce"] = nonce
+        self._sent_nonces.add(nonce)
+        frame = SendFrame(
+            content=content,
+            metadata=metadata,
+            thread_root_id=thread_root_id,
+        )
+        await ws.send(frame.model_dump_json())
+
+    async def sendTyping(
+        self, room_id: str, is_typing: bool, stage: str | None = None
+    ) -> None:
+        """Send a typing indicator to a room."""
+        ws = self._connections.get(room_id)
+        if ws is None:
+            return
+        try:
+            frame = {"type": "typing", "is_typing": is_typing}
+            if is_typing and stage in {"preparing", "using_tool", "writing"}:
+                frame["stage"] = stage
+            await ws.send(json.dumps(frame))
+        except Exception:
+            pass
+
+    async def sendLifecycle(
+        self,
+        room_id: str,
+        request_id: str | None,
+        event: str,
+        *,
+        turn_attempt: int | None = None,
+        turn_generation: int | None = None,
+        turn_lease: str | None = None,
+        **details: Any,
+    ) -> None:
+        """Emit a LifecycleFrame over the room's WS (best-effort).
+
+        No-ops when there is no active subscription for *room_id*
+        or when *request_id* is None (proactive sends without a
+        triggering user message are not tracked through the
+        lifecycle). Transport errors are swallowed — lifecycle
+        emission failing must never kill the handler, since an
+        already-fragile network path is the original source of the
+        bug we're trying to diagnose.
+        """
+        if request_id is None:
+            return
+        ws = self._connections.get(room_id)
+        if ws is None:
+            return
+        payload = {k: v for k, v in details.items() if v is not None}
+        context = self._turn_context.get(request_id, {})
+        frame = LifecycleFrame(
+            request_id=request_id,
+            room_id=room_id,
+            event=event,
+            turn_attempt=(
+                turn_attempt
+                if turn_attempt is not None
+                else context.get("turn_attempt")
+            ),
+            turn_generation=(
+                turn_generation
+                if turn_generation is not None
+                else context.get("turn_generation")
+            ),
+            turn_lease=(
+                turn_lease if turn_lease is not None else context.get("turn_lease")
+            ),
+            **payload,
+        )
+        try:
+            await ws.send(frame.model_dump_json(exclude_none=True))
+        except Exception:
+            pass
+        finally:
+            if event == "handler_finished" and payload.get("outcome") not in {
+                "queued",
+                "retrying",
+            } and (
+                frame.turn_lease == self._turn_context.get(request_id, {}).get("turn_lease")
+            ):
+                self._turn_context.pop(request_id, None)
+
+    async def find_sub_room(self, parent_room_id: str, name: str) -> str | None:
+        """Find a sub-room by name. Returns room_id or None."""
+        http = await self._get_http()
+        base = self._server_url.replace("ws://", "http://").replace("wss://", "https://")
+        resp = await http.get(
+            f"{base}/api/v1/rooms/{parent_room_id}/sub-rooms",
+            params={"name": name},
+            headers={"Authorization": f"Bearer {self._token}"},
+        )
+        if resp.status_code != 200:
+            return None
+        rooms = resp.json()
+        return rooms[0]["id"] if rooms else None
+
+    async def get_room_participants(self, room_id: str) -> list[dict]:
+        """Fetch participant list for a room via REST API."""
+        http = await self._get_http()
+        base = self._server_url.replace("ws://", "http://").replace("wss://", "https://")
+        resp = await http.get(
+            f"{base}/api/v1/rooms/{room_id}",
+            headers={"Authorization": f"Bearer {self._token}"},
+        )
+        if resp.status_code != 200:
+            return []
+        return resp.json().get("participants", [])
+
+    async def create_sub_room(
+        self,
+        parent_room_id: str,
+        participants: list[str],
+        purpose: str,
+    ) -> str:
+        """Create a sub-channel via the REST API. Returns the new room ID."""
+        http = await self._get_http()
+        # Derive the REST base URL from the WS URL
+        base = self._server_url.replace("ws://", "http://").replace("wss://", "https://")
+        resp = await http.post(
+            f"{base}/api/v1/rooms/{parent_room_id}/sub-rooms",
+            json={
+                "name": purpose,
+                "participants": participants,
+                "is_dm": False,
+                "creator_participant_id": "",  # server will validate
+            },
+            headers={"Authorization": f"Bearer {self._token}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        room_id = data["id"]
+        await self.join_room(room_id)
+        return room_id
+
+    # ── Lifecycle ────────────────────────────────────────────────────
+
+    async def run(self) -> None:
+        """Main event loop — waits for all room tasks to complete."""
+        self._running = True
+        logger.info("client.running", agent=self._agent_name, rooms=list(self._tasks.keys()))
+        try:
+            if self._tasks:
+                await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._running = False
+
+    async def close(self) -> None:
+        """Close all connections and cancel tasks."""
+        self._running = False
+        for cancel in list(self._delegation_cleanups):
+            cancel()
+        tasks = [*self._tasks.values(), *self._handler_tasks, *self._turn_stop_tasks.values()]
+        for future in self._turn_start_waiters.values():
+            if not future.done():
+                future.cancel()
+        self._turn_start_waiters.clear()
+        for task in tasks:
+            task.cancel()
+        # Wait for tasks to finish cancellation
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for ws in self._connections.values():
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._connections.clear()
+        self._ready_rooms.clear()
+        if self._execution_control is not None:
+            await self._execution_control.close()
+            self._execution_control = None
+        adapter = getattr(self, "_execution_adapter", None)
+        if adapter is not None:
+            await adapter.stop()
+            self._execution_adapter = None
+        self._tasks.clear()
+        if self._http:
+            await self._http.aclose()
+            self._http = None
+
+    # ── Internal ─────────────────────────────────────────────────────
+
+    def _cache_room_memory(self, room_id, value, *, replace=False):
+        from anygarden.agent.memory.scope import room_memory_snapshot
+
+        snapshot = room_memory_snapshot(
+            value, room_id=room_id, generation=self._generation,
+        )
+        if snapshot is None:
+            if replace:
+                self._room_memory.pop(room_id, None)
+            return
+        previous = self._room_memory.get(room_id)
+        if previous is not None and (
+            snapshot["generation"] < previous["generation"]
+            or (snapshot["generation"] == previous["generation"]
+                and snapshot["revision"] < previous["revision"])
+        ):
+            return
+        self._room_memory[room_id] = snapshot
+        self._room_ephemeral[room_id] = snapshot.get("ephemeral", False)
+
+    def _cache_roster(
+        self, room_id: str, entries: list[dict[str, Any]] | None
+    ) -> None:
+        """Replace the cached participant roster for *room_id* (#221 / #644).
+
+        Shared by the two frames that carry a roster — ``welcome`` at
+        connect time and ``room_settings_changed`` on every later
+        change — so both apply the same well-formedness guard: an entry
+        must be a dict with a truthy ``id`` to be addressable, and a
+        malformed one is dropped rather than aborting the refresh for
+        its well-formed neighbours.
+
+        ``None`` (pre-#221 server omitting the field) caches an empty
+        dict so adapter iteration never raises.
+        """
+        self._participants_by_room[room_id] = {
+            entry["id"]: entry
+            for entry in (entries or [])
+            if isinstance(entry, dict) and entry.get("id")
+        }
+
+    def compose_roster_suffix(self, room_id: str) -> str:
+        """Compose the participants roster appended to the LLM prompt
+        (#221 → #288 → #644).
+
+        Each line lists a peer as ``- {name} (id: {uuid}, kind: ...)``
+        with the ``description`` (#271) appended after an em-dash
+        when present. Newlines inside the description collapse to
+        single spaces and the visible portion is capped at 200 chars
+        so the per-turn token cost stays predictable.
+
+        #288 — pre-#288 the roster embedded a *live* ``<@user:{uuid}>``
+        routing token in front of every name. That made the token
+        trivially copy-pasteable, which is exactly the problem: an
+        agent recommending peers ("for UI questions ask <@user:abc>")
+        accidentally woke the recommended peers because the server's
+        ``parse_mentions`` treats every such token as an actionable
+        mention. Splitting *display name* from the *id-as-data* lets
+        the model address peers by name in prose and only assemble a
+        routing token when intentionally calling one (the ``ask_peer`` MCP
+        tool (#737), or the explicit ``<@user:PARTICIPANT_ID>`` fallback
+        in the usage paragraph below).
+
+        Self is excluded — calling itself would be a no-op cycle. Returns an empty string when the roster
+        cache is absent (pre-#221 server),
+        letting the caller skip the ``system_prompt`` rewrite entirely.
+
+        #733 — self stays out of the peer list but is stated on its own
+        ``You:`` line with its participant id. Messages reach the model
+        with raw ``<@user:{pid}>`` tokens, and without that line a mention
+        of the agent's own id read as an unknown participant. A roster
+        holding only self now yields the room ID and the ``You:`` line
+        (no peer list, no routing guidance).
+
+        #644 — the usage paragraph is unconditional. It used to be
+        gated on ``agents.collaboration_mode``, but that gate never
+        restrained anything: the server's peer-mention budget ignores
+        the column, so a "solo" agent that produced a routing token
+        still woke its peer. All the gate achieved was withholding the
+        *guidance* — including the part telling the model not to
+        peer-ask over trivia — from the agents most likely to need it.
+        """
+        roster = self._participants_by_room.get(room_id) or {}
+        if not roster:
+            return ""
+        my_pids = self._my_participant_ids
+        self_line: str | None = None
+        lines: list[str] = []
+        for pid, brief in roster.items():
+            if not isinstance(brief, dict):
+                continue
+            name = brief.get("display_name") or "?"
+            if pid in my_pids:
+                # #733 — ``_my_participant_ids`` spans every room, so the
+                # roster (not the set) decides which pid is ours *here*.
+                if self_line is None:
+                    self_line = (
+                        f"You: {name} (id: {pid}). A <@user:{pid}> token "
+                        "in a message addresses you. Never put that token "
+                        "in your own reply."
+                    )
+                continue
+            kind = brief.get("kind") or "user"
+            raw_desc = brief.get("description") or ""
+            desc = raw_desc.replace("\n", " ").replace("\r", " ").strip()[:200]
+            desc_part = f" — {desc}" if desc else ""
+            lines.append(f"- {name} (id: {pid}, kind: {kind}){desc_part}")
+        if not lines and self_line is None:
+            return ""
+        header = (
+            f"Current room ID: {room_id}. Use this exact value for Anygarden "
+            "MCP tools that require room_id; the participant IDs below are "
+            "only for assignee_pid and routing tokens."
+        )
+        if self_line is not None:
+            header += "\n\n" + self_line
+        if not lines:
+            # Alone in the room: nobody to route to, so the peer list
+            # and the routing guidance below would be noise.
+            return header
+        suffix = (
+            header
+            + "\n\n"
+            "Room participants (peers, excluding you). Refer to peers by "
+            "display name in prose. Never put a routing token "
+            "<@user:PARTICIPANT_ID> in prose that merely lists, recommends, "
+            "or describes peers.\n"
+            + "\n".join(lines)
+        )
+        # #283 / #288 / #737 / #762: the paragraphs below carry the
+        # peer-call rules — call through the ``ask_peer`` tool so the call
+        # is recorded and a rejection comes back within the turn; the turn
+        # that asks ends with a draft and is woken with the answers, so the
+        # caller writes one final answer (#762 replaced the #283 "don't
+        # synthesize" rule, whose premise — peer replies in the main channel
+        # — ended with #737's threads). A routing token only as the
+        # fallback, display names in prose, and the don't-peer-ask-over-
+        # trivia brake. Roster tests pin the phrases.
+        suffix += (
+            "\n\nWhen you need other agents to actively answer, call the "
+            "ask_peer tool once with this room ID and one entry per agent "
+            "(its id from the list above and a self-contained question). "
+            "The server posts the questions in a thread at once and the "
+            "agents start working, so do not also write the requests in "
+            "your reply. Your reply for that turn is not posted: write only "
+            "what you already found yourself; it is kept as your draft. When "
+            "every agent has finished you are woken with their answers and "
+            "your draft — then write the final answer once, combining them, "
+            "and say which agent failed or timed out and why. Do not ask for "
+            "what you already know. If ask_peer says a call was rejected, "
+            "that agent will not be called: use the messages it returns and "
+            "answer yourself. ask_peer only calls agents (kind: agent); "
+            "address people by name.\n\n"
+            "Only if the ask_peer tool is unavailable, put an intentional "
+            "routing token in the final reply by substituting the agent's id "
+            "into <@user:PARTICIPANT_ID>; intermediate commentary is not sent "
+            "to the room.\n\n"
+            "For recommendations, comparisons, status reports, or "
+            "any descriptive reference to a peer, use only the "
+            "display name. Don't peer-ask for trivial "
+            "greetings or meta questions — answer those yourself."
+        )
+        return suffix
+
+    def _record_recent_message(
+        self, room_id: str, msg: dict[str, Any]
+    ) -> None:
+        """Append a (sender, hash) fingerprint to the room's ring
+        buffer for ``cycle_guard`` (#157 Phase B).
+
+        Short content hashes to ``None`` and is skipped — legitimate
+        short repeats ("ok", "네", "done") must not feed the detector.
+        Missing sender is also skipped (welcome/system frames).
+        """
+        sender = msg.get("participant_id")
+        if not sender:
+            return
+        content = msg.get("content", "") or ""
+        h = hash_content(content)
+        if h is None:
+            return
+        buf = self._recent_msgs.get(room_id)
+        if buf is None:
+            buf = collections.deque(maxlen=self._recent_msgs_maxlen)
+            self._recent_msgs[room_id] = buf
+        buf.append({"sender": sender, "hash": h})
+
+    def _mark_seq_seen(self, room_id: str, seq: int, delivery: tuple | None = None) -> bool:
+        """Record ``seq`` as dispatched for ``room_id``.
+
+        Issue #445 Wave 0 — returns ``True`` if this seq was already
+        seen (caller should drop it as a replay duplicate), ``False``
+        the first time it's encountered. ``seq <= 0`` (sentinel / absent
+        seq) is never tracked so legitimately un-numbered frames always
+        dispatch. The seen set is bounded to ``_seen_seqs_maxlen`` via a
+        FIFO deque; evicting an old seq from the deque drops it from the
+        set in lock-step so memory stays bounded over a long-lived room.
+        """
+        if seq <= 0:
+            return False
+        key = (seq, *delivery) if delivery is not None else seq
+        seen = self._seen_seqs.get(room_id)
+        if seen is None:
+            seen = set()
+            self._seen_seqs[room_id] = seen
+            self._seen_seq_order[room_id] = collections.deque()
+        if key in seen:
+            return True
+        order = self._seen_seq_order[room_id]
+        seen.add(key)
+        order.append(key)
+        while len(order) > self._seen_seqs_maxlen:
+            seen.discard(order.popleft())
+        return False
+
+    def _consume_task_init_reset(self, room_id: str) -> bool:
+        """Increment the per-room consecutive task-init counter and
+        return whether the caller should still honour the reset.
+
+        Issue #157 Phase A — returns False once more than
+        ``max_task_init_resets`` consecutive task-init frames have
+        arrived without a human message breaking the streak. The
+        caller must then keep ``_agent_turn_count`` as-is so
+        ``max_agent_turns`` can still fire on runaway loops that
+        spam ``[ROOM_QUERY]`` / ``[DELEGATED]`` prefixes.
+        """
+        count = self._consecutive_task_init.get(room_id, 0) + 1
+        self._consecutive_task_init[room_id] = count
+        if count > self.max_task_init_resets:
+            logger.warning(
+                "task_init.reset_guard_fired",
+                room_id=room_id,
+                consecutive=count,
+                limit=self.max_task_init_resets,
+            )
+            return False
+        return True
+
+    async def _process_frame(self, room_id: str, data: dict[str, Any], *, background_handlers: bool = False) -> None:
+        """Handle a single incoming WS frame (called from _room_loop)."""
+        msg_type = data.get("type")
+        if msg_type == "turn_start_permit":
+            try:
+                frame = TurnStartPermitOut.model_validate(data)
+            except ValueError:
+                return
+            if frame.room_id != room_id:
+                return
+            key = (room_id, frame.request_id, frame.attempt, frame.generation, frame.local_execution_id)
+            future = self._turn_start_waiters.get(key)
+            if future is not None and not future.done():
+                future.set_result(frame)
+        elif msg_type == "turn_stop":
+            try:
+                frame = TurnStopOut.model_validate(data)
+            except ValueError:
+                return
+            if frame.room_id != room_id or frame.agent_id != self._agent_id:
+                return
+            existing = self._turn_stop_tasks.get(frame.stop_id)
+            if existing is None or existing.done():
+                task = asyncio.create_task(self._handle_turn_stop(room_id, frame))
+                self._turn_stop_tasks[frame.stop_id] = task
+                task.add_done_callback(lambda done, key=frame.stop_id: self._turn_stop_tasks.pop(key, None) if self._turn_stop_tasks.get(key) is done else None)
+        elif msg_type == "turn_cancel":
+            self._handle_turn_cancel(room_id, data)
+        elif msg_type == "execution_control":
+            await self._handle_execution_control(room_id, data)
+        elif msg_type == "message":
+            # Issue #157 Phase B — record the message for cycle detection
+            # before any early-return filters fire. Self / nonce-echo
+            # frames still count: the detector tracks (sender, hash)
+            # pairs, so repeats from this very agent are also caught.
+            self._record_recent_message(room_id, data)
+
+            seq = data.get("seq", 0)
+            self._note_seq(room_id, seq)
+
+            # Hard filter: skip messages sent by our own participant.
+            sender = data.get("participant_id")
+            from anygarden.agent.integrations.base import is_leased_task_assignment
+
+            leased_assignment = is_leased_task_assignment(data, self)
+            # Older assignment records can have the assignee as sender.
+            # A fresh server lease still authorizes that concrete task;
+            # ordinary self echoes retain the filter below.
+            if sender and sender in self._my_participant_ids and not leased_assignment:
+                # Issue #67 — a self-emitted ``[ROOM_QUERY]``/
+                # ``[DELEGATED]`` is a task boundary even though the
+                # frame is our own echo. Reset so agent-only rooms
+                # don't inherit the previous exchange's count on the
+                # next task round.  Regular self-messages still count
+                # toward the limit to bound total agent-only traffic.
+                # Issue #157 Phase A — ``_consume_task_init_reset``
+                # drops the reset once consecutive task-inits exceed
+                # ``max_task_init_resets``, re-arming ``max_agent_turns``.
+                content = data.get("content", "")
+                if _is_task_init_content(content):
+                    if self._consume_task_init_reset(room_id):
+                        self._agent_turn_count[room_id] = 0
+                else:
+                    self._agent_turn_count[room_id] = (
+                        self._agent_turn_count.get(room_id, 0) + 1
+                    )
+                return
+
+            # Soft filter: skip our own echoes via nonce
+            msg_meta = data.get("metadata") or {}
+            request_id = msg_meta.get("request_id")
+            nonce = msg_meta.get("_nonce")
+            if nonce and nonce in self._sent_nonces:
+                self._sent_nonces.discard(nonce)
+                # Issue #67 — same task-boundary semantics apply when
+                # the echo arrives via the nonce path (e.g. the hard
+                # filter missed it because participant_id changed).
+                # Issue #157 Phase A — guard mirrors the hard-filter path.
+                content = data.get("content", "")
+                if _is_task_init_content(content):
+                    if self._consume_task_init_reset(room_id):
+                        self._agent_turn_count[room_id] = 0
+                else:
+                    self._agent_turn_count[room_id] = (
+                        self._agent_turn_count.get(room_id, 0) + 1
+                    )
+                return
+
+            # Turn counter: track consecutive agent-only messages.
+            # Terminal delegation results are control messages. Deliver them
+            # before loop guards or a slow engine handler can discard/delay
+            # an already completed child, and never wake another engine.
+            if msg_meta.get("delegation_id") and msg_meta.get("delegation_outcome") in {
+                "ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted",
+            }:
+                if self._mark_seq_seen(room_id, seq):
+                    return
+                data["room_id"] = room_id
+                for handler in list(self._delegate_result_handlers):
+                    try:
+                        await handler(data)
+                    except Exception:
+                        logger.exception("delegate.result_handler_failed", room_id=room_id)
+                return
+
+            # Turn counter: track consecutive agent-only messages.
+            # A message from a non-self participant is either from
+            # a human (reset counter) or another agent (increment).
+            # We use nonce presence as a heuristic: agent messages
+            # have _nonce (set by SDK), human messages don't.
+            content = data.get("content", "")
+            sender_has_nonce = bool(msg_meta.get("_nonce"))
+
+            # [DELEGATED] and [ROOM_QUERY] messages are new task
+            # initiations — always reset the counter so the handler
+            # processes the task even if the previous agent-only
+            # exchange hit the limit.
+            # Issue #157 Phase A — once consecutive task-inits exceed
+            # ``max_task_init_resets`` the reset no longer fires, so
+            # ``max_agent_turns`` regains authority over prefix-looping
+            # agents.
+            if _is_task_init_content(content):
+                if self._consume_task_init_reset(room_id):
+                    self._agent_turn_count[room_id] = 0
+            elif sender_has_nonce:
+                # From another agent — increment
+                count = self._agent_turn_count.get(room_id, 0) + 1
+                self._agent_turn_count[room_id] = count
+                if count > self.max_agent_turns:
+                    logger.info(
+                        "ws.agent_turn_limit",
+                        room_id=room_id,
+                        count=count,
+                        limit=self.max_agent_turns,
+                    )
+                    # #482 — count the silent drop so the agent-loop
+                    # suppression rate is measurable (previously only the
+                    # info above marked it). Optionally surface a single
+                    # room system line when an operator opts in via
+                    # ``ANYGARDEN_SURFACE_SILENT_PATHS``; default OFF keeps
+                    # the room quiet so chat UX is not polluted.
+                    metrics.agent_turn_limit_skip_total.inc()
+                    if _is_truthy(os.environ.get("ANYGARDEN_SURFACE_SILENT_PATHS")):
+                        try:
+                            await self.send(
+                                room_id,
+                                _AGENT_TURN_LIMIT_NOTICE,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            # Surfacing is best-effort; a dead socket must
+                            # never turn a benign loop-guard drop into a
+                            # crash.
+                            logger.debug(
+                                "ws.agent_turn_limit.surface_failed",
+                                room_id=room_id,
+                                error=str(exc),
+                            )
+                    return  # skip — agent-only loop exceeded limit
+            else:
+                # From a human — reset both counters. Human messages
+                # break the agent-only streak *and* clear the task-init
+                # consecutive counter that feeds the #157 guard.
+                self._agent_turn_count[room_id] = 0
+                self._consecutive_task_init[room_id] = 0
+
+            # Issue #157 Phase B — surface the room_id on the frame so
+            # ``decide_policy`` can look up the per-room recent-message
+            # ring buffer. Adapters already read ``msg.get("room_id")``
+            # (see claude_code.py), this makes the field authoritative.
+            data.setdefault("room_id", room_id)
+
+            # Issue #445 Wave 0 — seq de-dup. Bookkeeping above (turn
+            # counters, recent-message ring, _last_seq) must still run
+            # for every frame, but a seq already dispatched to the
+            # handlers must not be dispatched a second time after a
+            # reconnect replays it via ``since_seq``. Check last, right
+            # before invoking handlers, so a replayed+live duplicate
+            # reaches handlers exactly once.
+            delivery = None
+            if isinstance(request_id, str) and isinstance(msg_meta.get("turn_lease"), str):
+                # Retrying a durable turn reuses the message sequence but
+                # owns a new attempt. Deduplicate redelivery, not retries.
+                delivery = (request_id, msg_meta.get("turn_attempt"), msg_meta["turn_lease"])
+            if self._mark_seq_seen(room_id, seq, delivery):
+                logger.debug("ws.duplicate_seq_skipped", room_id=room_id, seq=seq)
+                return
+
+            if isinstance(request_id, str):
+                incoming = {key: msg_meta[key] for key in (
+                    "turn_attempt", "turn_generation", "turn_lease",
+                    "turn_idempotency_key", "turn_protocol",
+                ) if key in msg_meta}
+                previous = self._turn_context.get(request_id, {})
+                old_attempt, new_attempt = previous.get("turn_attempt"), incoming.get("turn_attempt")
+                if isinstance(old_attempt, int) and isinstance(new_attempt, int) and old_attempt > new_attempt:
+                    return
+                if incoming.get("turn_lease") or not previous.get("turn_lease"):
+                    self._turn_context[request_id] = incoming
+
+            if background_handlers and len(self._handler_tasks) < 64:
+                # Keep reading control/results while an engine works. The
+                # supervisor owns the bounded per-room turn queue; this cap
+                # also bounds custom handlers, with backpressure at capacity.
+                task = asyncio.create_task(self._dispatch_message_handlers(data))
+                self._handler_tasks.add(task)
+                task.add_done_callback(self._handler_tasks.discard)
+                await asyncio.sleep(0)
+            else:
+                await self._dispatch_message_handlers(data)
+        elif msg_type == "room_ready":
+            if data.get("room_id") == room_id:
+                self._ready_rooms.add(room_id)
+        elif msg_type == "welcome":
+            pid = data.get("participant_id")
+            if pid:
+                self._my_participant_ids.add(pid)
+                logger.info("ws.welcome", room_id=room_id, participant_id=pid)
+            # Issue #61 — cache the agent identity the server assigned
+            # to this connection so ``should_respond`` can gate
+            # ``room_query`` forwarding. Only overwrite if the server
+            # sent a value: an agent reconnecting through a room that
+            # another session already populated must not clear it.
+            aid = data.get("agent_id")
+            if aid:
+                self._agent_id = aid
+            # Seed this room's replay baseline when we don't have one.
+            self._seed_cursor(room_id, data.get("last_seq", 0))
+            # Issue #148 Part 3 — refresh the opt-out cache on every
+            # welcome. Absent field (older servers, non-agent sessions)
+            # leaves the default False in place, which preserves the
+            # pre-#148 ingest behaviour exactly.
+            if "context_window_opt_out" in data:
+                self._context_window_opt_out = bool(
+                    data.get("context_window_opt_out")
+                )
+            # Issue #237 — ephemeral is per-room; memory_md is per-agent.
+            # We refresh both on every welcome so a toggle +
+            # ``bump_generation`` cycle propagates cleanly.
+            if "ephemeral" in data:
+                self._room_ephemeral[room_id] = bool(data.get("ephemeral"))
+            # A missing/empty reconnect snapshot clears this room's cache;
+            # legacy top-level memory_md has no attributable room.
+            self._cache_room_memory(room_id, data.get("room_memory"), replace=True)
+            # Issue #221 — stash the participants roster the server
+            # stamped on this welcome. Absent on pre-#221 servers; the
+            # helper caches an empty dict so adapter iteration stays
+            # safe.
+            self._cache_roster(room_id, data.get("participants"))
+            # The server may include rooms that were added while we
+            # were disconnected. Join any we don't already have.
+            for pending in data.get("pending_rooms") or []:
+                if pending not in self._tasks:
+                    logger.info("ws.pending_room_join", room_id=pending, via=room_id)
+                    await self.join_room(pending)
+        elif msg_type == "room_memory_changed":
+            target_room = data.get("room_id")
+            if target_room == room_id and data.get("agent_id") == self._agent_id:
+                self._cache_room_memory(target_room, data.get("room_memory"))
+        elif msg_type == "room_settings_changed":
+            # Issue #221 — admin PATCH on room-level settings. Only
+            # non-None fields overwrite cached values so a partial
+            # update doesn't accidentally reset unrelated caches
+            # (mirrors the server's "None = not touched" semantics).
+            # ``room_id`` may differ from the WS room id in theory;
+            # prefer the frame's value so cross-room routing stays
+            # honest if that ever happens.
+            target_room = data.get("room_id") or room_id
+            # #237 — ephemeral toggle arrives over the same frame. We
+            # only touch the cache when the server sent a non-None
+            # value so a rename-only PATCH doesn't wipe the stored flag.
+            new_ephemeral = data.get("ephemeral")
+            if new_ephemeral is not None:
+                self._room_ephemeral[target_room] = bool(new_ephemeral)
+            # #644 — the server re-sends the whole participant roster
+            # whenever membership or a rendered field (peer name,
+            # description) changes. Replace wholesale rather than
+            # merging: the snapshot is authoritative, and a merge
+            # would keep peers who have left. ``None`` follows the
+            # same "not touched by this change" rule as the fields
+            # above, so a settings-only PATCH never empties the cache.
+            new_participants = data.get("participants")
+            if new_participants is not None:
+                self._cache_roster(target_room, new_participants)
+            logger.info(
+                "ws.room_settings_changed",
+                room_id=target_room,
+                context_window_enabled=data.get("context_window_enabled"),
+                ephemeral=new_ephemeral,
+                participants=(
+                    len(self._participants_by_room.get(target_room, {}))
+                    if new_participants is not None
+                    else None
+                ),
+            )
+        elif msg_type == "join_room":
+            new_room = data.get("room_id")
+            if new_room and new_room not in self._tasks:
+                logger.info("ws.dynamic_join", room_id=new_room, via=room_id)
+                await self.join_room(new_room)
+        elif msg_type == "error":
+            logger.warning("ws.server_error", detail=data.get("detail"))
+
+    async def _dispatch_message_handlers(self, data: dict[str, Any]) -> None:
+        # Snapshot: one-shot callbacks can remove themselves during delivery.
+        for handler in list(self._message_handlers):
+            try:
+                await handler(data)
+            except Exception as exc:
+                logger.error("handler.message_error", error=str(exc))
+                metrics.client_handler_error_total.inc()
+
+    async def request_turn_start(self, identity: dict, local_execution_id: str, lease: str):
+        """Fail closed if the exact server start grant cannot be obtained."""
+        from anygarden.agent.runtime.execution.project_turn import ProjectTurnError
+
+        room_id = identity["room_id"]
+        ws = self._connections.get(room_id)
+        if ws is None:
+            raise ProjectTurnError("TURN_START_DISCONNECTED")
+        packet = TurnStartFrame(
+            **{key: identity[key] for key in ("request_id", "attempt", "generation", "execution_id", "input_revision")},
+            local_execution_id=local_execution_id, lease=lease,
+        )
+        key = (room_id, identity["request_id"], identity["attempt"], identity["generation"], local_execution_id)
+        if key in self._turn_start_waiters:
+            raise ProjectTurnError("TURN_START_CONFLICT")
+        future = asyncio.get_running_loop().create_future()
+        self._turn_start_waiters[key] = future
+        try:
+            await ws.send(packet.model_dump_json())
+            try:
+                frame = await asyncio.wait_for(future, timeout=10)
+            except TimeoutError:
+                raise ProjectTurnError("TURN_START_TIMEOUT") from None
+            if not frame.allowed:
+                raise ProjectTurnError("TURN_START_DENIED")
+            if frame.execution_id != identity["execution_id"] or frame.input_revision != identity["input_revision"]:
+                raise ProjectTurnError("TURN_BINDING_CHANGED")
+            return frame.input_snapshot
+        finally:
+            self._turn_start_waiters.pop(key, None)
+
+    def _handle_turn_cancel(self, room_id: str, data: dict[str, Any]) -> None:
+        """ENG-09 — stop a user-cancelled general turn's exact attempt.
+
+        The server already made the turn terminal, so no receipt is sent;
+        the supervisor cancels the engine child (or skips it if queued).
+        """
+        try:
+            frame = TurnCancelOut.model_validate(data)
+        except ValueError:
+            return
+        if (frame.room_id != room_id or frame.agent_id != self._agent_id
+                or frame.generation != self._generation):
+            return
+        supervisor = getattr(self, "_turn_supervisor", None)
+        if supervisor is None:
+            return
+        supervisor.cancel_turn({"room_id": room_id, "request_id": frame.request_id,
+                                "attempt": frame.attempt, "generation": frame.generation})
+
+    async def _handle_turn_stop(self, room_id: str, frame: TurnStopOut) -> None:
+        result = {"status": "unknown", "process_state": "unknown", "outcome": "unknown",
+                  "local_execution_id": frame.local_execution_id, "code": "STOP_UNCONFIRMED"}
+        adapter = getattr(self, "_execution_adapter", None)
+        if frame.generation != self._generation:
+            result["code"] = "STALE_IDENTITY"
+        elif adapter is not None and hasattr(adapter, "stop_turn"):
+            try:
+                result = await adapter.stop_turn(frame.model_dump())
+            except Exception:  # noqa: BLE001 — closed stop code, never provider details
+                # Closed code only; never expose the launch, provider or payload.
+                result["code"] = "STOP_UNCONFIRMED"
+        ws = self._connections.get(room_id)
+        if ws is not None:
+            packet = TurnStopResultFrame(
+                **{key: getattr(frame, key) for key in ("stop_id", "request_id", "attempt", "generation", "execution_id", "input_revision")},
+                **result,
+            )
+            try:
+                await ws.send(packet.model_dump_json())
+            except Exception:  # noqa: BLE001, S110 — durable stop replay recovers delivery
+                # Durable local tombstone/receipt survives; server stop replay
+                # obtains the same proof when this room reconnects.
+                pass
+
+    def _can_control_execution(self) -> bool:
+        adapter = getattr(self, "_execution_adapter", None)
+        return bool(
+            self.execution_launch_ready and adapter is not None
+            and self._generation is not None and os.name == "posix"
+            and (adapter._permission_level or "standard") in {"restricted", "standard"}
+        )
+
+    async def _handle_execution_control(self, room_id: str, data: dict[str, Any]) -> None:
+        from anygarden.agent.runtime.execution.codex import CodexRuntime
+        from anygarden.agent.runtime.execution.control import (
+            AgentExecutionControl,
+            ControlError,
+        )
+        from anygarden.agent.runtime.execution.pi import PiRuntime
+
+        request_id, action = data.get("request_id"), data.get("action")
+        if (
+            not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
+            or data.get("agent_id") != self._agent_id
+            or data.get("generation") != self._generation
+            or action not in {"prepare", "describe", "start", "reconcile", "cancel", "revoke"}
+            or not isinstance(data.get("payload"), dict)
+        ):
+            return
+        result, error = None, None
+        try:
+            if not self._can_control_execution():
+                raise ControlError("UNSUPPORTED_PERMISSION")
+            if self._execution_control is None:
+                adapter = self._execution_adapter
+                runtime_cls = PiRuntime if adapter._engine == "pi-cli" else CodexRuntime
+                runtime = runtime_cls(Path(adapter._codex_path).absolute())
+                if adapter._engine == "codex-cli":
+                    runtime.observed_version = adapter._runtime_version
+                auth_home = adapter._environment.get("CODEX_HOME")
+                self._execution_control = AgentExecutionControl(
+                    root=adapter._root, agent_id=self._agent_id,
+                    launch=lambda: adapter._launch, runtime=runtime,
+                    permission_level=adapter._permission_level or "standard",
+                    instructions=adapter._system_prompt or "",
+                    reasoning_effort=adapter._reasoning_effort,
+                    timeout_seconds=adapter._turn_timeout,
+                    codex_auth_source=Path(auth_home) / "auth.json" if auth_home else None,
+                )
+            self._execution_control.attach(room_id)
+            result = await self._execution_control.handle(action, data["payload"])
+        except ControlError as exc:
+            error = exc.code
+        except Exception:
+            # Never reflect private launch configuration or exception text.
+            error = "EXECUTION_UNAVAILABLE"
+        ws = self._connections.get(room_id)
+        if ws is not None:
+            await ws.send(json.dumps({
+                "type": "execution_control_result", "request_id": request_id,
+                "action": action, "generation": self._generation,
+                "result": result, "error_code": error,
+            }))
+
+    async def _room_loop(self, room_id: str) -> None:
+        """Reconnection loop with exponential backoff + since_seq recovery."""
+        delay = 1.0
+        # Issue #445 Wave 0 — count consecutive terminal (4040) closes.
+        # A 4040 means the server rejected this connection for an
+        # auth/lifecycle reason that won't fix itself on retry, so after
+        # a few attempts we give up instead of hammering the server.
+        terminal_attempts = 0
+        while True:
+            # Per-iteration flag: did this disconnect carry a terminal
+            # 4040 close code? Reset each loop so a recovered transient
+            # error clears the terminal cooldown semantics.
+            terminal_close = False
+            try:
+                since = self._last_seq.get(room_id, 0)
+                # The integrated node passes an ``http(s)://`` base (the
+                # legacy daemon passes ``ws(s)://``); websockets rejects
+                # http URIs, so map the scheme here.
+                ws_base = self._server_url
+                if ws_base.startswith(("http://", "https://")):
+                    ws_base = "ws" + ws_base[len("http"):]
+                ws_url = f"{ws_base}/ws/rooms/{room_id}"
+                query: list[str] = ["ready=1"]
+                if self._can_control_execution():
+                    query.append("execution_control=1")
+                if self.execution_launch_ready and hasattr(getattr(self, "_execution_adapter", None), "stop_turn"):
+                    query.append("turn_control=1")
+                if since > 0:
+                    query.append(f"since_seq={since}")
+                if self._generation is not None:
+                    query.append(f"generation={self._generation}")
+                if query:
+                    ws_url += "?" + "&".join(query)
+
+                subprotocols = build_subprotocols(self._token)
+
+                # Issue #190 — codex turns can legitimately run 5+
+                # minutes while the SDK waits on tool chains, and the
+                # ``websockets`` library default
+                # ``ping_interval=20, ping_timeout=20`` closed the
+                # connection mid-turn (``sent 1011 keepalive ping
+                # timeout``). The adapter produced a full response
+                # from ``thread.run_text`` but the subsequent
+                # ``client.send`` hit a closed socket, silently
+                # dropping the answer. We still ping periodically so
+                # a dead agent is detectable, but the timeout has to
+                # tolerate the adapter's turn cap
+                # (``_CODEX_TURN_TIMEOUT = 600s``) plus tool-call
+                # reasoning slack.
+                async with ws_connect(
+                    ws_url,
+                    subprotocols=subprotocols,
+                    ping_interval=60,
+                    # #492 — derived from the engine turn timeout so raising
+                    # the turn cap keeps the socket open (ping > turn); see
+                    # ``integrations/_turn_timeout``.
+                    ping_timeout=self._ping_timeout,
+                ) as ws:
+                    self._connections[room_id] = ws
+                    delay = 1.0  # Reset backoff on successful connect
+                    logger.info("ws.connected", room_id=room_id, agent=self._agent_name)
+
+                    # Notify join handlers
+                    for handler in self._join_handlers:
+                        try:
+                            await handler(room_id)
+                        except Exception as exc:
+                            logger.error("handler.join_error", error=str(exc))
+
+                    # Read messages — welcome, join_room, message,
+                    # error are all dispatched through _process_frame.
+                    async for raw in ws:
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8", errors="replace")
+                        try:
+                            data = json.loads(raw)
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning("ws.bad_frame", length=len(raw) if raw else 0)
+                            continue
+
+                        await self._process_frame(room_id, data, background_handlers=True)
+
+            except websockets.exceptions.InvalidStatusCode as exc:
+                # 403/4003 = not a member of this room. Don't retry —
+                # the agent was either not invited or was removed.
+                if getattr(exc, "status_code", 0) in (403, 4003):
+                    logger.warning("ws.not_member_giving_up", room_id=room_id)
+                    self._tasks.pop(room_id, None)
+                    return
+                logger.warning("ws.disconnected", room_id=room_id, error=str(exc), retry_in=delay)
+            except (
+                websockets.exceptions.ConnectionClosed,
+                websockets.exceptions.InvalidURI,
+                OSError,
+            ) as exc:
+                # Issue #445 Wave 0 — a 4040 close is the server's
+                # terminal/auth signal. Don't treat it as a transient
+                # drop: keep the backoff delay growing (do NOT reset it),
+                # apply a cooldown, and give up entirely once we've seen
+                # ``_TERMINAL_GIVE_UP_ATTEMPTS`` of them in a row.
+                if _close_code(exc) == _TERMINAL_CLOSE_CODE:
+                    terminal_close = True
+                    terminal_attempts += 1
+                    if terminal_attempts >= _TERMINAL_GIVE_UP_ATTEMPTS:
+                        logger.warning(
+                            "ws.terminal_close_giving_up",
+                            room_id=room_id,
+                            code=_TERMINAL_CLOSE_CODE,
+                            attempts=terminal_attempts,
+                        )
+                        self._tasks.pop(room_id, None)
+                        return
+                    logger.warning(
+                        "ws.terminal_close",
+                        room_id=room_id,
+                        code=_TERMINAL_CLOSE_CODE,
+                        attempts=terminal_attempts,
+                        cooldown=_TERMINAL_COOLDOWN,
+                    )
+                else:
+                    logger.warning(
+                        "ws.disconnected", room_id=room_id, error=str(exc), retry_in=delay
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("ws.unexpected_error", room_id=room_id, error=str(exc))
+            finally:
+                for key, future in list(self._turn_start_waiters.items()):
+                    if key[0] == room_id and not future.done():
+                        future.set_exception(RuntimeError("TURN_START_DISCONNECTED"))
+                if self._execution_control is not None:
+                    await self._execution_control.disconnected(room_id)
+                self._connections.pop(room_id, None)
+                self._ready_rooms.discard(room_id)
+
+            if not self._running:
+                break
+
+            if terminal_close:
+                # Terminal close: cooldown before the next attempt and
+                # leave ``delay`` untouched so a subsequent transient
+                # error keeps the backoff it had already accumulated.
+                await asyncio.sleep(_TERMINAL_COOLDOWN)
+                continue
+
+            # Non-terminal disconnect clears the 4040 streak.
+            terminal_attempts = 0
+
+            # Exponential backoff with jitter to avoid a thundering herd
+            # of agents reconnecting in lockstep after a server restart.
+            await asyncio.sleep(_backoff_with_jitter(delay, self._max_reconnect_delay))
+            delay = min(delay * 2, self._max_reconnect_delay)
+
+    async def _get_http(self) -> httpx.AsyncClient:
+        if self._http is None:
+            self._http = httpx.AsyncClient()
+        return self._http

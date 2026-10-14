@@ -113,7 +113,7 @@ and attempts execution regardless of the reported version:
 | `codex-cli` | No version gate; latest CLI is attempted | `@openai/codex` |
 
 The source of truth is `SUPPORTED_VERSIONS` in
-`anygarden_agent/runtime/execution/{pi,codex}.py`; the server catalog mirrors it
+`anygarden/agent/runtime/execution/{pi,codex}.py`; the server catalog mirrors it
 (`GET /api/v1/agents/engines/{engine}/models` → `supported_versions`) and a test
 keeps the two in sync.
 
