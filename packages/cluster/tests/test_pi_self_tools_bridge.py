@@ -45,13 +45,7 @@ from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.skills_library.service import SkillLibraryService
 
-HARNESS = (
-    Path(__file__).parents[2]
-    / "agent"
-    / "tests"
-    / "fixtures"
-    / "pi_self_tools_harness.mjs"
-)
+HARNESS = Path(__file__).parent / "agent" / "fixtures" / "pi_self_tools_harness.mjs"
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="Node is required by Pi"
 )
