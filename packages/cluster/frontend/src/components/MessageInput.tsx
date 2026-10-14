@@ -471,7 +471,7 @@ export default function MessageInput({
     && !mentionUsers.some(o => value.includes(`@${o.display}`))
 
   return (
-    <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
+    <div data-testid="message-composer" className="min-h-[var(--footer-min-height)] border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
       <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
         {slashError && (
           <div

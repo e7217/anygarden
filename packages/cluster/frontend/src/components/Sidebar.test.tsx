@@ -278,6 +278,25 @@ describe('Sidebar — add agent entry point', () => {
   })
 })
 
+describe('Sidebar — layout (#827)', () => {
+  it('places the wordmark before the desktop collapse toggle in the header', () => {
+    renderSidebar()
+    const home = screen.getByRole('button', { name: 'Go to home' })
+    const collapse = screen.getByTestId('sidebar-collapse')
+    expect(home.compareDocumentPosition(collapse) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(home).toHaveClass('text-body')
+  })
+
+  it('creates projects from the projects section header, not a bottom button', () => {
+    renderSidebar()
+    expect(screen.getByText('Projects')).toBeInTheDocument()
+    // The only creation entry point is the header icon — no labelled bottom button.
+    expect(screen.queryByText('New Project')).toBeNull()
+    fireEvent.click(screen.getByTestId('sidebar-add-project'))
+    expect(screen.getByRole('dialog')).toHaveTextContent('Create Project')
+  })
+})
+
 describe('Sidebar — agent actions requested from chat', () => {
   beforeEach(() => {
     authMockState.isAdmin = true

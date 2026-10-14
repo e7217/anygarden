@@ -382,21 +382,32 @@ test.describe('thread composer contract', () => {
     }
   })
 
-  test('collapsed navigation restores from the same position without covering the title', async ({ page }) => {
+  test('collapse sits at the end of the sidebar header and expand restores from the rail without covering the title', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await openRoom(page)
+    const sidebar = await page.getByTestId('sidebar-root').boundingBox()
     const collapse = page.getByTestId('sidebar-collapse')
     const before = await collapse.boundingBox()
+    // #827 — trailing slot of the header, after the wordmark.
+    expect(before!.x + before!.width).toBeGreaterThan(sidebar!.x + sidebar!.width - 24)
     await collapse.click()
     const expand = page.getByTestId('sidebar-expand')
     await expect(expand).toBeVisible()
     const after = await expand.boundingBox()
-    expect(after!.x).toBe(before!.x)
+    expect(after!.x).toBeLessThan(24)
     expect(after!.y).toBe(before!.y)
     const title = await page.getByRole('heading', { name: 'e2e-room', level: 1 }).boundingBox()
     expect(title!.x).toBeGreaterThanOrEqual(after!.x + after!.width)
     await expand.click()
     await expect(collapse).toBeVisible()
+  })
+
+  test('sidebar footer and composer share one top divider line', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await openRoom(page)
+    const footer = await page.getByTestId('sidebar-footer').boundingBox()
+    const composer = await page.getByTestId('message-composer').boundingBox()
+    expect(Math.abs(footer!.y - composer!.y)).toBeLessThanOrEqual(1)
   })
 
   test('context rail overlays the chat at tablet width', async ({ page }) => {
