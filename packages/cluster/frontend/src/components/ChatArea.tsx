@@ -18,6 +18,7 @@ import { canHostThread, type ThreadIndex } from '@/lib/threads'
 import { stageLabel, type AgentStage, type PeerProgress } from '@/lib/typingStage'
 import { activeTurnByParticipant, placeWorkingParticipants, threadTurnIds, type OpenTurn } from '@/lib/openTurns'
 import { isHiddenSystemMessage } from '@/lib/systemMessages'
+import { alignsRight } from '@/lib/messageLayout'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ChatAreaProps {
@@ -287,7 +288,7 @@ export default function ChatArea({
                     root={msg}
                     index={threadIndex}
                     participants={participants}
-                    isMine={msg.participant_id === myParticipantId}
+                    isMine={alignsRight(msg, msg.participant_id === myParticipantId)}
                     active={activeThreadRootId === msg.id}
                     onOpen={onOpenThread}
                     workingNames={threadTypingIds.get(msg.id)?.map(nameOf)}
