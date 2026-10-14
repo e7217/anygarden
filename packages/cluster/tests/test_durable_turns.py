@@ -1087,3 +1087,56 @@ async def test_exhausting_transient_fence_spends_no_transient_retry(turn_env) ->
         assert turn.retry_count == MAX_TRANSIENT_RETRIES
         assert await transient_retries_used(
             db, turn, before=MAX_TRANSIENT_RETRIES + 2) == MAX_TRANSIENT_RETRIES
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("EXE-22")
+async def test_unleased_handler_started_does_not_block_the_outbox_lease(
+    turn_env,
+) -> None:
+    # #824 — a lease-less copy of the trigger reached the agent before the
+    # outbox did. Its handler_started must not move the still-pending attempt
+    # to started, or the dispatcher skips the lease and every execution tool
+    # is refused for the whole turn.
+    factory = turn_env["factory"]
+    async with factory() as db:
+        trigger = await append_message(
+            db, turn_env["room"], turn_env["user_participant"], "assigned work",
+        )
+        turn = await create_turn(
+            db,
+            room_id=turn_env["room"],
+            participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"],
+            trigger_message_id=trigger.id,
+        )
+        request_id = turn.request_id
+        await db.commit()
+
+    async with factory() as db:
+        await record_lifecycle(db, agent_id=turn_env["agent"], frame=SimpleNamespace(
+            request_id=request_id, room_id=turn_env["room"], event="handler_started",
+            turn_attempt=None, turn_generation=None, turn_lease=None,
+        ))
+        await db.commit()
+
+    async with factory() as db:
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )
+        turn = await db.get(AgentTurn, request_id)
+        assert attempt is not None and attempt.state == "pending"
+        assert attempt.started_at is None
+        assert turn is not None and turn.state == "pending"
+        assert turn.protocol_version != 0
+
+    manager = FakeManager(turn_env["agent_participant"], 3)
+    assert await deliver_pending_outbox(factory, manager) == 1
+    assert manager.frames[0].metadata["turn_lease"]
+    async with factory() as db:
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )
+        assert attempt is not None and attempt.state == "leased"
+        assert attempt.leased_at is not None
+        assert attempt.lease_expires_at is not None
