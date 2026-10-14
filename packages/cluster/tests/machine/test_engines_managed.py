@@ -53,6 +53,19 @@ def test_pinned_version_matches_agent_adapter():
     assert managed.PI_PINNED_VERSION == pi.ENGINE_VERSION
 
 
+@pytest.mark.req("EXE-10")
+def test_pi_safe_event_list_reviewed_for_managed_pin():
+    pi = pytest.importorskip("anygarden_agent.runtime.execution.pi")
+    assert pi.PI_SAFE_EVENTS_REVIEWED_FOR == managed.PI_PINNED_VERSION, (
+        f"Managed Pi is pinned to {managed.PI_PINNED_VERSION} but the Pi "
+        f"side-effect-free event list in anygarden_agent/runtime/execution/pi.py "
+        f"was reviewed for {pi.PI_SAFE_EVENTS_REVIEWED_FOR}. Re-check the new "
+        f"Pi's event types, update _SAFE_EVENTS (and the message role/content "
+        f"lists), then set PI_SAFE_EVENTS_REVIEWED_FOR = "
+        f"{managed.PI_PINNED_VERSION!r}."
+    )
+
+
 @pytest.mark.req("ENG-07")
 def test_path_opt_in_is_explicit(root, monkeypatch):
     assert managed.pi_path_opt_in() is False

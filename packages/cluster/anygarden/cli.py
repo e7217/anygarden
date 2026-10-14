@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -331,6 +332,25 @@ if __name__ == "__main__":
     main()
 
 
+class _NodeExitError(click.ClickException):
+    """Node start/shutdown failure whose report cannot change the exit status.
+
+    On a full disk the error message itself may not be writable, and bytes
+    left in the stream buffers would make the interpreter's final flush fail
+    (exit 120). Reporting is best effort and the streams are settled so the
+    process exits with this exception's status (NODE-10).
+    """
+
+    def show(self, file: Any = None) -> None:
+        from anygarden.observability.logging import settle_standard_streams
+
+        try:
+            super().show(file)
+        except OSError:
+            pass
+        settle_standard_streams()
+
+
 @dispatch.command(name="start")
 @click.option(
     "--data-dir",
@@ -455,15 +475,19 @@ def start_node(
         # 1, which a supervising process misreads as a crash to restart.
         pass
     if not server.started:
-        raise click.ClickException("Node did not start; see the startup error above")
+        raise _NodeExitError("Node did not start; see the startup error above")
     # Uvicorn logs lifespan failures instead of propagating them to run().
     # A started server is not evidence that its owned children stopped safely.
     if not getattr(app.state, "node_shutdown_complete", False):
-        raise click.ClickException(
+        raise _NodeExitError(
             "Node shutdown failed; cleanup was not confirmed and recovery is required"
         )
     if getattr(app.state.local_execution, "failed", False):
-        raise click.ClickException("Local execution failed; see the server error above")
+        raise _NodeExitError("Local execution failed; see the server error above")
+    # Shutdown succeeded: make sure a full disk cannot turn exit 0 into 120.
+    from anygarden.observability.logging import settle_standard_streams
+
+    settle_standard_streams()
 
 
 @dispatch.command(name="stop")

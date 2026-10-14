@@ -45,6 +45,11 @@ _SIDE_EFFECTS: ContextVar[dict | None] = ContextVar("pi_side_effects", default=N
 # turn is one of these known side-effect-free Pi 0.85.1 event types. Any other
 # type -- tool_execution_*, or one a newer Pi adds -- may stand for work with
 # effects, so it makes the timeout non-transient.
+# The Pi version these lists were reviewed against. A test (EXE-10) fails
+# when the pinned engine (ENGINE_VERSION / the machine's managed pin) moves
+# off it: re-check the new Pi's event types and message shapes, update the
+# lists below, then bump this constant.
+PI_SAFE_EVENTS_REVIEWED_FOR = "0.85.1"
 _SAFE_EVENTS = frozenset({
     "session", "agent_start", "agent_end", "agent_settled",
     "turn_start", "turn_end",
