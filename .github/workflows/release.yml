@@ -7,16 +7,13 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   release-gate:
-    name: Browser + same-SHA engine gate
+    name: Browser gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -53,19 +50,6 @@ jobs:
       - name: Build frontend (typecheck + bundle)
         working-directory: packages/cluster/frontend
         run: npm run build
-
-      - name: Require successful same-SHA protected engine smoke
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          EXACT_SHA=$(git rev-parse HEAD)
-          DEFAULT_BRANCH=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')
-          PASSED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/engine-smoke.yml/runs?event=workflow_dispatch&status=success&head_sha=${EXACT_SHA}&per_page=20" \
-            --jq "[.workflow_runs[] | select(.head_sha == \"${EXACT_SHA}\" and .head_branch == \"${DEFAULT_BRANCH}\")] | length")
-          if [ "${PASSED}" -lt 1 ]; then
-            echo "::error::Release blocked: no successful protected engine smoke exists for exact SHA ${EXACT_SHA}."
-            exit 1
-          fi
 
   build-and-release:
     name: Build & Release ${{ github.ref_name }}

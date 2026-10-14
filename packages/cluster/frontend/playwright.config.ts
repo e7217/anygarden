@@ -6,7 +6,7 @@ const baseURL = `http://127.0.0.1:${port}`
 /**
  * Browser E2E deliberately starts only Vite.  Tests stub the small REST
  * contract they exercise, keeping this suite deterministic and separate
- * from the server/WebSocket integration and real-engine smoke suites.
+ * from the server/WebSocket integration suites and live-engine checks.
  */
 export default defineConfig({
   testDir: './e2e',
