@@ -19,6 +19,7 @@ import {
   InviteAcceptor,
   InviteComposer,
   NodeConnectionCard,
+  PeerCertificateRotation,
 } from '@/components/FederationConnectionSetup'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -89,6 +90,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
 
   // #839 — show a setup error inside the card whose action produced it.
   const [errorOwner, setErrorOwner] = useState<string | null>(null)
+  const [rotating, setRotating] = useState<string | null>(null)
   const setupErrorProps = (owner: string) => ({
     error: errorOwner === owner ? actionError : null,
     onAction: () => setErrorOwner(owner),
@@ -179,7 +181,8 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                   <p className="text-sm text-[var(--color-foreground-muted)]">{t('federation.noPeers')}</p>
                 )}
                 {peers.map((peer) => (
-                  <div key={peer.node_id} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border p-4">
+                  <div key={peer.node_id} className="rounded-[var(--radius-md)] border p-4">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 font-medium">
                         <Server className="size-4" aria-hidden="true" />
@@ -195,17 +198,36 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                         </p>
                       )}
                     </div>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      disabled={busy}
-                      onClick={() => {
-                        setErrorOwner(null)
-                        void federation.revokePeer(peer.node_id)
-                      }}
-                    >
-                      {t('federation.revoke')}
-                    </Button>
+                    <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-expanded={rotating === peer.node_id}
+                        onClick={() => setRotating(rotating === peer.node_id ? null : peer.node_id)}
+                      >
+                        {t('federation.cert.rotate')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={busy}
+                        onClick={() => {
+                          setErrorOwner(null)
+                          void federation.revokePeer(peer.node_id)
+                        }}
+                      >
+                        {t('federation.revoke')}
+                      </Button>
+                    </div>
+                  </div>
+                  {rotating === peer.node_id && (
+                    <PeerCertificateRotation
+                      federation={federation}
+                      nodeId={peer.node_id}
+                      epoch={peer.certificate_epoch}
+                      onDone={() => setRotating(null)}
+                    />
+                  )}
                   </div>
                 ))}
               </CardContent>
