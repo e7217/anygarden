@@ -521,6 +521,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     owner = None
     backend = None
     listener = None
+    leaf_renewal = None
     engine_provided = getattr(app.state, "engine", None) is not None
     if app.state.config.local_node_data_dir is not None:
         if os.environ.get("WEB_CONCURRENCY", "1") not in ("", "1"):
@@ -566,8 +567,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             await listener.start()
             app.state.peer_listener = listener
+        if getattr(app.state, "peer_service", None) is not None:
+            leaf_renewal = asyncio.create_task(_renew_peer_leaf_periodically(app))
         yield
     finally:
+        if leaf_renewal is not None:
+            leaf_renewal.cancel()
         try:
             try:
                 try:
@@ -583,6 +588,46 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if owner is not None:
                 owner.release(clean=clean)
                 app.state.node_shutdown_complete = clean
+
+
+# #843: how often a node with a root layout checks whether its TLS leaf is due
+# (leaves last 90 days and are renewed 30 days before expiry).
+PEER_LEAF_CHECK_SECONDS = 6 * 3600
+
+
+def _renew_peer_leaf_once(app) -> bool:
+    """Renew a due TLS leaf under the node root; True when one was issued."""
+    files = getattr(app.state, "peer_credential_files", None)
+    if files is None or files.kind != "root":
+        return False
+    from anygarden.federation.certificates import issue_leaf, leaf_needs_renewal
+
+    peer_dir = files.anchor_path.parent
+    if not leaf_needs_renewal(peer_dir):
+        return False
+    issue_leaf(peer_dir)
+    listener = getattr(app.state, "peer_listener", None)
+    if listener is not None:
+        listener.reload_certificate()
+    import structlog
+
+    structlog.get_logger("federation").info(
+        "peer_credentials.leaf_renewed", directory=str(peer_dir)
+    )
+    return True
+
+
+async def _renew_peer_leaf_periodically(app) -> None:
+    import structlog
+
+    while True:
+        await asyncio.sleep(PEER_LEAF_CHECK_SECONDS)
+        try:
+            _renew_peer_leaf_once(app)
+        except Exception as exc:  # retried next interval; the leaf is still valid
+            structlog.get_logger("federation").error(
+                "peer_credentials.leaf_renewal_failed", error=str(exc)
+            )
 
 
 def _federation_listener_enabled(app: FastAPI) -> bool:

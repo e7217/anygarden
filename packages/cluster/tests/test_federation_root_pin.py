@@ -390,3 +390,140 @@ def test_init_refuses_to_overwrite_a_root(tmp_path):
     result = _init("--data-dir", str(tmp_path))
     assert result.exit_code != 0 and "--force" in result.output
     assert anchor(tmp_path / "peer") == before
+
+
+# --------------------------------------------------------------------------
+# Live renewal: the listener serves the new leaf; the peer's pin is unchanged.
+
+
+async def _root_pair(tmp_path):
+    from types import SimpleNamespace
+
+    from anygarden.db.engine import build_engine, build_session_factory
+    from anygarden.db.models import Base, Room, User
+    from anygarden.federation.service import PeerService
+
+    from .test_federation_trust import uid
+
+    nodes = []
+    for label in ("a", "b"):
+        node, admin, channel, actor = uid(), uid(), uid(), uid()
+        create_root(tmp_path / label, node)
+        leaf = issue_leaf(tmp_path / label)
+        engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / (label + '.db')}")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        sessions = build_session_factory(engine)
+        async with sessions.begin() as db:
+            db.add(
+                User(
+                    id=admin, email=f"{label}@x.test", password_hash="s", is_admin=True
+                )
+            )
+            db.add(Room(id=channel, name=label))
+        service = PeerService(
+            node_id=node,
+            cert_path=leaf,
+            key_path=leaf,
+            anchor_path=tmp_path / label / "peer-root-cert.pem",
+            sessions=sessions,
+            allow_loopback=True,
+        )
+        nodes.append(
+            SimpleNamespace(
+                s=service,
+                admin=admin,
+                channel=channel,
+                actor=actor,
+                engine=engine,
+                dir=tmp_path / label,
+            )
+        )
+    return nodes
+
+
+@pytest.mark.req("FED-15")
+async def test_renewed_leaf_keeps_working_with_the_peer_without_re_pinning(tmp_path):
+    from anygarden.federation.models import Peer
+    from anygarden.federation.transport import post
+
+    from .test_federation_trust import endpoint, live_pair
+
+    a, b = await _root_pair(tmp_path)
+    try:
+        async with live_pair(a, b) as (bundle, body, listener_a, _lb):
+            receipt = await post(
+                b.s,
+                body.issuer_endpoint,
+                a.s.certificate_pem,
+                f"/api/v1/federation/invites/{bundle.invite_id}/redeem",
+                {
+                    "protocol_version": 1,
+                    "sender_node_id": b.s.node_id,
+                    "token": bundle.token.get_secret_value(),
+                },
+            )
+            await b.s.finish_accept(b.admin, body, receipt)
+            async with b.s.sessions() as db:
+                pin_before = (await db.get(Peer, a.s.node_id)).fingerprint
+            served_before = leaf_identity(a.dir).fingerprint
+
+            # A renews its leaf and reloads the listener; B changes nothing.
+            issue_leaf(a.dir)
+            listener_a.reload_certificate()
+            served_after = leaf_identity(a.dir).fingerprint
+            assert served_after != served_before
+
+            hello = await post(
+                b.s,
+                endpoint(listener_a.port),
+                a.s.certificate_pem,
+                "/api/v1/federation/hello",
+                {"protocol_version": 1, "sender_node_id": b.s.node_id},
+            )
+            assert hello["node_id"] == a.s.node_id
+            async with b.s.sessions() as db:
+                assert (await db.get(Peer, a.s.node_id)).fingerprint == pin_before
+    finally:
+        for n in (a, b):
+            await n.engine.dispose()
+
+
+async def test_renewal_task_renews_a_due_leaf_and_reloads_the_listener(tmp_path):
+    from types import SimpleNamespace
+
+    from anygarden.app import _renew_peer_leaf_once
+    from anygarden.federation.credentials_setup import locate_credentials
+
+    peer = tmp_path / "peer"
+    create_root(peer, str(uuid4()))
+    issue_leaf(peer, now=datetime.now(UTC) - LEAF_LIFETIME + timedelta(days=5))
+    reloads = []
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            peer_credential_files=locate_credentials(peer),
+            peer_listener=SimpleNamespace(reload_certificate=lambda: reloads.append(1)),
+        )
+    )
+
+    assert _renew_peer_leaf_once(app) is True
+    assert reloads == [1]
+    assert leaf_needs_renewal(peer) is False
+    assert _renew_peer_leaf_once(app) is False
+    assert reloads == [1]
+
+
+def test_renewal_task_ignores_legacy_pairs(tmp_path):
+    from types import SimpleNamespace
+
+    from anygarden.app import _renew_peer_leaf_once
+    from anygarden.federation.credentials_setup import locate_credentials
+
+    create_credentials(tmp_path / "peer", str(uuid4()))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            peer_credential_files=locate_credentials(tmp_path / "peer"),
+            peer_listener=None,
+        )
+    )
+    assert _renew_peer_leaf_once(app) is False

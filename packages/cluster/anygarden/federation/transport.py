@@ -107,6 +107,15 @@ class PeerListener:
         self.server = self.task = None
         self.context = None
 
+    def reload_certificate(self):
+        """Serve the node's current TLS leaf on new handshakes (#843 renewal).
+
+        Existing connections keep the leaf they negotiated; peers pin the node
+        root, so both are accepted.
+        """
+        if self.context:
+            self.context.load_cert_chain(self.service.cert_path, self.service.key_path)
+
     async def refresh_trust(self):
         if self.context:
             for pem in await self.service.trusted_certificates():
