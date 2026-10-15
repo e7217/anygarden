@@ -83,6 +83,25 @@ Update a machine later from the web UI (**Admin → Machines → Update**) or on
 host with `anygarden machine update`. The updater auto-detects the install method
 (`uv tool` or `pip`), so the same action works however the daemon was installed.
 
+### Lend a node's host to another server
+
+A host that already runs `anygarden start` can also be a machine of another
+AnyGarden server, without stopping its own node. Its own agents keep running,
+and the other server can place agents on it like on any machine:
+
+1. On the other server, **Admin → Machines → Register machine**, then copy the
+   **connection code** (`agmachine1.…`) from the connection guide. It contains
+   the machine token — treat it like a password.
+2. On this node, **Admin → Machines → Serve another server → Add**, and paste it.
+
+No terminal is needed. The node dials the other server (that server must be
+reachable from this host), keeps the connection across restarts, and stops its
+agents when you disconnect. A connection like this ignores the other server's
+**Update** button: its version follows the node. On a host without a node, use
+`anygarden machine connect --data-dir <dir> …` and `anygarden machine run
+--data-dir <dir>` so that daemon keeps its state apart. See
+[`docs/runbook/local-node.md`](docs/runbook/local-node.md#serving-another-server-from-a-computer-that-runs-a-node-848).
+
 ### Develop (from a checkout)
 
 ```bash
