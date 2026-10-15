@@ -462,6 +462,7 @@ def start_node(
             CredentialSetupError,
             CredentialsExpired,
             ensure_peer_credentials,
+            locate_credentials,
             peer_directory,
         )
 
@@ -479,11 +480,16 @@ def start_node(
             raise click.ClickException(str(exc)) from exc
         else:
             if created:
-                click.echo("Created new peer credentials for this node (valid 2 years)")
+                click.echo(
+                    "Created new peer credentials for this node (root valid 10 "
+                    "years; the TLS leaf renews itself)"
+                )
             click.echo(f"Federation node ID: {identity.node_id}")
-            click.echo(f"Certificate fingerprint (SHA-256): {identity.fingerprint}")
-            cert_pem = (peer_directory(data_dir, config) / "peer-cert.pem").read_text()
-            left = certificate_expires_at(cert_pem) - datetime.now(UTC)
+            click.echo(f"Pinned fingerprint (SHA-256): {identity.fingerprint}")
+            files = locate_credentials(peer_directory(data_dir, config))
+            left = certificate_expires_at(files.anchor_path.read_text()) - datetime.now(
+                UTC
+            )
             if left <= EXPIRY_WARNING:
                 click.echo(
                     f"WARNING: the peer certificate expires in {left.days} days; renew "
@@ -591,23 +597,29 @@ def federation_group() -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Replace an existing pair (new key and fingerprint; peers must re-pin)",
+    help=(
+        "Replace existing credentials with a new root (peers must re-pin); a "
+        "legacy pair is kept as *.legacy"
+    ),
 )
 def federation_init_credentials(
     data_dir: Path, config_path: str | None, node_id: str | None, force: bool
 ) -> None:
-    """Create the peer-cert.pem / peer-key.pem pair `start --peer-port` loads."""
+    """Create the node root and TLS leaf `start --peer-port` loads (#843)."""
     import os
     import tempfile
     from uuid import UUID
 
     from anygarden.config import AnygardenSettings
     from anygarden.federation.certificates import (
-        create_credentials,
+        LEAF,
+        ROOT_CERT,
+        ROOT_KEY,
         inspect_certificate,
     )
     from anygarden.federation.credentials_setup import (
         CredentialSetupError,
+        create_root_layout,
         local_node_id,
         peer_directory,
     )
@@ -621,23 +633,30 @@ def federation_init_credentials(
         peer_dir = peer_directory(data_dir, config)
     except CredentialSetupError as exc:
         raise click.ClickException(str(exc)) from exc
-    cert_path, key_path = peer_dir / "peer-cert.pem", peer_dir / "peer-key.pem"
-    existing = [p for p in (cert_path, key_path) if p.exists() or p.is_symlink()]
+    legacy_files = [peer_dir / "peer-cert.pem", peer_dir / "peer-key.pem"]
+    root_cert = peer_dir / ROOT_CERT
+    existing = [
+        p
+        for p in (root_cert, peer_dir / ROOT_KEY, peer_dir / LEAF, *legacy_files)
+        if p.exists() or p.is_symlink()
+    ]
     if existing and not force:
         raise click.ClickException(
             f"Peer credentials already exist under {peer_dir}; refusing to overwrite. "
             "Pass --force to replace them (peers must re-pin the new fingerprint)."
         )
 
-    if node_id is None and force and cert_path.is_file():
-        try:  # keep the node identity across a forced key rotation
-            # Read without the validity window: renewing an expired pair
-            # must keep the node identity (#842).
-            node_id = inspect_certificate(
-                cert_path.read_text(), check_validity=False
-            ).node_id
-        except (PeerError, OSError, UnicodeError):
-            node_id = None
+    if node_id is None and force:
+        # Keep the node identity across a forced replacement, read without the
+        # validity window so an expired pin still names the node (#842).
+        for pinned in (root_cert, legacy_files[0]):
+            try:
+                node_id = inspect_certificate(
+                    pinned.read_text(), check_validity=False
+                ).node_id
+                break
+            except (PeerError, OSError, UnicodeError):
+                continue
     if node_id is None:
         try:
             node_id = local_node_id(data_dir)
@@ -654,30 +673,39 @@ def federation_init_credentials(
 
     try:
         if not existing:
-            cert_path, key_path = create_credentials(peer_dir, node_id)
+            create_root_layout(peer_dir, node_id)
         else:
-            # Generate beside the old pair, then swap in, so a failed
-            # generation never leaves the node with no or half a pair.
+            # Generate beside the old credentials, then swap in, so a failed
+            # generation never leaves the node with none or half of a set.
             staging = Path(tempfile.mkdtemp(prefix=".init-", dir=peer_dir))
             try:
-                new_cert, new_key = create_credentials(staging, node_id)
-                os.replace(new_key, key_path)
-                os.replace(new_cert, cert_path)
+                create_root_layout(staging, node_id)
+                for name in (ROOT_KEY, ROOT_CERT, LEAF):
+                    os.replace(staging / name, peer_dir / name)
             finally:
                 for leftover in staging.iterdir():
                     leftover.unlink()
                 staging.rmdir()
+            # #843: a legacy pair is kept aside, never deleted.
+            for legacy in legacy_files:
+                if legacy.exists():
+                    os.replace(legacy, legacy.with_name(legacy.name + ".legacy"))
     except PeerError as exc:
         raise click.ClickException(
             f"Cannot create peer credentials: {exc.code}"
         ) from exc
 
-    identity = inspect_certificate(cert_path.read_text())
-    click.echo(f"Wrote certificate: {cert_path}")
-    click.echo(f"Wrote private key: {key_path} (mode 0600)")
+    identity = inspect_certificate(root_cert.read_text())
+    click.echo(f"Wrote node root: {root_cert} (key {peer_dir / ROOT_KEY}, mode 0600)")
+    click.echo(f"Wrote TLS leaf: {peer_dir / LEAF} (renewed automatically)")
     click.echo(f"Node ID: {identity.node_id}")
-    click.echo(f"Certificate fingerprint (SHA-256): {identity.fingerprint}")
+    click.echo(f"Root fingerprint (SHA-256): {identity.fingerprint}")
     click.echo(
-        "Share the node ID and fingerprint with peers out of band; never share the key. "
-        "The certificate is valid for 2 years."
+        "Peers pin the root: share the node ID and this fingerprint out of band; "
+        "never share the keys. The root is valid for 10 years; the node renews its "
+        "TLS leaf itself."
     )
+    if existing:
+        click.echo(
+            "The root changed: every peer must re-pin this node's new connection card."
+        )

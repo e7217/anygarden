@@ -173,9 +173,9 @@ def test_force_renewal_of_an_expired_pair_keeps_the_node_id(tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    cert = (tmp_path / "peer" / "peer-cert.pem").read_text()
-    assert inspect_certificate(cert).node_id == node_id
-    assert "valid for 2 years" in result.output
+    # Renewal now produces a root layout (#843); the node ID survives.
+    root = (tmp_path / "peer" / "peer-root-cert.pem").read_text()
+    assert inspect_certificate(root).node_id == node_id
 
 
 def test_init_credentials_reuses_node_identity_json_shape(tmp_path):

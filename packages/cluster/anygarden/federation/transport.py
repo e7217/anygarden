@@ -13,6 +13,7 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 from anygarden.federation.certificates import (
     identity_from_tls,
     inspect_certificate,
+    pin_matches,
     tls_context,
 )
 from anygarden.federation.endpoint import validate_endpoint
@@ -23,7 +24,7 @@ MAX_BODY = 65536
 
 async def post(service, endpoint, pem: str, path: str, payload: dict) -> dict:
     target = validate_endpoint(endpoint, allow_loopback=service.allow_loopback)
-    expected = inspect_certificate(pem)
+    inspect_certificate(pem)  # the pin itself must still be valid
     context = tls_context(service.cert_path, service.key_path, [pem], server=False)
     writer = None
     try:
@@ -37,7 +38,7 @@ async def post(service, endpoint, pem: str, path: str, payload: dict) -> dict:
                 ssl_handshake_timeout=5,
             )
             actual = identity_from_tls(writer.get_extra_info("ssl_object"))
-            if actual != expected:
+            if not pin_matches(pem, actual):
                 raise PeerError("PIN_MISMATCH", 401)
             raw = json.dumps(payload, separators=(",", ":")).encode()
             if len(raw) > MAX_BODY:
@@ -105,6 +106,15 @@ class PeerListener:
         self.channel_service = channel_service
         self.server = self.task = None
         self.context = None
+
+    def reload_certificate(self):
+        """Serve the node's current TLS leaf on new handshakes (#843 renewal).
+
+        Existing connections keep the leaf they negotiated; peers pin the node
+        root, so both are accepted.
+        """
+        if self.context:
+            self.context.load_cert_chain(self.service.cert_path, self.service.key_path)
 
     async def refresh_trust(self):
         if self.context:

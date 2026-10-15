@@ -521,6 +521,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     owner = None
     backend = None
     listener = None
+    leaf_renewal = None
     engine_provided = getattr(app.state, "engine", None) is not None
     if app.state.config.local_node_data_dir is not None:
         if os.environ.get("WEB_CONCURRENCY", "1") not in ("", "1"):
@@ -566,8 +567,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             await listener.start()
             app.state.peer_listener = listener
+        if getattr(app.state, "peer_service", None) is not None:
+            leaf_renewal = asyncio.create_task(_renew_peer_leaf_periodically(app))
         yield
     finally:
+        if leaf_renewal is not None:
+            leaf_renewal.cancel()
         try:
             try:
                 try:
@@ -583,6 +588,46 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if owner is not None:
                 owner.release(clean=clean)
                 app.state.node_shutdown_complete = clean
+
+
+# #843: how often a node with a root layout checks whether its TLS leaf is due
+# (leaves last 90 days and are renewed 30 days before expiry).
+PEER_LEAF_CHECK_SECONDS = 6 * 3600
+
+
+def _renew_peer_leaf_once(app) -> bool:
+    """Renew a due TLS leaf under the node root; True when one was issued."""
+    files = getattr(app.state, "peer_credential_files", None)
+    if files is None or files.kind != "root":
+        return False
+    from anygarden.federation.certificates import issue_leaf, leaf_needs_renewal
+
+    peer_dir = files.anchor_path.parent
+    if not leaf_needs_renewal(peer_dir):
+        return False
+    issue_leaf(peer_dir)
+    listener = getattr(app.state, "peer_listener", None)
+    if listener is not None:
+        listener.reload_certificate()
+    import structlog
+
+    structlog.get_logger("federation").info(
+        "peer_credentials.leaf_renewed", directory=str(peer_dir)
+    )
+    return True
+
+
+async def _renew_peer_leaf_periodically(app) -> None:
+    import structlog
+
+    while True:
+        await asyncio.sleep(PEER_LEAF_CHECK_SECONDS)
+        try:
+            _renew_peer_leaf_once(app)
+        except Exception as exc:  # retried next interval; the leaf is still valid
+            structlog.get_logger("federation").error(
+                "peer_credentials.leaf_renewal_failed", error=str(exc)
+            )
 
 
 def _federation_listener_enabled(app: FastAPI) -> bool:
@@ -614,11 +659,12 @@ def _federation_listener_enabled(app: FastAPI) -> bool:
 def _compose_federation_services(app: FastAPI) -> None:
     """Attach PeerService/ChannelService when persisted credentials exist.
 
-    #593 product-app wiring. Node identity is created only by the explicit
-    ``federation.certificates.create_credentials`` setup step — startup
-    never writes, overwrites, or rotates credential files, and never starts
-    the mTLS listener. When both ``peer-cert.pem`` and ``peer-key.pem`` are
-    present the PeerService is constructed from the certificate's node_id
+    #593 product-app wiring. Node identity is created only by ``anygarden
+    start``/``init-credentials`` — the app never creates, overwrites, or
+    rotates a pin, and never starts the mTLS listener here. It does renew a
+    due TLS leaf under an existing node root (#843). When credentials are
+    present (a root layout or a legacy ``peer-cert.pem``/``peer-key.pem``
+    pair) the PeerService is constructed from the pinned certificate's node_id
     and the app's session factory, and a ChannelService is attached unless
     the caller already injected one via ``create_app(channel_service=...)``.
     Absent credentials leave every node/shared-channel route mounted but
@@ -630,32 +676,46 @@ def _compose_federation_services(app: FastAPI) -> None:
         return
     anygarden_dir = config.local_node_data_dir or (Path.home() / ".anygarden")
     peer_dir = config.peer_credentials_dir or (anygarden_dir / "peer")
-    cert_path = peer_dir / "peer-cert.pem"
-    key_path = peer_dir / "peer-key.pem"
-    cert_exists, key_exists = cert_path.exists(), key_path.exists()
-    if not cert_exists and not key_exists:
-        return
-    if not (cert_exists and key_exists):
+    from anygarden.federation.credentials_setup import (
+        CredentialSetupError,
+        locate_credentials,
+    )
+
+    try:
+        files = locate_credentials(peer_dir)
+    except CredentialSetupError as exc:
         import structlog
 
         structlog.get_logger("federation").warning(
-            "peer_credentials.partial",
-            directory=str(peer_dir),
-            cert=cert_exists,
-            key=key_exists,
+            "peer_credentials.partial", directory=str(peer_dir), error=str(exc)
         )
         return
+    if files is None:
+        return
+    app.state.peer_credential_files = files
     from anygarden.federation.certificates import inspect_certificate
     from anygarden.federation.delegation_wiring import make_local_policy
     from anygarden.federation.service import PeerService
     from anygarden.shared_channels.service import ChannelService
 
+    anchor_path = files.anchor_path
     try:
-        identity = inspect_certificate(cert_path.read_text())
+        identity = inspect_certificate(anchor_path.read_text())
+        if files.kind == "root":
+            # #843: a node started without the CLI still presents a current
+            # leaf; the lifespan renewal task keeps it current afterwards.
+            from anygarden.federation.certificates import (
+                issue_leaf,
+                leaf_needs_renewal,
+            )
+
+            if leaf_needs_renewal(peer_dir):
+                issue_leaf(peer_dir)
         peers = PeerService(
             node_id=identity.node_id,
-            cert_path=cert_path,
-            key_path=key_path,
+            cert_path=files.cert_path,
+            key_path=files.key_path,
+            anchor_path=anchor_path if files.kind == "root" else None,
             sessions=app.state.session_factory,
             local_policy=make_local_policy(identity.node_id),
         )
@@ -673,7 +733,7 @@ def _compose_federation_services(app: FastAPI) -> None:
         )
 
         try:
-            pem = cert_path.read_text()
+            pem = anchor_path.read_text()
             inspect_certificate(pem, check_validity=False)
             expired = is_expired(pem)
         except Exception:
@@ -1406,32 +1466,59 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
                 expired_executions = await expire_execution_deadlines(db)
                 native_limit_updates = set(await reconcile_native_limit_denials(db))
                 terminal_recovery_updates = set(await reconcile_terminal_recoveries(db))
-                repair_executions = list(await db.scalars(
-                    select(ProjectExecution.id)
-                    .join(ProjectExecutionEvent, ProjectExecutionEvent.execution_id == ProjectExecution.id)
-                    .where(
-                        ProjectExecution.status.in_({"planning", "running", "waiting_children"}),
-                        ProjectExecutionEvent.event_type == "qa_repair_assignment",
-                    ).distinct()
-                ))
+                repair_executions = list(
+                    await db.scalars(
+                        select(ProjectExecution.id)
+                        .join(
+                            ProjectExecutionEvent,
+                            ProjectExecutionEvent.execution_id == ProjectExecution.id,
+                        )
+                        .where(
+                            ProjectExecution.status.in_(
+                                {"planning", "running", "waiting_children"}
+                            ),
+                            ProjectExecutionEvent.event_type == "qa_repair_assignment",
+                        )
+                        .distinct()
+                    )
+                )
                 repair_updates = set()
                 for execution_id in repair_executions:
                     try:
                         async with repair_savepoint(db):
-                            outcomes = await advance_pending_repairs(db, execution_id=execution_id)
+                            outcomes = await advance_pending_repairs(
+                                db, execution_id=execution_id
+                            )
                             if any(item["phase"] == "started" for item in outcomes):
                                 repair_updates.add(execution_id)
                     except ExecutionConflict as exc:
-                        log.warning("qa_repair.waiting", execution_id=execution_id, reason_code=exc.code)
+                        log.warning(
+                            "qa_repair.waiting",
+                            execution_id=execution_id,
+                            reason_code=exc.code,
+                        )
                 deadline_messages = list(db.info.pop("project_execution_messages", []))
-                deadline_tasks = set(db.info.pop("project_execution_deadline_tasks", []))
+                deadline_tasks = set(
+                    db.info.pop("project_execution_deadline_tasks", [])
+                )
                 repair_tasks = set(db.info.pop("project_execution_recovery_tasks", []))
                 usage_denials = dict(db.info.pop("project_execution_usage_denials", {}))
                 await db.commit()
-                await broadcast_project_messages(db, app=app, messages=deadline_messages)
-                for execution_id in set(expired_executions) | repair_updates | terminal_recovery_updates | native_limit_updates:
-                    await fanout_execution_update(db, manager=manager, execution_id=execution_id)
-                await fanout_deadline_tasks(db, manager=manager, task_ids=deadline_tasks)
+                await broadcast_project_messages(
+                    db, app=app, messages=deadline_messages
+                )
+                for execution_id in (
+                    set(expired_executions)
+                    | repair_updates
+                    | terminal_recovery_updates
+                    | native_limit_updates
+                ):
+                    await fanout_execution_update(
+                        db, manager=manager, execution_id=execution_id
+                    )
+                await fanout_deadline_tasks(
+                    db, manager=manager, task_ids=deadline_tasks
+                )
                 await fanout_recovery_updates(factory, manager, repair_tasks)
             await apply_queued_usage_denials(app, denials=usage_denials)
             await cancel_invalid_turns(factory)
@@ -1444,23 +1531,37 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
             async with factory() as db:
                 await begin_write_transaction(db)
                 from anygarden.db.models import ExecutionStop
-                stop_execution_ids = set(await db.scalars(select(ExecutionStop.execution_id).where(
-                    ExecutionStop.status.in_({"pending", "delivered"}),
-                )))
+
+                stop_execution_ids = set(
+                    await db.scalars(
+                        select(ExecutionStop.execution_id).where(
+                            ExecutionStop.status.in_({"pending", "delivered"}),
+                        )
+                    )
+                )
                 expired_stops = await expire_pending_stops(db)
                 interrupted_actions = await expire_executing_actions(db)
                 approval_messages = list(db.info.pop("project_execution_messages", []))
                 await db.commit()
-                await broadcast_project_messages(db, app=app, messages=approval_messages)
+                await broadcast_project_messages(
+                    db, app=app, messages=approval_messages
+                )
                 if expired_stops:
                     for execution_id in stop_execution_ids:
-                        await fanout_execution_update(db, manager=manager, execution_id=execution_id)
+                        await fanout_execution_update(
+                            db, manager=manager, execution_id=execution_id
+                        )
                 for approval in interrupted_actions:
                     task = await db.get(Task, approval.task_id)
                     if task is not None:
                         room = await db.get(Room, task.room_id)
-                        await fanout_task_event(db, manager=manager, event="updated", task=task,
-                                               room_name=room.name if room else "")
+                        await fanout_task_event(
+                            db,
+                            manager=manager,
+                            event="updated",
+                            task=task,
+                            room_name=room.name if room else "",
+                        )
                 pending_agents = set(
                     (
                         await db.scalars(

@@ -32,6 +32,16 @@
 
 ### Added
 
+- Federation certificates renew themselves (#843). New nodes get a node root
+  (`peer-root-cert.pem`, 10 years) that peers pin, and a 90-day TLS leaf
+  (`peer-leaf.pem`) the node re-issues within 30 days of expiry — at start,
+  at app startup and every six hours — and serves without a restart. Peers
+  accept a leaf only when the root they pinned for that node signed it.
+  Legacy self-signed pairs keep working; `init-credentials --force` switches
+  a node to a root (keeping its node ID and the old pair as `*.legacy`), and
+  **Replace certificate** in the trusted-peers list re-pins a peer from its
+  new connection card. `GET /api/v1/node/identity` reports `pin_kind` and
+  `leaf_expires_at`.
 - Simpler federation setup (#839). `anygarden start --peer-port` creates the
   node's peer credentials on first run when the default `<data-dir>/peer`
   holds neither file, and prints the node ID and fingerprint. It still refuses

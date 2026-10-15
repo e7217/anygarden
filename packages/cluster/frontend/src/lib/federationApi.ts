@@ -134,7 +134,10 @@ export interface InviteCreatedView extends InviteBundleView {
 export interface NodeIdentityView {
   node_id: string
   fingerprint: string
+  /** #843: "root" renews its TLS leaf itself; "certificate" is a legacy pin. */
+  pin_kind?: 'root' | 'certificate'
   certificate_expires_at: string
+  leaf_expires_at?: string | null
   public_url: string | null
 }
 

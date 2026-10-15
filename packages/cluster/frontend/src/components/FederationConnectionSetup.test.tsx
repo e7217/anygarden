@@ -10,6 +10,7 @@ import {
   InviteAcceptor,
   InviteComposer,
   NodeConnectionCard,
+  PeerCertificateRotation,
 } from './FederationConnectionSetup'
 import type { ConnectionCardPreview, InviteCodePreview } from '@/lib/federationApi'
 import type { useFederation } from '@/hooks/useFederation'
@@ -267,5 +268,73 @@ describe('certificate expiry (#842)', () => {
   it('[FED-14] tells the admin when a peer certificate has expired', () => {
     render(<CertificateExpiry expiresAt="2020-01-01T00:00:00Z" owner="peer" />)
     expect(screen.getByText(/cannot be reached until its admin renews it/)).toBeInTheDocument()
+  })
+})
+
+describe('root pins (#843)', () => {
+  it('shows that a root-pinned node renews its TLS certificate itself', () => {
+    render(
+      <NodeConnectionCard
+        federation={federation({
+          nodeIdentity: {
+            ...federation().nodeIdentity!,
+            pin_kind: 'root',
+            leaf_expires_at: '2027-01-13T00:00:00Z',
+          },
+        } as Partial<Federation>)}
+      />,
+    )
+    expect(screen.getByText(/Renewed automatically/)).toBeInTheDocument()
+    expect(screen.queryByText(/legacy certificate/)).not.toBeInTheDocument()
+  })
+
+  it('suggests switching a legacy pin to a self-renewing root', () => {
+    render(
+      <NodeConnectionCard
+        federation={federation({
+          nodeIdentity: { ...federation().nodeIdentity!, pin_kind: 'certificate', leaf_expires_at: null },
+        } as Partial<Federation>)}
+      />,
+    )
+    expect(screen.getByText(/legacy certificate/)).toBeInTheDocument()
+  })
+
+  it('[FED-17] re-pins a peer from its new card only after review and confirmation', async () => {
+    const onDone = vi.fn()
+    const fed = federation({
+      inspectConnectionCard: vi.fn(async () => cardPreview()),
+      rotatePeerCertificate: vi.fn(async () => ({ peer_epoch: 3 })),
+    } as Partial<Federation>)
+    render(<PeerCertificateRotation federation={fed} nodeId={PEER} epoch={2} onDone={onDone} />)
+
+    fireEvent.change(screen.getByLabelText('This node’s new connection card'), {
+      target: { value: 'agpeer1.new' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Review/ }))
+    await screen.findByText(/turns off this node’s channel permissions/)
+    const submit = screen.getByRole('button', { name: 'Re-pin this node' })
+    expect(submit).toBeDisabled()
+
+    fireEvent.click(screen.getByLabelText(/compared this fingerprint/))
+    fireEvent.click(submit)
+
+    await waitFor(() =>
+      expect(fed.rotatePeerCertificate).toHaveBeenCalledWith(PEER, '-----BEGIN CERTIFICATE-----', 2),
+    )
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+  })
+
+  it('refuses a card from a different node', async () => {
+    const fed = federation({
+      inspectConnectionCard: vi.fn(async () => cardPreview({ node_id: ISSUER })),
+      rotatePeerCertificate: vi.fn(),
+    } as Partial<Federation>)
+    render(<PeerCertificateRotation federation={fed} nodeId={PEER} epoch={2} onDone={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('This node’s new connection card'), {
+      target: { value: 'agpeer1.other' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Review/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/different node/)
+    expect(screen.queryByRole('button', { name: 'Re-pin this node' })).not.toBeInTheDocument()
   })
 })

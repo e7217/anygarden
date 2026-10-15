@@ -271,9 +271,22 @@ export function NodeConnectionCard({ federation, error = null, onAction }: Setup
             <dd><Fingerprint value={identity.fingerprint} /></dd>
             <dt className="text-[var(--color-foreground-muted)]">{t('federation.connect.expires')}</dt>
             <dd><CertificateExpiry expiresAt={identity.certificate_expires_at} owner="self" /></dd>
+            {identity.pin_kind === 'root' && identity.leaf_expires_at && (
+              <>
+                <dt className="text-[var(--color-foreground-muted)]">{t('federation.cert.leaf')}</dt>
+                <dd>
+                  {t('federation.cert.leafAutoRenewed', {
+                    date: formatDate(new Date(identity.leaf_expires_at), { dateStyle: 'medium' }),
+                  })}
+                </dd>
+              </>
+            )}
           </dl>
         ) : (
           <p className={hint}>{t('federation.connect.identityUnavailable')}</p>
+        )}
+        {identity?.pin_kind === 'certificate' && (
+          <p className={hint}>{t('federation.cert.legacyHint')}</p>
         )}
         <Field label={t('federation.connect.myAddress')} htmlFor={urlId}>
           <Input
@@ -535,5 +548,98 @@ export function InviteAcceptor({ federation, error = null, onAction }: SetupProp
 
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * #843 — re-pin a peer from its new connection card: after it replaced its
+ * root, or moved from a legacy pin to a root. The server disables that peer's
+ * channel grants on a re-pin, so the admin is told before confirming.
+ */
+export function PeerCertificateRotation({
+  federation,
+  nodeId,
+  epoch,
+  onDone,
+}: {
+  federation: Federation
+  nodeId: string
+  epoch: number
+  onDone: () => void
+}) {
+  const { t } = useLocale()
+  const ids = { card: useId(), confirm: useId() }
+  const [cardText, setCardText] = useState('')
+  const [preview, setPreview] = useState<ConnectionCardPreview | null>(null)
+  const [confirmed, setConfirmed] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const samePeer = preview?.node_id === nodeId
+
+  async function review() {
+    setError(null)
+    const result = await federation.inspectConnectionCard(cardText)
+    setPreview(result)
+    setConfirmed(false)
+    if (result && result.node_id !== nodeId) setError(t('federation.cert.rotateOtherNode'))
+  }
+
+  async function submit() {
+    if (!preview || !samePeer) return
+    const result = await federation.rotatePeerCertificate(nodeId, preview.certificate_pem, epoch)
+    if (result !== null) onDone()
+  }
+
+  return (
+    <div className="mt-3 space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4">
+      <Field label={t('federation.cert.rotateCard')} htmlFor={ids.card}>
+        <Textarea
+          id={ids.card}
+          className="min-h-20 font-mono text-sm"
+          value={cardText}
+          onChange={(e) => {
+            setCardText(e.target.value)
+            setPreview(null)
+            setError(null)
+          }}
+          placeholder="agpeer1.…"
+        />
+      </Field>
+      <div className="flex justify-end">
+        <Button variant="outline" disabled={federation.busy || !cardText.trim()} onClick={() => void review()}>
+          <ShieldCheck className="mr-1 size-4" aria-hidden="true" /> {t('federation.connect.review')}
+        </Button>
+      </div>
+      {preview && samePeer && (
+        <>
+          <div className="space-y-1 text-sm">
+            <p className="text-[var(--color-foreground-muted)]">{t('federation.connect.fingerprint')}</p>
+            <Fingerprint value={preview.fingerprint} />
+          </div>
+          <p className="text-sm text-[var(--color-warning)]">{t('federation.cert.rotateWarning')}</p>
+          <div className="flex items-start gap-3">
+            <input
+              id={ids.confirm}
+              type="checkbox"
+              checked={confirmed}
+              onChange={(e) => setConfirmed(e.target.checked)}
+              className="mt-0.5 size-4 shrink-0 accent-[var(--color-brand)]"
+            />
+            <Label htmlFor={ids.confirm} className="leading-5">
+              {t('federation.connect.confirmFingerprint')}
+            </Label>
+          </div>
+          <div className="flex justify-end">
+            <Button disabled={!confirmed || federation.busy} onClick={() => void submit()}>
+              {t('federation.cert.rotateSubmit')}
+            </Button>
+          </div>
+        </>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-[var(--color-danger)]">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }

@@ -14,6 +14,7 @@ from anygarden.federation import connection_codes as codes
 from anygarden.federation.certificates import (
     CertificateIdentity,
     certificate_expires_at,
+    read_leaf,
 )
 from anygarden.federation.errors import PeerError
 from anygarden.federation.models import Peer, PeerInvite
@@ -90,10 +91,19 @@ async def identity(
 ):
     async with s.sessions() as db:
         await s.admin(db, actor.id)
+    # #843: "root" pins renew their TLS leaf automatically; "certificate" is a
+    # legacy self-signed pin that needs manual renewal.
+    leaf_expires_at = (
+        certificate_expires_at(read_leaf(s.cert_path.parent)[0])
+        if s.identity.root
+        else None
+    )
     return {
         "node_id": s.node_id,
         "fingerprint": s.identity.fingerprint,
+        "pin_kind": "root" if s.identity.root else "certificate",
         "certificate_expires_at": certificate_expires_at(s.certificate_pem),
+        "leaf_expires_at": leaf_expires_at,
         "public_url": public_url(request),
     }
 

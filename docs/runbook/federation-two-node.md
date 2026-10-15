@@ -70,8 +70,9 @@ claim a new deployment verification on separate physical hosts.
    codes. Running the node as the service user matters: credentials created
    by root would be unreadable to it.
 
-   The certificate is valid for 2 years (pairs created before #842: 90
-   days). The node never overwrites or rotates an existing pair. Startup is
+   It writes a node root (pinned by peers, 10 years) and a TLS leaf it renews
+   itself; see "Certificates and renewal". The node never overwrites or
+   rotates a root or a legacy pair. Startup is
    refused for a partial or corrupt pair, and for an
    `ANYGARDEN_PEER_CREDENTIALS_DIR` that holds no pair (an unmounted volume
    must not produce a new identity). An **expired** pair does not stop the
@@ -161,38 +162,52 @@ backend anygarden_peer
 - Certificate pins are unaffected: the node's own certificate still reaches
   the peer end to end.
 
-## Certificate renewal
+## Certificates and renewal
 
-`anygarden start --peer-port` warns 30 days before this node's certificate
-expires, and the connection tab shows the expiry of this node's and every
-peer's certificate. Renewal is manual until #843 (pinned per-node root,
-automatically renewed leaf):
+Nodes created by `start --peer-port` or `init-credentials` since #843 have a
+**root layout** under `<data-dir>/peer`:
 
-1. On the node being renewed: `anygarden federation init-credentials --force
-   --data-dir <dir>` (keeps the node ID, even for an expired pair), then
-   restart it. Create a new connection card and send it to each peer admin.
-2. On each peer: re-pin the new certificate. There is no UI for this yet:
+| File | Role |
+|---|---|
+| `peer-root-cert.pem`, `peer-root-key.pem` (0600) | Node root, valid 10 years. Peers pin this certificate; connection cards carry it. |
+| `peer-leaf.pem` (0600) | TLS certificate and key in one file, signed by the root, valid 90 days. |
 
-   ```sh
-   curl -X POST https://<peer>/api/v1/node/peers/<renewed-node-id>/certificate \
-     -H "Authorization: Bearer <admin JWT>" -H 'Content-Type: application/json' \
-     -d '{"certificate_pem": "<PEM from the card review>", "expected_peer_epoch": <current epoch>}'
-   ```
+The node renews its leaf itself: at start, at app startup, and every six hours
+while running, once it is within 30 days of expiry. The listener serves the
+new leaf on new connections without a restart, and peers change nothing,
+because their pin is the root. A peer accepts a leaf only when the root it
+pinned for *that node* signed it, so another trusted node's root cannot
+impersonate this node.
 
-   The certificate PEM and the current epoch come from **Create invitation →
-   Review** (paste the card) and the trusted-peers list.
+`start` warns 30 days before the **root** expires, and the connection tab
+shows the expiry of this node's root and leaf and of every peer's pin.
+
+### Legacy self-signed pairs
+
+Nodes created before #843 keep a self-signed `peer-cert.pem`/`peer-key.pem`
+pair (2 years since #842, 90 days before). They keep working and can peer
+with root-layout nodes, but must be renewed by hand. Switch one to a root:
+
+1. On that node: `anygarden federation init-credentials --force --data-dir
+   <dir>` keeps the node ID, writes the root layout and keeps the old pair as
+   `*.legacy`. Restart it and create a new connection card.
+2. On each peer: **Replace certificate** next to the node in the trusted-peers
+   list, paste the new card, compare the fingerprint, and re-pin.
 3. Re-pinning conservatively disables every channel grant and publication
    consent for that peer. Grant them again
    (`PUT /api/v1/node/peers/<node>/grants/<channel>`) and re-approve
    publication on the shared channel.
 
-A leaked key does not need to wait for expiry: revoke the peer
-(`DELETE /api/v1/node/peers/<node>` or **Revoke** in the trusted-peers list).
+The same steps replace a root (for example after the root key leaked). A leaf
+key leak does not need a new root: until the leaf expires it stays valid, so
+revoke the peer (`DELETE /api/v1/node/peers/<node>` or **Revoke**) when it
+must stop immediately.
 
 ## Failure playbook
 
-- `CERTIFICATE_EXPIRED` (503) from the node APIs: this node's certificate
-  expired. The node keeps running without federation; renew it as above.
+- `CERTIFICATE_EXPIRED` (503) from the node APIs: this node's pinned
+  certificate (root, or a legacy pair) expired. The node keeps running without
+  federation; replace it as above.
 
 - `ENDPOINT_DENIED` while creating or accepting an invitation: the approved IPs
   do not cover the URL host, or they are private and **Allow private network

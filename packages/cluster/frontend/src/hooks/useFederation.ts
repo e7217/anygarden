@@ -31,6 +31,7 @@ import {
   changeParticipant as apiChangeParticipant,
   createBinding,
   createConnectionCard,
+  rotateCertificate,
   createInvite,
   getNodeIdentity,
   inspectConnectionCard,
@@ -309,6 +310,16 @@ export function useFederation() {
     [refreshNodes],
   )
 
+  const rotatePeerCertificateAction = useCallback(
+    (nodeId: string, certificatePem: string, expectedPeerEpoch: number) =>
+      run(async () => {
+        const result = await rotateCertificate(nodeId, certificatePem, expectedPeerEpoch)
+        await refreshNodes()
+        return result
+      }),
+    [refreshNodes],
+  )
+
   const revokeInviteAction = useCallback(
     (inviteId: string) =>
       run(async () => {
@@ -498,6 +509,7 @@ export function useFederation() {
     actionError,
     createInvite: createInviteAction,
     createConnectionCard: createConnectionCardAction,
+    rotatePeerCertificate: rotatePeerCertificateAction,
     inspectConnectionCard: inspectConnectionCardAction,
     inspectInviteCode: inspectInviteCodeAction,
     acceptInvite: acceptInviteAction,

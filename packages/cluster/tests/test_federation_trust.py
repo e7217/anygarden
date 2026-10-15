@@ -15,7 +15,9 @@ from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import Base, Room, User
 from anygarden.federation.certificates import (
     create_credentials,
+    create_root,
     inspect_certificate,
+    issue_leaf,
 )
 from anygarden.federation.endpoint import validate_endpoint
 from anygarden.federation.errors import PeerError
@@ -51,12 +53,22 @@ def endpoint(port=8443):
     return Endpoint(url=f"https://127.0.0.1:{port}", approved_ips=["127.0.0.1"])
 
 
-@pytest.fixture
-async def pair(tmp_path):
+def node_credentials(directory, node, kind):
+    """``(cert, key, anchor)`` for a legacy self-signed pin or a root pin (#843)."""
+    if kind == "legacy":
+        cert, key = create_credentials(directory, node)
+        return cert, key, None
+    create_root(directory, node)
+    leaf = issue_leaf(directory)
+    return leaf, leaf, directory / "peer-root-cert.pem"
+
+
+@pytest.fixture(params=["legacy", "root"])
+async def pair(tmp_path, request):
     nodes = []
     for label in ("a", "b"):
         node, admin, channel, actor = uid(), uid(), uid(), uid()
-        cert, key = create_credentials(tmp_path / label, node)
+        cert, key, anchor = node_credentials(tmp_path / label, node, request.param)
         engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / (label + '.db')}")
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -75,6 +87,7 @@ async def pair(tmp_path):
             node_id=node,
             cert_path=cert,
             key_path=key,
+            anchor_path=anchor,
             sessions=sessions,
             allow_loopback=True,
         )
@@ -272,18 +285,31 @@ async def test_revoking_peer_disables_every_channel_grant(pair):
     async with a.s.sessions.begin() as db:
         db.add(Room(id=second, name="second-channel"))
     principal = Principal(node_id=b.s.node_id, kind="agent", principal_id=b.actor)
-    body = invitation(a, b).model_copy(update={"scopes": [
-        Scope(channel_id=channel, actors=[principal], capabilities=["channel.read", "message.send"])
-        for channel in (a.channel, second)
-    ]})
+    body = invitation(a, b).model_copy(
+        update={
+            "scopes": [
+                Scope(
+                    channel_id=channel,
+                    actors=[principal],
+                    capabilities=["channel.read", "message.send"],
+                )
+                for channel in (a.channel, second)
+            ]
+        }
+    )
     bundle = await a.s.create_invite(a.admin, body)
     await a.s.redeem(
-        b.s.identity, b.s.node_id, str(bundle.invite_id), bundle.token.get_secret_value()
+        b.s.identity,
+        b.s.node_id,
+        str(bundle.invite_id),
+        bundle.token.get_secret_value(),
     )
     async with a.s.sessions() as db:
-        grants = list(await db.scalars(
-            select(PeerGrant).where(PeerGrant.peer_node_id == b.s.node_id)
-        ))
+        grants = list(
+            await db.scalars(
+                select(PeerGrant).where(PeerGrant.peer_node_id == b.s.node_id)
+            )
+        )
     assert {g.channel_id for g in grants} == {a.channel, second}
     assert all(g.active for g in grants)
     await authorize(a, b)
@@ -291,18 +317,25 @@ async def test_revoking_peer_disables_every_channel_grant(pair):
     await a.s.revoke(a.admin, b.s.node_id)
 
     async with a.s.sessions() as db:
-        grants = list(await db.scalars(
-            select(PeerGrant).where(PeerGrant.peer_node_id == b.s.node_id)
-        ))
+        grants = list(
+            await db.scalars(
+                select(PeerGrant).where(PeerGrant.peer_node_id == b.s.node_id)
+            )
+        )
     assert len(grants) == 2
     assert not any(g.active for g in grants)
     for channel in (a.channel, second):
         with pytest.raises(PeerError):
             async with a.s.sessions.begin() as db:
                 await a.s.authorize(
-                    db, b.s.identity, sender_node_id=b.s.node_id,
-                    authority_node_id=a.s.node_id, channel_id=channel,
-                    principal=principal, action="message.send", grant_epoch=1,
+                    db,
+                    b.s.identity,
+                    sender_node_id=b.s.node_id,
+                    authority_node_id=a.s.node_id,
+                    channel_id=channel,
+                    principal=principal,
+                    action="message.send",
+                    grant_epoch=1,
                 )
 
 
@@ -903,7 +936,9 @@ def test_peer_migration_schema_matches_product_models(tmp_path):
         str(Path(__file__).resolve().parent.parent / "anygarden/db/migrations"),
     )
     cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{path}")
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["093_turn_attempt_transient_retry"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == [
+        "093_turn_attempt_transient_retry"
+    ]
     command.upgrade(cfg, "063")
     command.upgrade(cfg, "head")
     engine = create_engine(f"sqlite:///{path}")
