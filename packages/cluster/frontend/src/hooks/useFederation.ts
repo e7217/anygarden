@@ -20,17 +20,21 @@ import {
   type BindingView,
   type CommandEnvelope,
   type DelegationStatusView,
-  type InviteBundleView,
   type InviteView,
   type ParticipantView,
   type PeerView,
   type Principal,
   type SnapshotView,
   type SubmissionView,
+  type NodeIdentityView,
   acceptInvite,
   changeParticipant as apiChangeParticipant,
   createBinding,
+  createConnectionCard,
   createInvite,
+  getNodeIdentity,
+  inspectConnectionCard,
+  inspectInviteCode,
   getSnapshot,
   getSubmission,
   listBindings,
@@ -112,6 +116,7 @@ export function useFederation() {
   const { user } = useAuth()
   const [invites, setInvites] = useState<InviteView[]>([])
   const [peers, setPeers] = useState<PeerView[]>([])
+  const [nodeIdentity, setNodeIdentity] = useState<NodeIdentityView | null>(null)
   const [nodesError, setNodesError] = useState<FederationApiError | null>(null)
   const [nodesCapability, setNodesCapability] = useState<NodeCapability>('unknown')
   const [channelRef, setChannelRef] = useState<FederationChannelRef | null>(() => loadRef())
@@ -132,6 +137,11 @@ export function useFederation() {
       setPeers(nextPeers)
       setNodesError(null)
       setNodesCapability('ready')
+      try {
+        setNodeIdentity(await getNodeIdentity())
+      } catch {
+        setNodeIdentity(null)
+      }
       // Bindings listing landed with PR608; its absence (older node) simply
       // keeps the manual-entry path, so a 404 here is not an error state.
       try {
@@ -267,11 +277,26 @@ export function useFederation() {
   const createInviteAction = useCallback(
     (input: Parameters<typeof createInvite>[0]) =>
       run(async () => {
-        const bundle = await createInvite(input)
+        const created = await createInvite(input)
         await refreshNodes()
-        return bundle as InviteBundleView
+        return created
       }),
     [refreshNodes],
+  )
+
+  const createConnectionCardAction = useCallback(
+    (url?: string) => run(() => createConnectionCard(url)),
+    [],
+  )
+
+  const inspectConnectionCardAction = useCallback(
+    (card: string) => run(() => inspectConnectionCard(card)),
+    [],
+  )
+
+  const inspectInviteCodeAction = useCallback(
+    (code: string) => run(() => inspectInviteCode(code)),
+    [],
   )
 
   const acceptInviteAction = useCallback(
@@ -456,6 +481,7 @@ export function useFederation() {
     isAdmin,
     invites,
     peers,
+    nodeIdentity,
     nodesError,
     nodesCapability,
     refreshNodes,
@@ -471,6 +497,9 @@ export function useFederation() {
     busy,
     actionError,
     createInvite: createInviteAction,
+    createConnectionCard: createConnectionCardAction,
+    inspectConnectionCard: inspectConnectionCardAction,
+    inspectInviteCode: inspectInviteCodeAction,
     acceptInvite: acceptInviteAction,
     revokeInvite: revokeInviteAction,
     revokePeer: revokePeerAction,

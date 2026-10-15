@@ -13,6 +13,12 @@ import {
   UserRound,
 } from 'lucide-react'
 
+import {
+  ConnectionError,
+  InviteAcceptor,
+  InviteComposer,
+  NodeConnectionCard,
+} from '@/components/FederationConnectionSetup'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -217,6 +223,8 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
             </Card>
           </div>
 
+          <ConnectionError error={actionError} />
+          <NodeConnectionCard federation={federation} />
           <InviteComposer federation={federation} />
           <InviteAcceptor federation={federation} />
         </TabsContent>
@@ -434,171 +442,6 @@ function DelegationList({ delegations }: { delegations: DelegationStatusView[] }
             )}
           </div>
         ))}
-      </CardContent>
-    </Card>
-  )
-}
-
-function InviteComposer({ federation }: { federation: Federation }) {
-  const { t } = useLocale()
-  const [bundle, setBundle] = useState<string | null>(null)
-  const [form, setForm] = useState({
-    intendedNode: '',
-    certificatePem: '',
-    endpointUrl: '',
-    endpointIps: '',
-    channelId: '',
-    capabilities: 'channel.read,message.send,task.request',
-  })
-  const disabled =
-    federation.nodesCapability !== 'ready' ||
-    !form.intendedNode ||
-    !form.certificatePem ||
-    !form.endpointUrl ||
-    !form.endpointIps ||
-    !form.channelId
-
-  async function submit() {
-    const created = await federation.createInvite({
-      intended_node_id: form.intendedNode.trim(),
-      certificate_pem: form.certificatePem.trim(),
-      endpoint: {
-        url: form.endpointUrl.trim(),
-        approved_ips: form.endpointIps
-          .split(',')
-          .map((value) => value.trim())
-          .filter(Boolean),
-      },
-      scopes: [
-        {
-          channel_id: form.channelId.trim(),
-          actors: [
-            {
-              node_id: form.intendedNode.trim(),
-              kind: 'human',
-              principal_id: '00000000-0000-0000-0000-000000000000',
-            },
-          ],
-          capabilities: form.capabilities
-            .split(',')
-            .map((value) => value.trim())
-            .filter(Boolean),
-          role: 'member',
-        },
-      ],
-    })
-    if (created) {
-      setBundle(JSON.stringify(created, null, 2))
-      setForm((current) => ({ ...current, certificatePem: '' }))
-    }
-  }
-
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>{t('federation.createInvitation')}</CardTitle>
-        <CardDescription>
-          {t('federation.createInvitationDescription')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t('federation.intendedNodeId')}>
-            <Input value={form.intendedNode} onChange={(e) => setForm({ ...form, intendedNode: e.target.value })} placeholder="uuid" />
-          </Field>
-          <Field label={t('federation.channelId')}>
-            <Input value={form.channelId} onChange={(e) => setForm({ ...form, channelId: e.target.value })} placeholder="uuid" />
-          </Field>
-          <Field label={t('federation.peerEndpointUrl')}>
-            <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} placeholder="https://peer.example:port" />
-          </Field>
-          <Field label={t('federation.approvedIps')}>
-            <Input value={form.endpointIps} onChange={(e) => setForm({ ...form, endpointIps: e.target.value })} placeholder="203.0.113.10" />
-          </Field>
-        </div>
-        <Field label={t('federation.intendedCertificate')}>
-          <textarea
-            className="min-h-20 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-sm text-[var(--color-foreground)]"
-            value={form.certificatePem}
-            onChange={(e) => setForm({ ...form, certificatePem: e.target.value })}
-            placeholder="-----BEGIN CERTIFICATE-----"
-          />
-        </Field>
-        <Field label={t('federation.capabilities')}>
-          <Input value={form.capabilities} onChange={(e) => setForm({ ...form, capabilities: e.target.value })} />
-        </Field>
-        <div className="flex justify-end">
-          <Button disabled={disabled || federation.busy} onClick={() => void submit()}>
-            {t('federation.createInvitation')}
-          </Button>
-        </div>
-        {bundle && (
-          <div className="space-y-2">
-            <p className="text-sm font-semibold">{t('federation.bundleCopyNow')}</p>
-            <pre className="max-h-64 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 font-mono text-xs">{bundle}</pre>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function InviteAcceptor({ federation }: { federation: Federation }) {
-  const { t } = useLocale()
-  const [form, setForm] = useState({ bundleJson: '', endpointUrl: '', endpointIps: '' })
-  const [accepted, setAccepted] = useState(false)
-  const disabled = !form.bundleJson || !form.endpointUrl || !form.endpointIps
-
-  async function submit() {
-    try {
-      const bundle = JSON.parse(form.bundleJson)
-      const result = await federation.acceptInvite({
-        bundle,
-        issuer_endpoint: {
-          url: form.endpointUrl.trim(),
-          approved_ips: form.endpointIps
-            .split(',')
-            .map((value) => value.trim())
-            .filter(Boolean),
-        },
-      })
-      if (result !== null) setAccepted(true)
-    } catch {
-      setAccepted(false)
-    }
-  }
-
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>{t('federation.acceptInvitation')}</CardTitle>
-        <CardDescription>
-          {t('federation.acceptInvitationDescription')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <Field label={t('federation.bundleJson')}>
-          <textarea
-            className="min-h-24 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-sm text-[var(--color-foreground)]"
-            value={form.bundleJson}
-            onChange={(e) => setForm({ ...form, bundleJson: e.target.value })}
-            placeholder='{"protocol_version":1,"invite_id":…}'
-          />
-        </Field>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t('federation.issuerEndpointUrl')}>
-            <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} />
-          </Field>
-          <Field label={t('federation.approvedIps')}>
-            <Input value={form.endpointIps} onChange={(e) => setForm({ ...form, endpointIps: e.target.value })} />
-          </Field>
-        </div>
-        <div className="flex items-center justify-between">
-          {accepted && <p className="flex items-center gap-1 text-sm text-[var(--color-success)]"><Check className="size-4" aria-hidden="true" /> {t('federation.acceptedGrants')}</p>}
-          <Button className="ml-auto" variant="outline" disabled={disabled || federation.busy} onClick={() => void submit()}>
-            {t('federation.acceptInvitation')}
-          </Button>
-        </div>
       </CardContent>
     </Card>
   )
