@@ -4,7 +4,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import {
+  CertificateExpiry,
   ConnectionError,
+  certificateStatus,
   InviteAcceptor,
   InviteComposer,
   NodeConnectionCard,
@@ -231,5 +233,39 @@ describe('ConnectionError', () => {
   it('falls back to the raw code for other errors', () => {
     render(<ConnectionError error="GRANT_DENIED (403)" />)
     expect(screen.getByRole('alert').textContent).toContain('GRANT_DENIED (403)')
+  })
+})
+
+describe('certificate expiry (#842)', () => {
+  const now = Date.parse('2026-10-15T00:00:00Z')
+
+  it('classifies ok, soon (≤30 days) and expired', () => {
+    expect(certificateStatus('2027-10-15T00:00:00Z', now)).toEqual({ kind: 'ok' })
+    expect(certificateStatus('2026-11-14T12:00:00Z', now)).toEqual({ kind: 'soon', days: 30 })
+    expect(certificateStatus('2026-10-20T00:00:00Z', now)).toEqual({ kind: 'soon', days: 5 })
+    expect(certificateStatus('2026-10-14T00:00:00Z', now)).toEqual({ kind: 'expired' })
+  })
+
+  it('[FED-14] warns on this node’s card when its certificate expires within 30 days', () => {
+    const soon = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000 + 60_000).toISOString()
+    render(
+      <NodeConnectionCard
+        federation={federation({
+          nodeIdentity: { ...federation().nodeIdentity!, certificate_expires_at: soon },
+        } as Partial<Federation>)}
+      />,
+    )
+    expect(screen.getByText(/Expires in 10 days/)).toBeInTheDocument()
+    expect(screen.getByText(/init-credentials --force/)).toBeInTheDocument()
+  })
+
+  it('shows only the date when renewal is not due', () => {
+    render(<NodeConnectionCard federation={federation()} />)
+    expect(screen.queryByText(/Expires in/)).not.toBeInTheDocument()
+  })
+
+  it('[FED-14] tells the admin when a peer certificate has expired', () => {
+    render(<CertificateExpiry expiresAt="2020-01-01T00:00:00Z" owner="peer" />)
+    expect(screen.getByText(/cannot be reached until its admin renews it/)).toBeInTheDocument()
   })
 })

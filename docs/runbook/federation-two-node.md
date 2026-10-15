@@ -70,11 +70,14 @@ claim a new deployment verification on separate physical hosts.
    codes. Running the node as the service user matters: credentials created
    by root would be unreadable to it.
 
-   The certificate is valid for 90 days. The node never overwrites or rotates
-   an existing pair. Startup is refused for a partial or unusable pair, and
-   for an `ANYGARDEN_PEER_CREDENTIALS_DIR` that holds no pair (an unmounted
-   volume must not produce a new identity). To create the pair ahead of time,
-   or to rotate it (peers must then re-pin), use
+   The certificate is valid for 2 years (pairs created before #842: 90
+   days). The node never overwrites or rotates an existing pair. Startup is
+   refused for a partial or corrupt pair, and for an
+   `ANYGARDEN_PEER_CREDENTIALS_DIR` that holds no pair (an unmounted volume
+   must not produce a new identity). An **expired** pair does not stop the
+   node: it starts without the federation listener, the node APIs answer
+   `CERTIFICATE_EXPIRED` and the connection tab says so (#842). To create the
+   pair ahead of time, or to renew it (see below), use
    `anygarden federation init-credentials --data-dir <dir> [--force]`.
 
    The first user signup on each node is that node's administrator. Repeat for
@@ -158,7 +161,38 @@ backend anygarden_peer
 - Certificate pins are unaffected: the node's own certificate still reaches
   the peer end to end.
 
+## Certificate renewal
+
+`anygarden start --peer-port` warns 30 days before this node's certificate
+expires, and the connection tab shows the expiry of this node's and every
+peer's certificate. Renewal is manual until #843 (pinned per-node root,
+automatically renewed leaf):
+
+1. On the node being renewed: `anygarden federation init-credentials --force
+   --data-dir <dir>` (keeps the node ID, even for an expired pair), then
+   restart it. Create a new connection card and send it to each peer admin.
+2. On each peer: re-pin the new certificate. There is no UI for this yet:
+
+   ```sh
+   curl -X POST https://<peer>/api/v1/node/peers/<renewed-node-id>/certificate \
+     -H "Authorization: Bearer <admin JWT>" -H 'Content-Type: application/json' \
+     -d '{"certificate_pem": "<PEM from the card review>", "expected_peer_epoch": <current epoch>}'
+   ```
+
+   The certificate PEM and the current epoch come from **Create invitation →
+   Review** (paste the card) and the trusted-peers list.
+3. Re-pinning conservatively disables every channel grant and publication
+   consent for that peer. Grant them again
+   (`PUT /api/v1/node/peers/<node>/grants/<channel>`) and re-approve
+   publication on the shared channel.
+
+A leaked key does not need to wait for expiry: revoke the peer
+(`DELETE /api/v1/node/peers/<node>` or **Revoke** in the trusted-peers list).
+
 ## Failure playbook
+
+- `CERTIFICATE_EXPIRED` (503) from the node APIs: this node's certificate
+  expired. The node keeps running without federation; renew it as above.
 
 - `ENDPOINT_DENIED` while creating or accepting an invitation: the approved IPs
   do not cover the URL host, or they are private and **Allow private network

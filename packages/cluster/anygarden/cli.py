@@ -452,21 +452,47 @@ def start_node(
             ) from None
         config.peer_public_url = peer_public_url
     if peer_port is not None:
+        from datetime import UTC, datetime
+
+        from anygarden.federation.certificates import (
+            EXPIRY_WARNING,
+            certificate_expires_at,
+        )
         from anygarden.federation.credentials_setup import (
             CredentialSetupError,
+            CredentialsExpired,
             ensure_peer_credentials,
+            peer_directory,
         )
 
         try:
             identity, created = ensure_peer_credentials(data_dir, config)
+        except CredentialsExpired as exc:
+            # #842: an expired certificate turns federation off, not the node.
+            click.echo(f"WARNING: {exc}", err=True)
+            click.echo(
+                "WARNING: starting without the federation listener; shared "
+                "channels and delegation stay unavailable until renewal",
+                err=True,
+            )
         except CredentialSetupError as exc:
             raise click.ClickException(str(exc)) from exc
-        if created:
-            click.echo("Created new peer credentials for this node (valid 90 days)")
-        click.echo(f"Federation node ID: {identity.node_id}")
-        click.echo(f"Certificate fingerprint (SHA-256): {identity.fingerprint}")
-        config.peer_listen_port = peer_port
-        config.peer_listen_host = peer_host or "0.0.0.0"
+        else:
+            if created:
+                click.echo("Created new peer credentials for this node (valid 2 years)")
+            click.echo(f"Federation node ID: {identity.node_id}")
+            click.echo(f"Certificate fingerprint (SHA-256): {identity.fingerprint}")
+            cert_pem = (peer_directory(data_dir, config) / "peer-cert.pem").read_text()
+            left = certificate_expires_at(cert_pem) - datetime.now(UTC)
+            if left <= EXPIRY_WARNING:
+                click.echo(
+                    f"WARNING: the peer certificate expires in {left.days} days; renew "
+                    "it with `anygarden federation init-credentials --force "
+                    f"--data-dir {data_dir}` (peers must re-pin the new fingerprint)",
+                    err=True,
+                )
+            config.peer_listen_port = peer_port
+            config.peer_listen_host = peer_host or "0.0.0.0"
     if host is not None:
         config.host = host
     if port is not None:
@@ -605,7 +631,11 @@ def federation_init_credentials(
 
     if node_id is None and force and cert_path.is_file():
         try:  # keep the node identity across a forced key rotation
-            node_id = inspect_certificate(cert_path.read_text()).node_id
+            # Read without the validity window: renewing an expired pair
+            # must keep the node identity (#842).
+            node_id = inspect_certificate(
+                cert_path.read_text(), check_validity=False
+            ).node_id
         except (PeerError, OSError, UnicodeError):
             node_id = None
     if node_id is None:
@@ -649,5 +679,5 @@ def federation_init_credentials(
     click.echo(f"Certificate fingerprint (SHA-256): {identity.fingerprint}")
     click.echo(
         "Share the node ID and fingerprint with peers out of band; never share the key. "
-        "The certificate is valid for 90 days."
+        "The certificate is valid for 2 years."
     )

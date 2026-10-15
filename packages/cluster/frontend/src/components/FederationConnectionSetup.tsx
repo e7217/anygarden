@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { Check, Copy, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Check, Copy, ShieldCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -64,6 +64,37 @@ export function ConnectionError({ error }: { error: string | null }) {
     <p role="alert" className="text-sm text-[var(--color-danger)]">
       {t('federation.errorPrefix')} · {key ? `${t(key)} (${error})` : error}
     </p>
+  )
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+/** Warn this long before a certificate expires (matches the CLI, #842). */
+export const EXPIRY_WARNING_DAYS = 30
+
+export type CertificateStatus = { kind: 'ok' } | { kind: 'soon'; days: number } | { kind: 'expired' }
+
+export function certificateStatus(expiresAt: string, now: number = Date.now()): CertificateStatus {
+  const left = new Date(expiresAt).getTime() - now
+  if (left <= 0) return { kind: 'expired' }
+  const days = Math.floor(left / DAY_MS)
+  return days <= EXPIRY_WARNING_DAYS ? { kind: 'soon', days } : { kind: 'ok' }
+}
+
+/** Expiry date plus a warning when renewal is due; never colour alone. */
+export function CertificateExpiry({ expiresAt, owner }: { expiresAt: string; owner: 'self' | 'peer' }) {
+  const { t, formatDate } = useLocale()
+  const status = certificateStatus(expiresAt)
+  const date = formatDate(new Date(expiresAt), { dateStyle: 'medium' })
+  if (status.kind === 'ok') return <span>{date}</span>
+  const message =
+    status.kind === 'expired'
+      ? t(owner === 'self' ? 'federation.cert.selfExpired' : 'federation.cert.peerExpired')
+      : t(owner === 'self' ? 'federation.cert.selfSoon' : 'federation.cert.peerSoon', { days: status.days })
+  return (
+    <span className={status.kind === 'expired' ? 'text-[var(--color-danger)]' : 'text-[var(--color-warning)]'}>
+      <AlertTriangle className="mr-1 inline size-4 align-text-bottom" aria-hidden="true" />
+      {date} · {message}
+    </span>
   )
 }
 
@@ -239,7 +270,7 @@ export function NodeConnectionCard({ federation, error = null, onAction }: Setup
             <dt className="text-[var(--color-foreground-muted)]">{t('federation.connect.fingerprint')}</dt>
             <dd><Fingerprint value={identity.fingerprint} /></dd>
             <dt className="text-[var(--color-foreground-muted)]">{t('federation.connect.expires')}</dt>
-            <dd>{formatDate(new Date(identity.certificate_expires_at), { dateStyle: 'medium' })}</dd>
+            <dd><CertificateExpiry expiresAt={identity.certificate_expires_at} owner="self" /></dd>
           </dl>
         ) : (
           <p className={hint}>{t('federation.connect.identityUnavailable')}</p>

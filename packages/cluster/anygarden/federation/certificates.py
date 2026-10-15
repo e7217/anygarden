@@ -24,15 +24,29 @@ class CertificateIdentity:
     fingerprint: str
 
 
+# #842: pins, not expiry, are the trust anchor and revocation is per peer, so
+# a short lifetime mostly added manual re-pin work. New pairs last two years.
+CERTIFICATE_LIFETIME = timedelta(days=730)
+EXPIRY_WARNING = timedelta(days=30)
+
+
 def inspect_certificate(
-    pem: str, *, now: datetime | None = None
+    pem: str, *, now: datetime | None = None, check_validity: bool = True
 ) -> CertificateIdentity:
+    """Identity of a node certificate.
+
+    ``check_validity=False`` skips only the validity window, so an expired
+    certificate can still name the node it belonged to (renewal, diagnosis).
+    It is never a trust decision.
+    """
     try:
         if len(pem) > 16384 or pem.count("-----BEGIN CERTIFICATE-----") != 1:
             raise ValueError
         cert = x509.load_pem_x509_certificate(pem.encode("ascii"))
         now = now or datetime.now(UTC)
-        if not cert.not_valid_before_utc <= now < cert.not_valid_after_utc:
+        if check_validity and not (
+            cert.not_valid_before_utc <= now < cert.not_valid_after_utc
+        ):
             raise ValueError
         sans = cert.extensions.get_extension_for_class(
             x509.SubjectAlternativeName
@@ -57,8 +71,21 @@ def certificate_expires_at(pem: str) -> datetime:
     return x509.load_pem_x509_certificate(pem.encode("ascii")).not_valid_after_utc
 
 
-def create_credentials(directory: Path, node_id: str) -> tuple[Path, Path]:
-    """Write a fresh pair. Never overwrites keys or regenerates node identity."""
+def is_expired(pem: str, *, now: datetime | None = None) -> bool:
+    return certificate_expires_at(pem) <= (now or datetime.now(UTC))
+
+
+def create_credentials(
+    directory: Path,
+    node_id: str,
+    *,
+    now: datetime | None = None,
+    lifetime: timedelta = CERTIFICATE_LIFETIME,
+) -> tuple[Path, Path]:
+    """Write a fresh pair. Never overwrites keys or regenerates node identity.
+
+    ``now`` only exists so tests can create expired or expiring pairs.
+    """
     node_id = str(UUID(node_id))
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     if directory.is_symlink():
@@ -68,7 +95,7 @@ def create_credentials(directory: Path, node_id: str) -> tuple[Path, Path]:
         raise PeerError("CREDENTIALS_EXIST", 409)
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, node_id)])
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)
@@ -76,7 +103,7 @@ def create_credentials(directory: Path, node_id: str) -> tuple[Path, Path]:
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(minutes=1))
-        .not_valid_after(now + timedelta(days=90))
+        .not_valid_after(now + lifetime)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.SubjectAlternativeName(

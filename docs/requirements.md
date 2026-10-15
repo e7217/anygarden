@@ -180,6 +180,8 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | FED-10 | `--peer-port` 첫 기동 시 기본 경로에 자격증명이 없으면 생성하고 노드 ID·지문을 출력한다. 기존 쌍은 덮어쓰지 않는다 | pytest |
 | FED-11 | 연결 카드와 초대 코드만으로 초대·수락이 끝난다. 사설망 주소는 관리자가 명시적으로 허용해야 접속한다 | pytest, vitest |
 | FED-12 | 초대 만들기·수락은 관리자가 지문 대조를 확인하기 전에는 제출할 수 없다 | vitest |
+| FED-13 | 노드 인증서가 만료되면 서버는 기동하고 federation만 꺼지며, API와 UI가 `CERTIFICATE_EXPIRED`로 이유를 알린다 | pytest, vitest |
+| FED-14 | 노드·피어 인증서 만료 30일 전부터 CLI와 관리자 화면이 경고한다 | pytest, vitest |
 
 ## 사용량·예산 (USE)
 
