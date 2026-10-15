@@ -10,14 +10,21 @@ from sqlalchemy import select
 
 from anygarden.auth.dependencies import Identity
 from anygarden.dependencies import get_admin_identity
-from anygarden.federation.certificates import CertificateIdentity
+from anygarden.federation import connection_codes as codes
+from anygarden.federation.certificates import (
+    CertificateIdentity,
+    certificate_expires_at,
+)
 from anygarden.federation.errors import PeerError
 from anygarden.federation.models import Peer, PeerInvite
 from anygarden.federation.schemas import (
+    ConnectionCardCreate,
+    ConnectionCardInspect,
     GrantReplace,
     GrantRevokeControl,
     Hello,
     InviteAccept,
+    InviteCodeInspect,
     InviteCreate,
     Redeem,
     RevokeControl,
@@ -60,18 +67,120 @@ async def validation_handler(request, exc):
     return JSONResponse(status_code=400, content={"code": "INVALID_SCHEMA"})
 
 
-@router.post("/invites", status_code=201)
-async def invite(
-    body: InviteCreate,
+def public_url(request: Request) -> str | None:
+    config = getattr(request.app.state, "config", None)
+    return getattr(config, "peer_public_url", None)
+
+
+async def _dial_preview(url: str) -> dict:
+    """Prefill for the admin's explicit endpoint approval; never dials."""
+    host, _ = codes.split_peer_url(url)
+    ips = await codes.suggest_ips(host)
+    return {"suggested_ips": ips, "requires_private": codes.requires_private(ips)}
+
+
+@router.get("/identity")
+async def identity(
+    request: Request,
     s: Annotated[PeerService, Depends(service)],
     actor: Annotated[Identity, Depends(get_admin_identity)],
 ):
+    async with s.sessions() as db:
+        await s.admin(db, actor.id)
+    return {
+        "node_id": s.node_id,
+        "fingerprint": s.identity.fingerprint,
+        "certificate_expires_at": certificate_expires_at(s.certificate_pem),
+        "public_url": public_url(request),
+    }
+
+
+@router.post("/connection-card")
+async def connection_card(
+    body: ConnectionCardCreate,
+    request: Request,
+    s: Annotated[PeerService, Depends(service)],
+    actor: Annotated[Identity, Depends(get_admin_identity)],
+):
+    async with s.sessions() as db:
+        await s.admin(db, actor.id)
+    url = body.url or public_url(request)
+    if not url:
+        raise PeerError("PUBLIC_URL_REQUIRED", 400)
+    return {
+        "card": codes.encode_card(s.node_id, s.certificate_pem, url),
+        "node_id": s.node_id,
+        "fingerprint": s.identity.fingerprint,
+        "url": url,
+    }
+
+
+@router.post("/connection-card/inspect")
+async def inspect_connection_card(
+    body: ConnectionCardInspect,
+    s: Annotated[PeerService, Depends(service)],
+    actor: Annotated[Identity, Depends(get_admin_identity)],
+):
+    async with s.sessions() as db:
+        await s.admin(db, actor.id)
+    card, cert = codes.decode_card(body.card)
+    if cert.node_id == s.node_id:
+        raise PeerError("IDENTITY_MISMATCH", 400)
+    return {
+        "node_id": cert.node_id,
+        "fingerprint": cert.fingerprint,
+        "certificate_pem": card.certificate_pem,
+        "certificate_expires_at": certificate_expires_at(card.certificate_pem),
+        "url": card.url,
+        **await _dial_preview(card.url),
+    }
+
+
+@router.post("/invite-code/inspect")
+async def inspect_invite_code(
+    body: InviteCodeInspect,
+    s: Annotated[PeerService, Depends(service)],
+    actor: Annotated[Identity, Depends(get_admin_identity)],
+):
+    async with s.sessions() as db:
+        await s.admin(db, actor.id)
+    code, cert = codes.decode_invite(body.code)
+    if cert.node_id == s.node_id or str(code.bundle.intended_node_id) != s.node_id:
+        raise PeerError("IDENTITY_MISMATCH", 400)
+    bundle = code.bundle.model_dump(mode="json")
+    # The admin pasted this secret; hand it back once so the UI can accept.
+    bundle["token"] = code.bundle.token.get_secret_value()
+    return JSONResponse(
+        content={
+            "bundle": bundle,
+            "issuer_node_id": cert.node_id,
+            "issuer_fingerprint": cert.fingerprint,
+            "issuer_url": code.issuer_url,
+            **await _dial_preview(code.issuer_url),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/invites", status_code=201)
+async def invite(
+    body: InviteCreate,
+    request: Request,
+    s: Annotated[PeerService, Depends(service)],
+    actor: Annotated[Identity, Depends(get_admin_identity)],
+):
+    issuer_url = body.issuer_url or public_url(request)
+    if issuer_url is not None:
+        codes.check_peer_url(issuer_url)
     bundle = await s.create_invite(actor.id, body)
     await s.refresh_trust()
     out = bundle.model_dump(mode="json")
     out["token"] = (
         bundle.token.get_secret_value()
     )  # one intentional delivery to local admin
+    out["invite_code"] = (
+        codes.encode_invite(bundle, issuer_url) if issuer_url is not None else None
+    )
     return JSONResponse(
         status_code=201, content=out, headers={"Cache-Control": "no-store"}
     )

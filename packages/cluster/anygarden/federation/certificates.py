@@ -52,6 +52,11 @@ def inspect_certificate(
         raise PeerError("CERTIFICATE_DENIED", 400) from None
 
 
+def certificate_expires_at(pem: str) -> datetime:
+    """``notAfter`` of a certificate already accepted by inspect_certificate."""
+    return x509.load_pem_x509_certificate(pem.encode("ascii")).not_valid_after_utc
+
+
 def create_credentials(directory: Path, node_id: str) -> tuple[Path, Path]:
     """Write a fresh pair. Never overwrites keys or regenerates node identity."""
     node_id = str(UUID(node_id))
