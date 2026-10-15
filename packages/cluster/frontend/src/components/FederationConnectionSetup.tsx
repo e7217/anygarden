@@ -18,6 +18,14 @@ import type { MessageKey } from '@/i18n/messages'
 
 type Federation = ReturnType<typeof useFederation>
 
+interface SetupProps {
+  federation: Federation
+  /** The last action error when this card started that action, else null. */
+  error?: string | null
+  /** Called before this card starts an action, so its error shows here. */
+  onAction?: () => void
+}
+
 /**
  * #839 — connect two nodes by exchanging two pasteable strings: this node's
  * connection card, then the invite code. The server decodes both and only
@@ -47,13 +55,13 @@ const ERROR_KEYS: Record<string, MessageKey> = {
   PEER_UNAVAILABLE: 'federation.connect.error.PEER_UNAVAILABLE',
 }
 
-/** The node tab's last action error, explained for the setup codes. */
+/** A failed setup action, explained for the codes admins can act on. */
 export function ConnectionError({ error }: { error: string | null }) {
   const { t } = useLocale()
   if (!error) return null
   const key = ERROR_KEYS[error.split(' ')[0]]
   return (
-    <p role="alert" className="mt-4 text-sm text-[var(--color-danger)]">
+    <p role="alert" className="text-sm text-[var(--color-danger)]">
       {t('federation.errorPrefix')} · {key ? `${t(key)} (${error})` : error}
     </p>
   )
@@ -203,7 +211,7 @@ function readyToDial(approval: DialApproval): boolean {
   return approval.fingerprintConfirmed && approval.ips.trim().length > 0
 }
 
-export function NodeConnectionCard({ federation }: { federation: Federation }) {
+export function NodeConnectionCard({ federation, error = null, onAction }: SetupProps) {
   const { t, formatDate } = useLocale()
   const identity = federation.nodeIdentity
   const urlId = useId()
@@ -212,6 +220,7 @@ export function NodeConnectionCard({ federation }: { federation: Federation }) {
   const address = url ?? identity?.public_url ?? ''
 
   async function create() {
+    onAction?.()
     const result = await federation.createConnectionCard(address.trim() || undefined)
     if (result) setCard(result.card)
   }
@@ -255,13 +264,14 @@ export function NodeConnectionCard({ federation }: { federation: Federation }) {
             {t('federation.connect.createCard')}
           </Button>
         </div>
+        <ConnectionError error={error} />
         {card && <CopyableCode label={t('federation.connect.cardToShare')} value={card} />}
       </CardContent>
     </Card>
   )
 }
 
-export function InviteComposer({ federation }: { federation: Federation }) {
+export function InviteComposer({ federation, error = null, onAction }: SetupProps) {
   const { t } = useLocale()
   const ids = { card: useId(), issuer: useId(), channel: useId(), capabilities: useId() }
   const [cardText, setCardText] = useState('')
@@ -274,6 +284,7 @@ export function InviteComposer({ federation }: { federation: Federation }) {
   const issuer = issuerUrl ?? federation.nodeIdentity?.public_url ?? ''
 
   async function review() {
+    onAction?.()
     const preview = await federation.inspectConnectionCard(cardText)
     setPeer(preview)
     setApproval(preview ? approvalFrom(preview) : null)
@@ -282,6 +293,7 @@ export function InviteComposer({ federation }: { federation: Federation }) {
 
   async function submit() {
     if (!peer || !approval) return
+    onAction?.()
     const result = await federation.createInvite({
       intended_node_id: peer.node_id,
       certificate_pem: peer.certificate_pem,
@@ -384,6 +396,8 @@ export function InviteComposer({ federation }: { federation: Federation }) {
         )}
 
 
+        <ConnectionError error={error} />
+
         {created && (
           <>
             {created.code ? (
@@ -399,7 +413,7 @@ export function InviteComposer({ federation }: { federation: Federation }) {
   )
 }
 
-export function InviteAcceptor({ federation }: { federation: Federation }) {
+export function InviteAcceptor({ federation, error = null, onAction }: SetupProps) {
   const { t, formatDate } = useLocale()
   const codeId = useId()
   const [codeText, setCodeText] = useState('')
@@ -408,6 +422,7 @@ export function InviteAcceptor({ federation }: { federation: Federation }) {
   const [accepted, setAccepted] = useState(false)
 
   async function review() {
+    onAction?.()
     const preview = await federation.inspectInviteCode(codeText)
     setInvite(preview)
     setApproval(preview ? approvalFrom(preview) : null)
@@ -416,6 +431,7 @@ export function InviteAcceptor({ federation }: { federation: Federation }) {
 
   async function submit() {
     if (!invite || !approval) return
+    onAction?.()
     const result = await federation.acceptInvite({
       bundle: invite.bundle,
       issuer_endpoint: endpointFrom(invite.issuer_url, approval),
@@ -483,6 +499,8 @@ export function InviteAcceptor({ federation }: { federation: Federation }) {
             </div>
           </>
         )}
+
+        <ConnectionError error={error} />
 
       </CardContent>
     </Card>

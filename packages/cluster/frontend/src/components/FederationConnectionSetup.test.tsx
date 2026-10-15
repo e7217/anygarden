@@ -168,6 +168,20 @@ describe('InviteComposer', () => {
     })
   })
 
+  it('shows the error of its own action and reports when it starts one', async () => {
+    const onAction = vi.fn()
+    const fed = federation({ inspectConnectionCard: vi.fn(async () => cardPreview()) } as Partial<Federation>)
+    render(<InviteComposer federation={fed} error="ENDPOINT_DENIED (400)" onAction={onAction} />)
+    expect(screen.getByRole('alert').textContent).toMatch(/Allow private network addresses/)
+
+    fireEvent.change(screen.getByLabelText('Other node’s connection card'), {
+      target: { value: 'agpeer1.peer' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Review/ }))
+    expect(onAction).toHaveBeenCalledTimes(1)
+    await screen.findByText(PEER)
+  })
+
   it('editing the pasted card discards the previous review', async () => {
     const fed = federation({ inspectConnectionCard: vi.fn(async () => cardPreview()) } as Partial<Federation>)
     await reviewCard(fed)

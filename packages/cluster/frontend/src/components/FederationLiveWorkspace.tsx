@@ -86,6 +86,13 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
 
   const pendingSubmissions = submissions.filter((item) => item.state === 'unconfirmed')
 
+  // #839 — show a setup error inside the card whose action produced it.
+  const [errorOwner, setErrorOwner] = useState<string | null>(null)
+  const setupErrorProps = (owner: string) => ({
+    error: errorOwner === owner ? actionError : null,
+    onAction: () => setErrorOwner(owner),
+  })
+
   const statusLine = useMemo(() => {
     if (nodesCapability === 'disabled') {
       return t('federation.statusDisabled')
@@ -149,7 +156,8 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
 
         <TabsContent value="nodes" className="mt-4">
           <div className="grid gap-4 lg:grid-cols-2">
-            <Card>
+            {/* min-w-0: long node IDs must truncate, not widen the grid track. */}
+            <Card className="min-w-0">
               <CardHeader>
                 <CardTitle>{t('federation.trustedPeers')}</CardTitle>
                 <CardDescription>
@@ -175,7 +183,10 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                       size="sm"
                       variant="destructive"
                       disabled={busy}
-                      onClick={() => void federation.revokePeer(peer.node_id)}
+                      onClick={() => {
+                        setErrorOwner(null)
+                        void federation.revokePeer(peer.node_id)
+                      }}
                     >
                       {t('federation.revoke')}
                     </Button>
@@ -184,7 +195,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="min-w-0">
               <CardHeader>
                 <CardTitle>{t('federation.invitations')}</CardTitle>
                 <CardDescription>
@@ -212,7 +223,10 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                         size="sm"
                         variant="outline"
                         disabled={busy}
-                        onClick={() => void federation.revokeInvite(invite.id)}
+                        onClick={() => {
+                          setErrorOwner(null)
+                          void federation.revokeInvite(invite.id)
+                        }}
                       >
                         {t('federation.revoke')}
                       </Button>
@@ -223,10 +237,14 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
             </Card>
           </div>
 
-          <ConnectionError error={actionError} />
-          <NodeConnectionCard federation={federation} />
-          <InviteComposer federation={federation} />
-          <InviteAcceptor federation={federation} />
+          {errorOwner === null && (
+            <div className="mt-4">
+              <ConnectionError error={actionError} />
+            </div>
+          )}
+          <NodeConnectionCard federation={federation} {...setupErrorProps('card')} />
+          <InviteComposer federation={federation} {...setupErrorProps('invite')} />
+          <InviteAcceptor federation={federation} {...setupErrorProps('accept')} />
         </TabsContent>
 
         <TabsContent value="channel" className="mt-4">
