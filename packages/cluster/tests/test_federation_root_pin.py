@@ -189,3 +189,70 @@ def test_root_without_cert_sign_or_with_deeper_path_is_denied(tmp_path):
     pem = cert.public_bytes(serialization.Encoding.PEM).decode()
     with pytest.raises(PeerError, match="CERTIFICATE_DENIED"):
         inspect_certificate(pem)
+
+
+@pytest.mark.req("FED-16")
+async def test_peer_service_rejects_a_trusted_roots_leaf_claiming_another_node(
+    tmp_path,
+):
+    """C is trusted by A, so TLS accepts C's chain; B's pin must still refuse."""
+    from types import SimpleNamespace
+
+    from .test_federation_trust import admit, uid
+
+    from anygarden.db.engine import build_engine, build_session_factory
+    from anygarden.db.models import Base, Room, User
+    from anygarden.federation.service import PeerService
+
+    nodes = []
+    for label in ("a", "b"):
+        node, admin, channel, actor = uid(), uid(), uid(), uid()
+        create_root(tmp_path / label, node)
+        leaf = issue_leaf(tmp_path / label)
+        engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / (label + '.db')}")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        sessions = build_session_factory(engine)
+        async with sessions.begin() as db:
+            db.add(
+                User(
+                    id=admin, email=f"{label}@x.test", password_hash="s", is_admin=True
+                )
+            )
+            db.add(Room(id=channel, name=label))
+        service = PeerService(
+            node_id=node,
+            cert_path=leaf,
+            key_path=leaf,
+            anchor_path=tmp_path / label / "peer-root-cert.pem",
+            sessions=sessions,
+            allow_loopback=True,
+        )
+        nodes.append(
+            SimpleNamespace(
+                s=service, admin=admin, channel=channel, actor=actor, engine=engine
+            )
+        )
+    a, b = nodes
+    try:
+        await admit(a, b)
+        genuine = leaf_identity(tmp_path / "b")
+        # Any other root (here: a third node's) signs a leaf naming B.
+        _, c_dir = root_node(tmp_path)
+        forged_dir = tmp_path / "forged"
+        forged_dir.mkdir()
+        for name in ("peer-root-cert.pem", "peer-root-key.pem"):
+            (forged_dir / name).write_bytes((c_dir / name).read_bytes())
+        issue_leaf(forged_dir, node_id=b.s.node_id)
+        forged = leaf_identity(forged_dir)
+
+        async with a.s.sessions.begin() as db:
+            assert (
+                await a.s.authenticate(db, genuine, b.s.node_id)
+            ).node_id == b.s.node_id
+        async with a.s.sessions.begin() as db:
+            with pytest.raises(PeerError, match="PIN_MISMATCH"):
+                await a.s.authenticate(db, forged, b.s.node_id)
+    finally:
+        for n in nodes:
+            await n.engine.dispose()

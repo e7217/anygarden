@@ -132,9 +132,14 @@ def pin_matches(pin_pem: str, presented: CertificateIdentity) -> bool:
     return True
 
 
-def _node_name(node_id: str) -> tuple[x509.Name, x509.SubjectAlternativeName]:
+def _node_name(
+    node_id: str, *, root: bool = False
+) -> tuple[x509.Name, x509.SubjectAlternativeName]:
+    # Root and leaf subjects must differ: a leaf whose subject equals its
+    # issuer is treated by OpenSSL as self-signed and fails chain building.
+    common_name = f"{node_id} root" if root else node_id
     return (
-        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, node_id)]),
+        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)]),
         x509.SubjectAlternativeName(
             [x509.UniformResourceIdentifier(f"{NODE_URI}{node_id}")]
         ),
@@ -177,7 +182,7 @@ def create_root(
     if cert_path.exists() or key_path.exists():
         raise PeerError("CREDENTIALS_EXIST", 409)
     key = ec.generate_private_key(ec.SECP256R1())
-    name, san = _node_name(node_id)
+    name, san = _node_name(node_id, root=True)
     now = now or datetime.now(UTC)
     cert = (
         x509.CertificateBuilder()

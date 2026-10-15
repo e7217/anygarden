@@ -20,7 +20,11 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anygarden.db.models import Room, User
-from anygarden.federation.certificates import CertificateIdentity, inspect_certificate
+from anygarden.federation.certificates import (
+    CertificateIdentity,
+    inspect_certificate,
+    pin_matches,
+)
 from anygarden.federation.endpoint import validate_endpoint
 from anygarden.federation.errors import PeerError
 from anygarden.federation.models import (
@@ -74,13 +78,17 @@ class PeerService:
         cert_path: Path,
         key_path: Path,
         sessions: async_sessionmaker[AsyncSession],
+        anchor_path: Path | None = None,
         allow_loopback: bool = False,
         local_policy: Callable[[AsyncSession, AuthorizedPeer], Awaitable[bool]]
         | None = None,
     ):
         self.node_id = node_id
+        # cert/key: what this node presents in TLS. anchor: what peers pin and
+        # what cards and invitations carry — the node root (#843), or the
+        # presented certificate itself for a legacy self-signed pair.
         self.cert_path, self.key_path = cert_path, key_path
-        self.certificate_pem = cert_path.read_text()
+        self.certificate_pem = (anchor_path or cert_path).read_text()
         self.identity = inspect_certificate(self.certificate_pem)
         if self.identity.node_id != node_id:
             raise PeerError("IDENTITY_MISMATCH", 400)
@@ -210,7 +218,7 @@ class PeerService:
         if tls.node_id != sender:
             raise PeerError("IDENTITY_MISMATCH", 401)
         peer = await self.lock_peer(db, sender)
-        if not hmac.compare_digest(peer.fingerprint, tls.fingerprint):
+        if not pin_matches(peer.certificate_pem, tls):
             raise PeerError("PIN_MISMATCH", 401)
         inspect_certificate(
             peer.certificate_pem
@@ -223,7 +231,7 @@ class PeerService:
         if tls.node_id != sender:
             raise PeerError("IDENTITY_MISMATCH", 401)
         peer = await self.lock_peer(db, sender)
-        if peer.fingerprint != tls.fingerprint:
+        if not pin_matches(peer.certificate_pem, tls):
             raise PeerError("PIN_MISMATCH", 401)
         inspect_certificate(peer.certificate_pem)
         if peer.state == "active":
@@ -232,7 +240,8 @@ class PeerService:
             await db.execute(
                 select(PeerInvite.id).where(
                     PeerInvite.intended_node_id == sender,
-                    PeerInvite.fingerprint == tls.fingerprint,
+                    # tls already matched this pin above.
+                    PeerInvite.fingerprint == peer.fingerprint,
                     PeerInvite.state == "pending",
                     PeerInvite.expires_at > now(),
                     PeerInvite.expected_peer_epoch == peer.epoch,
@@ -259,7 +268,7 @@ class PeerService:
             if (
                 row is None
                 or row.intended_node_id != sender
-                or row.fingerprint != tls.fingerprint
+                or row.fingerprint != peer.fingerprint
                 or not hmac.compare_digest(row.token_hash, digest(token))
             ):
                 raise PeerError("INVITE_DENIED")
