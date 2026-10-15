@@ -54,6 +54,10 @@ bodies. Local JWT surface only.
   shared rooms in listings or detail — admin visibility is served by the
   bindings listing (A) plus the existing shared-channel snapshot API
   (`local_access` unchanged). This asymmetry is intentional, not drift.
+  It covers the *bypass* only (#841): an admin who is on the authority
+  roster or among the current grant actors is listed like any other
+  participant — the same predicate room detail already applies — so the
+  web UI can open shared rooms the admin actually participates in.
 - Room detail `GET /api/v1/rooms/{id}`: for shared-bound rooms the same
   predicate gates a **metadata-only** read (Room object; non-participants get
   the existence-hiding 404). Every rooms-API sub-resource (messages, threads,

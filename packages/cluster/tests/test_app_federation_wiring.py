@@ -346,6 +346,77 @@ async def test_global_admin_asymmetry_and_outsider_exclusion(composed):
         assert response.json() == []
 
 
+async def test_global_admin_lists_shared_rooms_they_participate_in(composed):
+    """#841 — an admin on the roster/grant sees the room like any participant."""
+    from anygarden.federation.models import PeerGrant
+    from anygarden.shared_channels.models import SharedParticipant
+
+    app, ids, config, factory = (
+        composed["app"],
+        composed["ids"],
+        composed["config"],
+        composed["factory"],
+    )
+    admin_principal = {
+        "node_id": ids["node"],
+        "kind": "human",
+        "principal_id": ids["admin"],
+    }
+    async with factory.begin() as db:
+        db.add(
+            SharedParticipant(
+                authority_node_id=ids["node"],
+                channel_id=ids["authority"],
+                node_id=ids["node"],
+                kind="human",
+                principal_id=ids["admin"],
+                role="owner",
+                active=True,
+                revision=1,
+            )
+        )
+        grant = await db.get(
+            PeerGrant, (ids["remote"], ids["remote"], ids["channel"])
+        )
+        grant.actors = [*grant.actors, admin_principal]
+    token = _token(config, ids["admin"], "admin@example.test", admin=True)
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+
+        async def listed_ids() -> set[str]:
+            response = await client.get("/api/v1/rooms", headers=headers)
+            assert response.status_code == 200
+            return {room["id"] for room in response.json()}
+
+        assert await listed_ids() == {
+            ids["plain"],
+            ids["authority"],
+            ids["mirror"],
+        }
+        # Listing and detail now agree for the participating admin.
+        response = await client.get(
+            f"/api/v1/rooms/{ids['authority']}", headers=headers
+        )
+        assert response.status_code == 200
+        async with factory.begin() as db:
+            roster = await db.get(
+                SharedParticipant,
+                (
+                    ids["node"],
+                    ids["authority"],
+                    ids["node"],
+                    "human",
+                    ids["admin"],
+                ),
+            )
+            roster.active = False
+        # The tombstone hides it on the next request; the bypass never
+        # re-includes it.
+        assert await listed_ids() == {ids["plain"], ids["mirror"]}
+
+
 async def test_tombstone_and_grant_revocation_hide_on_next_request(composed):
     from anygarden.federation.models import PeerGrant
     from anygarden.shared_channels.models import SharedParticipant
