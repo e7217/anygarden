@@ -64,6 +64,7 @@ anygarden server
 
 # 머신 데몬
 anygarden machine run   # 머신 데몬 CLI의 run 명령 실행 (anygarden[machine] 필요)
+anygarden machine run --data-dir ~/.anygarden/remote-machines/<id>   # 노드가 도는 컴퓨터에서 다른 서버의 머신을 겸할 때 (상태 폴더 분리)
 
 # 에이전트/클라이언트
 anygarden agent --engine codex-cli --name PM \
