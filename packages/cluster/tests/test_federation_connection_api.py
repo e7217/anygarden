@@ -246,3 +246,15 @@ async def test_invite_without_any_issuer_url_still_returns_the_bundle(pair):
     assert r.status_code == 201, r.text
     assert r.json()["invite_code"] is None
     assert len(r.json()["token"]) > 32
+
+
+async def test_identity_reports_the_pin_kind_and_leaf_expiry(pair):
+    a, _ = pair
+    async with admin_client(a) as client:
+        body = (await client.get("/api/v1/node/identity")).json()
+    if a.s.identity.root:
+        assert body["pin_kind"] == "root"
+        assert body["leaf_expires_at"] < body["certificate_expires_at"]
+    else:
+        assert body["pin_kind"] == "certificate"
+        assert body["leaf_expires_at"] is None
