@@ -5,6 +5,14 @@
 
 ### Fixed
 
+- An expired peer certificate no longer stops the whole node (#842). `anygarden
+  start --peer-port` warns and starts without the federation listener; the node
+  APIs answer `CERTIFICATE_EXPIRED` and the connection tab explains how to renew.
+  Corrupt or partial credential pairs still refuse the start.
+- `anygarden federation init-credentials --force` kept the node ID only while
+  the old certificate was still valid; renewing an expired pair could give the
+  node a new identity. It now keeps the node ID either way (#842).
+
 - Creating a federation invitation from the admin UI always failed with
   `INVALID_SCHEMA`: the client added `protocol_version`, which the closed
   `InviteCreate` schema rejects (#839).
@@ -59,6 +67,10 @@
 
 ### Changed
 
+- New federation peer certificates are valid for 2 years instead of 90 days
+  (#842). `start` warns 30 days before expiry, and the connection tab shows the
+  expiry of this node's and each peer's certificate. Existing certificates are
+  unchanged until renewed.
 - The codex-cli model catalog offers `gpt-6.1-sol`, which codex now lists as
   its latest workhorse model, and it replaces `gpt-6-sol` as the default.
   Agents pinned to `gpt-6-sol` keep it; it stays in the catalog.

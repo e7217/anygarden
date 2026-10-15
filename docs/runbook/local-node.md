@@ -149,10 +149,14 @@ Requirements and behavior (PR609/PR615 fail-closed contract):
   overwrites or rotates a pair — rotation stays explicit with
   `anygarden federation init-credentials --force`.
 - Startup is refused before any boot work when the pair is partial, when it
-  is unusable (corrupt, expired, mismatched), or when
+  is unusable (corrupt, not yet valid, mismatched), or when
   `ANYGARDEN_PEER_CREDENTIALS_DIR` is set but holds no pair (most likely an
   unmounted volume; a fresh identity there would silently break peers).
   `anygarden federation init-credentials` still creates a pair ahead of time.
+- An expired but intact pair does not stop the node (#842): `start` prints a
+  warning, runs without the peer listener, and the node APIs answer
+  `CERTIFICATE_EXPIRED` (503). It also warns 30 days before expiry. New pairs
+  are valid for 2 years; renewal is in the two-node runbook.
 - `--peer-public-url https://host:port` (or `ANYGARDEN_PEER_PUBLIC_URL`) is the
   address peers dial. It only prefills connection cards and invite codes.
 - The listener starts only after the app lifespan composed the peer/channel
