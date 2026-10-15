@@ -5,6 +5,14 @@
 
 ### Fixed
 
+- Creating a federation invitation from the admin UI always failed with
+  `INVALID_SCHEMA`: the client added `protocol_version`, which the closed
+  `InviteCreate` schema rejects (#839).
+- The federation admin UI could not approve private network peers
+  (10.x, 192.168.x): it never sent `allow_private`, so such endpoints were
+  refused with `ENDPOINT_DENIED`. Reviewing a card or invite code now offers an
+  explicit **Allow private network addresses** option (#839).
+
 - A general task resumed by the user's thread answer now wakes its agent with
   resume instructions instead of the assignment template (#808). The notice's
   event is `resumed` (the chat card reads "Task resumed"). It no longer asks the
@@ -16,6 +24,23 @@
 
 ### Added
 
+- Simpler federation setup (#839). `anygarden start --peer-port` creates the
+  node's peer credentials on first run when the default `<data-dir>/peer`
+  holds neither file, and prints the node ID and fingerprint. It still refuses
+  a partial or unusable pair and an `ANYGARDEN_PEER_CREDENTIALS_DIR` without a
+  pair, and never overwrites one. `--peer-public-url` /
+  `ANYGARDEN_PEER_PUBLIC_URL` sets the address peers dial.
+- Connection cards (`agpeer1.`) and invite codes (`aginvite1.`). Admins
+  connect two nodes by pasting this node's card into the other's **Create
+  invitation**, then the returned code into **Accept invitation**. The server
+  decodes both, shows the fingerprint and suggests the IPs to approve; dialing
+  still uses only the IPs the admin confirms, and the UI requires confirming
+  the fingerprint before submitting. New admin APIs: `GET /api/v1/node/identity`,
+  `POST /api/v1/node/connection-card`, `POST /api/v1/node/connection-card/inspect`,
+  `POST /api/v1/node/invite-code/inspect`; `POST /api/v1/node/invites` accepts
+  `issuer_url` and returns `invite_code`. The peer protocol is unchanged.
+- The two-node runbook covers running the peer listener behind a TCP
+  passthrough proxy (nginx `stream`, HAProxy `mode tcp`).
 - An agent can turn the request it is answering into a task (#806). The new
   MCP tool `claim_current_request` takes no arguments: the server reads the
   delivered turn's lease, promotes the top-level human message that started

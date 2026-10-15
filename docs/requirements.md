@@ -173,10 +173,13 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | FED-03 | peer를 회수하면 그 peer의 채널 권한이 모두 비활성화된다 | pytest |
 | FED-04 | 예산으로 정지된 에이전트만 있는 채널에 위임하면 `NO_ELIGIBLE_EXECUTOR` (`budget_pause`) | pytest |
 | FED-05 | 실행자는 원격 실행 직전에 예산 차단을 다시 확인한다 | pytest |
-| FED-06 | 자격증명 파일 없이 `--peer-port`를 쓰면 기동이 실패한다 | pytest |
+| FED-06 | `--peer-port` 기동 시 자격증명 쌍이 일부만 있거나 쓸 수 없거나, 명시적으로 지정한 자격증명 디렉터리에 없으면 기동이 실패하고 기존 파일은 바뀌지 않는다 | pytest |
 | FED-07 | 제출 재시도는 `request_id` 단위로 멱등이다 | pytest |
 | FED-08 | 운영자가 CLI로 peer 자격증명을 만들 수 있다 | pytest |
 | FED-09 | 토폴로지에 연합 peer가 표시된다 | pytest, vitest |
+| FED-10 | `--peer-port` 첫 기동 시 기본 경로에 자격증명이 없으면 생성하고 노드 ID·지문을 출력한다. 기존 쌍은 덮어쓰지 않는다 | pytest |
+| FED-11 | 연결 카드와 초대 코드만으로 초대·수락이 끝난다. 사설망 주소는 관리자가 명시적으로 허용해야 접속한다 | pytest, vitest |
+| FED-12 | 초대 만들기·수락은 관리자가 지문 대조를 확인하기 전에는 제출할 수 없다 | vitest |
 
 ## 사용량·예산 (USE)
 
