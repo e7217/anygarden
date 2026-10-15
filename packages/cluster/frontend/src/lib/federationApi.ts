@@ -178,6 +178,8 @@ export interface PeerView {
   fingerprint: string
   state: string
   certificate_epoch: number
+  /** The pinned peer certificate's notAfter (#842). Absent on older nodes. */
+  certificate_expires_at?: string
 }
 
 export interface ParticipantView {

@@ -8,7 +8,7 @@ import { cleanup, render as renderView, screen, fireEvent } from '@testing-libra
 import { MemoryRouter } from 'react-router-dom'
 import '@testing-library/jest-dom/vitest'
 import FederationLiveWorkspace from './FederationLiveWorkspace'
-import type { ParticipantView } from '@/lib/federationApi'
+import { FederationApiError, type ParticipantView } from '@/lib/federationApi'
 import type { useFederation } from '@/hooks/useFederation'
 
 type Federation = ReturnType<typeof useFederation>
@@ -74,6 +74,40 @@ describe('FederationLiveWorkspace', () => {
     const banner = screen.getByRole('alert')
     expect(banner.textContent).toMatch(/sharing disabled on this node/i)
     expect(banner.textContent).toContain('/api/v1/node')
+  })
+
+  it('[FED-13] explains an expired certificate instead of the generic disabled banner', () => {
+    render(
+      <FederationLiveWorkspace
+        federation={baseFederation({
+          nodesCapability: 'disabled',
+          nodesError: new FederationApiError('CERTIFICATE_EXPIRED', 503),
+        })}
+      />,
+    )
+    const banner = screen.getByRole('alert')
+    expect(banner.textContent).toMatch(/certificate has expired/i)
+    expect(banner.textContent).toContain('init-credentials --force')
+    expect(banner.textContent).not.toMatch(/sharing disabled on this node/i)
+  })
+
+  it('shows each peer certificate expiry', () => {
+    render(
+      <FederationLiveWorkspace
+        federation={baseFederation({
+          peers: [
+            {
+              node_id: 'peer-node',
+              fingerprint: 'f'.repeat(64),
+              state: 'active',
+              certificate_epoch: 1,
+              certificate_expires_at: '2020-01-01T00:00:00Z',
+            },
+          ],
+        })}
+      />,
+    )
+    expect(screen.getByText(/cannot be reached until its admin renews it/)).toBeInTheDocument()
   })
 
   it('renders peers with epoch and revoke actions', () => {

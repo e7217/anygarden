@@ -103,7 +103,7 @@ export interface TrackedSubmission extends SubmissionView {
  * 503 PEERING_DISABLED means the node has no peer certificate (#773).
  * All render an honest “sharing disabled” surface instead of mock data.
  */
-const DISABLED_CODES = new Set(['SHARING_DISABLED', 'PEERING_DISABLED'])
+const DISABLED_CODES = new Set(['SHARING_DISABLED', 'PEERING_DISABLED', 'CERTIFICATE_EXPIRED'])
 
 export function capabilityFromError(error: unknown): NodeCapability {
   if (error instanceof FederationApiError) {

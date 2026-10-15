@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 
 import {
+  CertificateExpiry,
   ConnectionError,
   InviteAcceptor,
   InviteComposer,
@@ -141,8 +142,17 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
         <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <div>
-            <strong>{t('federation.sharingDisabledTitle')}</strong>{' '}
-            <span>{t('federation.sharingDisabledBody')}</span>
+            {federation.nodesError?.code === 'CERTIFICATE_EXPIRED' ? (
+              <>
+                <strong>{t('federation.cert.expiredTitle')}</strong>{' '}
+                <span>{t('federation.cert.expiredBody')}</span>
+              </>
+            ) : (
+              <>
+                <strong>{t('federation.sharingDisabledTitle')}</strong>{' '}
+                <span>{t('federation.sharingDisabledBody')}</span>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -178,6 +188,12 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                       <p className="mt-1 truncate text-xs text-[var(--color-foreground-muted)]">
                         {t('federation.pin')} {peer.fingerprint.slice(0, 16)}… · {t('federation.epoch')} {peer.certificate_epoch} · {peer.state}
                       </p>
+                      {peer.certificate_expires_at && (
+                        <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+                          {t('federation.connect.expires')}{' '}
+                          <CertificateExpiry expiresAt={peer.certificate_expires_at} owner="peer" />
+                        </p>
+                      )}
                     </div>
                     <Button
                       size="sm"
