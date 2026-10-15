@@ -31,9 +31,11 @@ def test_creates_pair_in_default_directory_when_absent(tmp_path):
     identity, created = ensure_peer_credentials(tmp_path, _config())
 
     assert created is True
-    cert = tmp_path / "peer" / "peer-cert.pem"
-    assert inspect_certificate(cert.read_text()) == identity
-    assert stat.S_IMODE((tmp_path / "peer" / "peer-key.pem").stat().st_mode) == 0o600
+    # #843: a first run creates a node root (the pin) plus a TLS leaf.
+    root = tmp_path / "peer" / "peer-root-cert.pem"
+    assert inspect_certificate(root.read_text()) == identity
+    for name in ("peer-root-key.pem", "peer-leaf.pem"):
+        assert stat.S_IMODE((tmp_path / "peer" / name).stat().st_mode) == 0o600
 
 
 @pytest.mark.req("FED-10")
@@ -128,7 +130,9 @@ def test_start_creates_credentials_and_prints_identity(tmp_path, monkeypatch):
     result, config = _start(tmp_path, monkeypatch)
 
     assert isinstance(result.exception, _StopBeforeServing), result.output
-    identity = inspect_certificate((tmp_path / "peer" / "peer-cert.pem").read_text())
+    identity = inspect_certificate(
+        (tmp_path / "peer" / "peer-root-cert.pem").read_text()
+    )
     assert "Created new peer credentials" in result.output
     assert identity.node_id in result.output
     assert identity.fingerprint in result.output

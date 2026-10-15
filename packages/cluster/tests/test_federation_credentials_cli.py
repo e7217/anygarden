@@ -43,23 +43,25 @@ def test_creates_credentials_the_node_loads_at_startup(tmp_path):
     assert result.exit_code == 0, result.output
 
     peer = tmp_path / "peer"
-    cert, key = peer / "peer-cert.pem", peer / "peer-key.pem"
-    identity = inspect_certificate(cert.read_text())
+    # #843: peers pin the node root; the node presents a renewable leaf.
+    root, leaf = peer / "peer-root-cert.pem", peer / "peer-leaf.pem"
+    identity = inspect_certificate(root.read_text())
     UUID(identity.node_id)
     # Prints where it wrote and what the operator shares with peers.
-    assert str(cert) in result.output and str(key) in result.output
+    assert str(root) in result.output and str(leaf) in result.output
     assert identity.node_id in result.output
     assert identity.fingerprint in result.output
     # Round trip: the startup loader composes peer services from them, and
-    # the mTLS context accepts the pair.
+    # the mTLS context accepts the leaf.
     assert _app_composes_peer_service(tmp_path) == identity.node_id
-    tls_context(cert, key, [], server=True)
+    tls_context(leaf, leaf, [root.read_text()], server=True)
 
 
 def test_private_key_and_directory_are_owner_only(tmp_path):
     assert _init("--data-dir", str(tmp_path)).exit_code == 0
     peer = tmp_path / "peer"
-    assert stat.S_IMODE((peer / "peer-key.pem").stat().st_mode) == 0o600
+    for name in ("peer-root-key.pem", "peer-leaf.pem"):
+        assert stat.S_IMODE((peer / name).stat().st_mode) == 0o600
     assert stat.S_IMODE(peer.stat().st_mode) == 0o700
 
 
@@ -86,7 +88,7 @@ def test_refuses_partial_existing_pair_without_force(tmp_path):
 
 def test_force_replaces_pair_but_keeps_node_identity(tmp_path):
     assert _init("--data-dir", str(tmp_path)).exit_code == 0
-    cert = tmp_path / "peer" / "peer-cert.pem"
+    cert = tmp_path / "peer" / "peer-root-cert.pem"
     old = inspect_certificate(cert.read_text())
 
     result = _init("--data-dir", str(tmp_path), "--force")
@@ -94,10 +96,13 @@ def test_force_replaces_pair_but_keeps_node_identity(tmp_path):
     new = inspect_certificate(cert.read_text())
     assert new.node_id == old.node_id
     assert new.fingerprint != old.fingerprint
-    assert stat.S_IMODE((tmp_path / "peer" / "peer-key.pem").stat().st_mode) == 0o600
+    assert (
+        stat.S_IMODE((tmp_path / "peer" / "peer-root-key.pem").stat().st_mode) == 0o600
+    )
     assert sorted(p.name for p in (tmp_path / "peer").iterdir()) == [
-        "peer-cert.pem",
-        "peer-key.pem",
+        "peer-leaf.pem",
+        "peer-root-cert.pem",
+        "peer-root-key.pem",
     ]
     assert _app_composes_peer_service(tmp_path) == old.node_id
 
@@ -108,14 +113,14 @@ def test_reuses_local_node_identity_when_present(tmp_path):
         json.dumps({"node_id": node_id, "machine_id": str(uuid4())})
     )
     assert _init("--data-dir", str(tmp_path)).exit_code == 0
-    cert = (tmp_path / "peer" / "peer-cert.pem").read_text()
+    cert = (tmp_path / "peer" / "peer-root-cert.pem").read_text()
     assert inspect_certificate(cert).node_id == node_id
 
 
 def test_explicit_node_id_and_invalid_node_id(tmp_path):
     node_id = str(uuid4())
     assert _init("--data-dir", str(tmp_path), "--node-id", node_id).exit_code == 0
-    cert = (tmp_path / "peer" / "peer-cert.pem").read_text()
+    cert = (tmp_path / "peer" / "peer-root-cert.pem").read_text()
     assert inspect_certificate(cert).node_id == node_id
 
     bad = _init("--data-dir", str(tmp_path / "other"), "--node-id", "not-a-uuid")

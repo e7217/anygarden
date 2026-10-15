@@ -256,3 +256,137 @@ async def test_peer_service_rejects_a_trusted_roots_leaf_claiming_another_node(
     finally:
         for n in nodes:
             await n.engine.dispose()
+
+
+# --------------------------------------------------------------------------
+# Storage, first run, renewal on start, and init-credentials (#843 step 2).
+
+from anygarden.config import AnygardenSettings  # noqa: E402
+from anygarden.federation.credentials_setup import (  # noqa: E402
+    CredentialSetupError,
+    ensure_peer_credentials,
+    locate_credentials,
+)
+
+
+def _config(**values):
+    config = AnygardenSettings(_env_file=None)
+    for key, value in values.items():
+        setattr(config, key, value)
+    return config
+
+
+@pytest.mark.req("FED-15")
+def test_first_run_creates_a_root_and_a_leaf(tmp_path):
+    identity, created = ensure_peer_credentials(tmp_path, _config())
+    peer = tmp_path / "peer"
+
+    assert created is True and identity.root is True
+    assert sorted(p.name for p in peer.iterdir()) == [
+        "peer-leaf.pem",
+        "peer-root-cert.pem",
+        "peer-root-key.pem",
+    ]
+    files = locate_credentials(peer)
+    assert files.kind == "root"
+    assert files.anchor_path == peer / "peer-root-cert.pem"
+    assert files.cert_path == files.key_path == peer / "peer-leaf.pem"
+    assert pin_matches(anchor(peer), leaf_identity(peer))
+
+
+@pytest.mark.req("FED-15")
+def test_start_renews_a_due_leaf_without_touching_the_root(tmp_path):
+    peer = tmp_path / "peer"
+    create_root(peer, str(uuid4()))
+    issue_leaf(peer, now=datetime.now(UTC) - LEAF_LIFETIME)  # already expired
+    root_before = (peer / "peer-root-cert.pem").read_bytes()
+
+    identity, created = ensure_peer_credentials(tmp_path, _config())
+
+    assert created is False and identity.root is True
+    assert (peer / "peer-root-cert.pem").read_bytes() == root_before
+    assert leaf_needs_renewal(peer) is False
+
+
+def test_legacy_pairs_are_still_located_and_loaded(tmp_path):
+    cert, key = create_credentials(tmp_path / "peer", str(uuid4()))
+    files = locate_credentials(tmp_path / "peer")
+    assert (files.kind, files.anchor_path, files.cert_path, files.key_path) == (
+        "legacy",
+        cert,
+        cert,
+        key,
+    )
+    identity, created = ensure_peer_credentials(tmp_path, _config())
+    assert created is False and identity.root is False
+
+
+def test_partial_root_is_refused(tmp_path):
+    peer = tmp_path / "peer"
+    create_root(peer, str(uuid4()))
+    (peer / "peer-root-key.pem").unlink()
+    with pytest.raises(CredentialSetupError, match="incomplete"):
+        ensure_peer_credentials(tmp_path, _config())
+
+
+def test_nothing_located_in_an_empty_directory(tmp_path):
+    assert locate_credentials(tmp_path / "missing") is None
+
+
+def _init(*args):
+    from click.testing import CliRunner
+
+    from anygarden.cli import dispatch
+
+    return CliRunner().invoke(
+        dispatch, ["federation", "init-credentials", *args], catch_exceptions=False
+    )
+
+
+def test_init_credentials_creates_a_root_layout(tmp_path):
+    result = _init("--data-dir", str(tmp_path))
+    assert result.exit_code == 0, result.output
+    peer = tmp_path / "peer"
+    root = inspect_certificate(anchor(peer))
+    assert root.root and root.fingerprint in result.output
+    assert "valid for 10 years" in result.output
+
+
+@pytest.mark.req("FED-17")
+def test_force_upgrades_a_legacy_pair_keeping_the_node_id(tmp_path):
+    node_id = str(uuid4())
+    cert, key = create_credentials(tmp_path / "peer", node_id)
+    legacy = (cert.read_bytes(), key.read_bytes())
+
+    result = _init("--data-dir", str(tmp_path), "--force")
+
+    assert result.exit_code == 0, result.output
+    peer = tmp_path / "peer"
+    assert inspect_certificate(anchor(peer)).node_id == node_id
+    assert locate_credentials(peer).kind == "root"
+    assert not cert.exists() and not key.exists()
+    assert (
+        (peer / "peer-cert.pem.legacy").read_bytes(),
+        (peer / "peer-key.pem.legacy").read_bytes(),
+    ) == legacy
+    assert "re-pin" in result.output
+
+
+def test_force_replaces_a_root_keeping_the_node_id(tmp_path):
+    assert _init("--data-dir", str(tmp_path)).exit_code == 0
+    peer = tmp_path / "peer"
+    old = inspect_certificate(anchor(peer))
+
+    assert _init("--data-dir", str(tmp_path), "--force").exit_code == 0
+
+    new = inspect_certificate(anchor(peer))
+    assert new.node_id == old.node_id and new.fingerprint != old.fingerprint
+    assert pin_matches(anchor(peer), leaf_identity(peer))
+
+
+def test_init_refuses_to_overwrite_a_root(tmp_path):
+    assert _init("--data-dir", str(tmp_path)).exit_code == 0
+    before = anchor(tmp_path / "peer")
+    result = _init("--data-dir", str(tmp_path))
+    assert result.exit_code != 0 and "--force" in result.output
+    assert anchor(tmp_path / "peer") == before
