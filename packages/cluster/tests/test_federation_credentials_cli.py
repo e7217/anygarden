@@ -124,9 +124,12 @@ def test_explicit_node_id_and_invalid_node_id(tmp_path):
 
 
 def test_peer_port_error_names_the_command(tmp_path):
+    # Only an explicitly configured (and missing) directory is refused; the
+    # default directory gets a first-run pair (#839).
     result = CliRunner().invoke(
         dispatch,
         ["start", "--data-dir", str(tmp_path), "--peer-port", "8451"],
+        env={"ANYGARDEN_PEER_CREDENTIALS_DIR": str(tmp_path / "unmounted")},
         catch_exceptions=False,
     )
     assert result.exit_code != 0

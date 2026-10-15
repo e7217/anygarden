@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -17,26 +18,38 @@ class DialTarget:
     ips: tuple[str, ...]
 
 
+def split_peer_url(url: str) -> tuple[str, int]:
+    """Host and port of a bare ``https://host[:port]`` peer URL, else ValueError."""
+    u = urlsplit(url)
+    if (
+        u.scheme != "https"
+        or not u.hostname
+        or u.username
+        or u.password
+        or u.path not in ("", "/")
+        or u.query
+        or u.fragment
+        or "%" in u.netloc
+        or any(ord(c) < 33 or ord(c) > 126 for c in url)
+    ):
+        raise ValueError
+    host, port = u.hostname, u.port if u.port is not None else 443
+    if not 1 <= port <= 65535 or "\\" in host:
+        raise ValueError
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        # Strict DNS label form, although DNS is never used for dialing.
+        if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?", host):
+            raise
+    return host, port
+
+
 def validate_endpoint(
     endpoint: Endpoint, *, allow_loopback: bool = False
 ) -> DialTarget:
     try:
-        u = urlsplit(endpoint.url)
-        if (
-            u.scheme != "https"
-            or not u.hostname
-            or u.username
-            or u.password
-            or u.path not in ("", "/")
-            or u.query
-            or u.fragment
-            or "%" in u.netloc
-            or any(ord(c) < 33 or ord(c) > 126 for c in endpoint.url)
-        ):
-            raise ValueError
-        host, port = u.hostname, u.port if u.port is not None else 443
-        if not 1 <= port <= 65535 or "\\" in host:
-            raise ValueError
+        host, port = split_peer_url(endpoint.url)
         addresses = [ipaddress.ip_address(ip) for ip in endpoint.approved_ips]
         for ip in addresses:
             if (
@@ -56,13 +69,7 @@ def validate_endpoint(
         try:
             literal = ipaddress.ip_address(host)
         except ValueError:
-            # Strict DNS label form, although DNS is never used for dialing.
-            import re
-
-            if not re.fullmatch(
-                r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?", host
-            ):
-                raise ValueError
+            pass
         else:
             if literal not in addresses:
                 raise ValueError

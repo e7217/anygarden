@@ -715,7 +715,12 @@ async def test_integrated_agent_process_inherits_only_explicit_environment(
 
 @pytest.mark.req("FED-06")
 def test_peer_port_without_credentials_is_refused_before_startup(tmp_path):
-    """--peer-port is explicit opt-in and fails closed without credentials."""
+    """--peer-port fails closed when the configured credential dir is empty.
+
+    The default ``<data-dir>/peer`` gets a first-run pair instead (#839,
+    ``test_federation_credentials_setup``); an explicit directory that is
+    missing is most likely an unmounted volume and must not get a new identity.
+    """
     from click.testing import CliRunner
 
     from anygarden.cli import dispatch
@@ -723,10 +728,12 @@ def test_peer_port_without_credentials_is_refused_before_startup(tmp_path):
     result = CliRunner().invoke(
         dispatch,
         ["start", "--data-dir", str(tmp_path), "--peer-port", "8451"],
+        env={"ANYGARDEN_PEER_CREDENTIALS_DIR": str(tmp_path / "unmounted")},
         catch_exceptions=False,
     )
     assert result.exit_code != 0
-    assert "requires peer credentials" in result.output
+    assert "No peer credentials" in result.output
+    assert not (tmp_path / "unmounted").exists()
 
 
 def test_real_cli_peer_listener_lifecycle_with_stop(tmp_path):
@@ -863,7 +870,7 @@ def test_invalid_credentials_with_peer_port_fail_startup(tmp_path):
         exited = process.wait(timeout=30)
     assert exited != 0
     log = log_path.read_text()
-    assert "--peer-port was requested but peer services did not compose" in log
+    assert "are unusable" in log
     with pytest.raises(OSError):
         # Health endpoint must not be serving either.
         urllib.request.urlopen(f"http://127.0.0.1:{api_port}/healthz", timeout=0.5)

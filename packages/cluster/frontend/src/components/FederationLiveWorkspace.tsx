@@ -13,6 +13,12 @@ import {
   UserRound,
 } from 'lucide-react'
 
+import {
+  ConnectionError,
+  InviteAcceptor,
+  InviteComposer,
+  NodeConnectionCard,
+} from '@/components/FederationConnectionSetup'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -80,6 +86,13 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
 
   const pendingSubmissions = submissions.filter((item) => item.state === 'unconfirmed')
 
+  // #839 — show a setup error inside the card whose action produced it.
+  const [errorOwner, setErrorOwner] = useState<string | null>(null)
+  const setupErrorProps = (owner: string) => ({
+    error: errorOwner === owner ? actionError : null,
+    onAction: () => setErrorOwner(owner),
+  })
+
   const statusLine = useMemo(() => {
     if (nodesCapability === 'disabled') {
       return t('federation.statusDisabled')
@@ -143,7 +156,8 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
 
         <TabsContent value="nodes" className="mt-4">
           <div className="grid gap-4 lg:grid-cols-2">
-            <Card>
+            {/* min-w-0: long node IDs must truncate, not widen the grid track. */}
+            <Card className="min-w-0">
               <CardHeader>
                 <CardTitle>{t('federation.trustedPeers')}</CardTitle>
                 <CardDescription>
@@ -169,7 +183,10 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                       size="sm"
                       variant="destructive"
                       disabled={busy}
-                      onClick={() => void federation.revokePeer(peer.node_id)}
+                      onClick={() => {
+                        setErrorOwner(null)
+                        void federation.revokePeer(peer.node_id)
+                      }}
                     >
                       {t('federation.revoke')}
                     </Button>
@@ -178,7 +195,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="min-w-0">
               <CardHeader>
                 <CardTitle>{t('federation.invitations')}</CardTitle>
                 <CardDescription>
@@ -206,7 +223,10 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                         size="sm"
                         variant="outline"
                         disabled={busy}
-                        onClick={() => void federation.revokeInvite(invite.id)}
+                        onClick={() => {
+                          setErrorOwner(null)
+                          void federation.revokeInvite(invite.id)
+                        }}
                       >
                         {t('federation.revoke')}
                       </Button>
@@ -217,8 +237,14 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
             </Card>
           </div>
 
-          <InviteComposer federation={federation} />
-          <InviteAcceptor federation={federation} />
+          {errorOwner === null && (
+            <div className="mt-4">
+              <ConnectionError error={actionError} />
+            </div>
+          )}
+          <NodeConnectionCard federation={federation} {...setupErrorProps('card')} />
+          <InviteComposer federation={federation} {...setupErrorProps('invite')} />
+          <InviteAcceptor federation={federation} {...setupErrorProps('accept')} />
         </TabsContent>
 
         <TabsContent value="channel" className="mt-4">
@@ -434,171 +460,6 @@ function DelegationList({ delegations }: { delegations: DelegationStatusView[] }
             )}
           </div>
         ))}
-      </CardContent>
-    </Card>
-  )
-}
-
-function InviteComposer({ federation }: { federation: Federation }) {
-  const { t } = useLocale()
-  const [bundle, setBundle] = useState<string | null>(null)
-  const [form, setForm] = useState({
-    intendedNode: '',
-    certificatePem: '',
-    endpointUrl: '',
-    endpointIps: '',
-    channelId: '',
-    capabilities: 'channel.read,message.send,task.request',
-  })
-  const disabled =
-    federation.nodesCapability !== 'ready' ||
-    !form.intendedNode ||
-    !form.certificatePem ||
-    !form.endpointUrl ||
-    !form.endpointIps ||
-    !form.channelId
-
-  async function submit() {
-    const created = await federation.createInvite({
-      intended_node_id: form.intendedNode.trim(),
-      certificate_pem: form.certificatePem.trim(),
-      endpoint: {
-        url: form.endpointUrl.trim(),
-        approved_ips: form.endpointIps
-          .split(',')
-          .map((value) => value.trim())
-          .filter(Boolean),
-      },
-      scopes: [
-        {
-          channel_id: form.channelId.trim(),
-          actors: [
-            {
-              node_id: form.intendedNode.trim(),
-              kind: 'human',
-              principal_id: '00000000-0000-0000-0000-000000000000',
-            },
-          ],
-          capabilities: form.capabilities
-            .split(',')
-            .map((value) => value.trim())
-            .filter(Boolean),
-          role: 'member',
-        },
-      ],
-    })
-    if (created) {
-      setBundle(JSON.stringify(created, null, 2))
-      setForm((current) => ({ ...current, certificatePem: '' }))
-    }
-  }
-
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>{t('federation.createInvitation')}</CardTitle>
-        <CardDescription>
-          {t('federation.createInvitationDescription')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t('federation.intendedNodeId')}>
-            <Input value={form.intendedNode} onChange={(e) => setForm({ ...form, intendedNode: e.target.value })} placeholder="uuid" />
-          </Field>
-          <Field label={t('federation.channelId')}>
-            <Input value={form.channelId} onChange={(e) => setForm({ ...form, channelId: e.target.value })} placeholder="uuid" />
-          </Field>
-          <Field label={t('federation.peerEndpointUrl')}>
-            <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} placeholder="https://peer.example:port" />
-          </Field>
-          <Field label={t('federation.approvedIps')}>
-            <Input value={form.endpointIps} onChange={(e) => setForm({ ...form, endpointIps: e.target.value })} placeholder="203.0.113.10" />
-          </Field>
-        </div>
-        <Field label={t('federation.intendedCertificate')}>
-          <textarea
-            className="min-h-20 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-sm text-[var(--color-foreground)]"
-            value={form.certificatePem}
-            onChange={(e) => setForm({ ...form, certificatePem: e.target.value })}
-            placeholder="-----BEGIN CERTIFICATE-----"
-          />
-        </Field>
-        <Field label={t('federation.capabilities')}>
-          <Input value={form.capabilities} onChange={(e) => setForm({ ...form, capabilities: e.target.value })} />
-        </Field>
-        <div className="flex justify-end">
-          <Button disabled={disabled || federation.busy} onClick={() => void submit()}>
-            {t('federation.createInvitation')}
-          </Button>
-        </div>
-        {bundle && (
-          <div className="space-y-2">
-            <p className="text-sm font-semibold">{t('federation.bundleCopyNow')}</p>
-            <pre className="max-h-64 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 font-mono text-xs">{bundle}</pre>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function InviteAcceptor({ federation }: { federation: Federation }) {
-  const { t } = useLocale()
-  const [form, setForm] = useState({ bundleJson: '', endpointUrl: '', endpointIps: '' })
-  const [accepted, setAccepted] = useState(false)
-  const disabled = !form.bundleJson || !form.endpointUrl || !form.endpointIps
-
-  async function submit() {
-    try {
-      const bundle = JSON.parse(form.bundleJson)
-      const result = await federation.acceptInvite({
-        bundle,
-        issuer_endpoint: {
-          url: form.endpointUrl.trim(),
-          approved_ips: form.endpointIps
-            .split(',')
-            .map((value) => value.trim())
-            .filter(Boolean),
-        },
-      })
-      if (result !== null) setAccepted(true)
-    } catch {
-      setAccepted(false)
-    }
-  }
-
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>{t('federation.acceptInvitation')}</CardTitle>
-        <CardDescription>
-          {t('federation.acceptInvitationDescription')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <Field label={t('federation.bundleJson')}>
-          <textarea
-            className="min-h-24 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-sm text-[var(--color-foreground)]"
-            value={form.bundleJson}
-            onChange={(e) => setForm({ ...form, bundleJson: e.target.value })}
-            placeholder='{"protocol_version":1,"invite_id":…}'
-          />
-        </Field>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t('federation.issuerEndpointUrl')}>
-            <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} />
-          </Field>
-          <Field label={t('federation.approvedIps')}>
-            <Input value={form.endpointIps} onChange={(e) => setForm({ ...form, endpointIps: e.target.value })} />
-          </Field>
-        </div>
-        <div className="flex items-center justify-between">
-          {accepted && <p className="flex items-center gap-1 text-sm text-[var(--color-success)]"><Check className="size-4" aria-hidden="true" /> {t('federation.acceptedGrants')}</p>}
-          <Button className="ml-auto" variant="outline" disabled={disabled || federation.busy} onClick={() => void submit()}>
-            {t('federation.acceptInvitation')}
-          </Button>
-        </div>
       </CardContent>
     </Card>
   )

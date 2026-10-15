@@ -6,8 +6,11 @@
 #
 # Prerequisites (see docs/runbook/federation-two-node.md):
 #   * wheel installed with both extras: pip install 'anygarden[server,agent]'
-#   * peer credentials created explicitly under <data>/peer/ before enabling
-#     --peer-port (startup never generates or rotates them; PR609 fail-closed)
+#   * peer credentials: the first start creates them under <data>/peer/ and
+#     logs the node ID and fingerprint (#839); a partial or unusable pair is
+#     refused, and an existing pair is never overwritten or rotated
+#   * the address peers dial: ANYGARDEN_PEER_PUBLIC_URL=https://host:8451 in
+#     <data>/config.env (prefills connection cards and invite codes)
 #
 # Exit-code contract (PR605): a clean SIGINT/SIGTERM shutdown exits 0, so
 # Restart=on-failure does NOT resurrect a deliberately stopped node. A failed

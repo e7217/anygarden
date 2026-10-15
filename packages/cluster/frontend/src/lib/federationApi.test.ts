@@ -8,8 +8,12 @@ import {
   FederationApiError,
   acceptInvite,
   changeParticipant,
+  createConnectionCard,
   createInvite,
+  getNodeIdentity,
   getSnapshot,
+  inspectConnectionCard,
+  inspectInviteCode,
   getSubmission,
   listInvites,
   listPeers,
@@ -102,8 +106,30 @@ describe('federationApi', () => {
     expect(body).toMatchObject({
       intended_node_id: 'n2',
       endpoint: { url: 'https://peer', approved_ips: ['203.0.113.9'] },
-      protocol_version: 1,
     })
+    // InviteCreate forbids unknown fields; protocol_version made it a 400.
+    expect(body).not.toHaveProperty('protocol_version')
+  })
+
+  it('[FED-11] reads node identity and exchanges connection cards and invite codes', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse({}))
+    await getNodeIdentity()
+    expect(lastCall().url).toBe('/api/v1/node/identity')
+
+    await createConnectionCard()
+    expect(lastCall().url).toBe('/api/v1/node/connection-card')
+    expect(JSON.parse(String(lastCall().init?.body))).toEqual({})
+    await createConnectionCard('https://192.0.2.10:8451')
+    expect(JSON.parse(String(lastCall().init?.body))).toEqual({ url: 'https://192.0.2.10:8451' })
+
+    await inspectConnectionCard('agpeer1.abc')
+    expect(lastCall().url).toBe('/api/v1/node/connection-card/inspect')
+    expect(JSON.parse(String(lastCall().init?.body))).toEqual({ card: 'agpeer1.abc' })
+
+    await inspectInviteCode('aginvite1.abc')
+    expect(lastCall().url).toBe('/api/v1/node/invite-code/inspect')
+    expect(JSON.parse(String(lastCall().init?.body))).toEqual({ code: 'aginvite1.abc' })
+    expect(fetchMock).toHaveBeenCalledTimes(5)
   })
 
   it('accepts an invitation bundle at the invite-scoped path', async () => {

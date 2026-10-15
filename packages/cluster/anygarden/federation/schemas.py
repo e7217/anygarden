@@ -55,6 +55,21 @@ class InviteCreate(ClosedModel):
     scopes: list[Scope] = Field(min_length=1, max_length=32)
     expires_in_seconds: int = Field(default=600, ge=30, le=3600)
     grant_expires_in_seconds: int = Field(default=86400, ge=30, le=2592000)
+    # #839 local admin API only: the URL wrapped into the returned invite
+    # code (defaults to the node's peer_public_url). Never sent to the peer.
+    issuer_url: str | None = Field(default=None, max_length=2048)
+
+
+class ConnectionCardCreate(ClosedModel):
+    url: str | None = Field(default=None, max_length=2048)
+
+
+class ConnectionCardInspect(ClosedModel):
+    card: str = Field(max_length=32768)
+
+
+class InviteCodeInspect(ClosedModel):
+    code: str = Field(max_length=32768)
 
 
 class InviteBundle(ClosedModel):

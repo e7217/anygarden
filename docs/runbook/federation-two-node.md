@@ -54,37 +54,57 @@ claim a new deployment verification on separate physical hosts.
    chown -R anygarden:anygarden /var/lib/anygarden/alpha
    ```
 
-2. Create credentials explicitly **as the service user** — startup never
-   generates or rotates them:
+2. Start the node as the service user (manual foreground, or via the systemd
+   template in `deploy/systemd/anygarden-node@.service`). On the first start
+   with `--peer-port` the node creates its peer credentials in
+   `<data-dir>/peer` (key mode 0600) and prints its node ID and SHA-256
+   fingerprint:
 
    ```sh
-   sudo -u anygarden anygarden federation init-credentials --data-dir /var/lib/anygarden/alpha
+   sudo -u anygarden anygarden start --data-dir /var/lib/anygarden/alpha \
+     --port 8000 --peer-port 8451 --peer-public-url https://alpha.example:8451
    ```
 
-   It writes `peer/peer-cert.pem` and `peer/peer-key.pem` (key mode 0600),
-   prints the node ID and SHA-256 fingerprint to share with peers, and refuses
-   to overwrite an existing pair unless `--force` is given (which keeps the node
-   ID but changes the fingerprint, so peers must re-pin).
+   `--peer-public-url` is the address the *other* node dials (behind a TCP
+   proxy: the proxy's address). It only prefills connection cards and invite
+   codes. Running the node as the service user matters: credentials created
+   by root would be unreadable to it.
 
-   Missing or unusable pairs fail closed: `--peer-port` refuses the start, and
-   an unusable pair aborts startup (PR609).
-
-3. Start the node (manual foreground, or via the systemd template in
-   `deploy/systemd/anygarden-node@.service`):
-
-   ```sh
-   anygarden start --data-dir /var/lib/anygarden/alpha --port 8000 --peer-port 8451
-   ```
+   The certificate is valid for 90 days. The node never overwrites or rotates
+   an existing pair. Startup is refused for a partial or unusable pair, and
+   for an `ANYGARDEN_PEER_CREDENTIALS_DIR` that holds no pair (an unmounted
+   volume must not produce a new identity). To create the pair ahead of time,
+   or to rotate it (peers must then re-pin), use
+   `anygarden federation init-credentials --data-dir <dir> [--force]`.
 
    The first user signup on each node is that node's administrator. Repeat for
-   the second node with its own data directory and node UUID.
+   the second node with its own data directory.
 
 ## Invite → shared channel → delegation
 
-1. On the channel authority node, the admin creates an invite
-   (`POST /api/v1/node/invites`, local JWT admin) and delivers the token to the
-   peer out of band; the peer redeems it (`finish_accept`). Trust is
-   certificate-pin based; credentials never appear in invitations.
+1. Connect the nodes from **Admin → Federation → Connection** (#839). Only two
+   strings travel between the admins, and the fingerprint is compared over a
+   separate channel (call, chat):
+   1. The invited node's admin opens **This node's connection card**, checks
+      the address and copies the `agpeer1.` card to the inviting admin. The
+      card holds the node ID, certificate and address; no secrets.
+   2. The inviting admin pastes it into **Create invitation** and selects
+      **Review**. The server shows the node ID, the fingerprint and the IPs it
+      resolved for the address. Confirm or edit the IPs, tick **Allow private
+      network addresses** for 10.x/172.16–31.x/192.168.x peers, compare the
+      fingerprint with the other admin, then pick the channel and
+      capabilities. The result is an `aginvite1.` invite code.
+   3. The invite code contains the one-time token, expires (default 10
+      minutes) and is shown once. Send it privately. The invited admin pastes
+      it into **Accept invitation**, reviews the issuer the same way and
+      accepts.
+
+   Dialing is limited to the IPs each admin approved; the suggested IPs and
+   the URL inside a card or code are only prefill. The equivalent APIs are
+   `POST /api/v1/node/connection-card`, `.../connection-card/inspect`,
+   `POST /api/v1/node/invites` (returns `invite_code`) and
+   `.../invite-code/inspect`, followed by `.../invites/{id}/accept`. Trust is
+   certificate-pin based.
 2. Bind the shared channel on the authority (`POST /api/v1/shared-channels/bindings`)
    to an empty local room, approve publication for the participants, and add
    remote principals (roster).
@@ -102,7 +122,49 @@ claim a new deployment verification on separate physical hosts.
    cursor after reconnect; lost ACKs and repeated deliveries are idempotent
    (receipt-keyed). Late results after cancellation are rejected.
 
+## Behind a reverse proxy or load balancer
+
+The peer listener authenticates the *client certificate* inside TLS, so a
+proxy in front of it must pass TCP through untouched. A proxy that terminates
+TLS (nginx `http`/`ssl`, an HTTPS load balancer) drops the client certificate
+and every peer request fails with `MTLS_REQUIRED`.
+
+nginx (`stream` module, not `http`):
+
+```nginx
+stream {
+    server {
+        listen 8451;
+        proxy_pass 10.0.0.12:8451;   # the node's --peer-port
+    }
+}
+```
+
+HAProxy:
+
+```haproxy
+frontend federation
+    mode tcp
+    bind :8451
+    default_backend anygarden_peer
+
+backend anygarden_peer
+    mode tcp
+    server alpha 10.0.0.12:8451
+```
+
+- Advertise the proxy in `--peer-public-url`; the other admin approves the
+  proxy's IP, not the node's.
+- Certificate pins are unaffected: the node's own certificate still reaches
+  the peer end to end.
+
 ## Failure playbook
+
+- `ENDPOINT_DENIED` while creating or accepting an invitation: the approved IPs
+  do not cover the URL host, or they are private and **Allow private network
+  addresses** (`allow_private`) is unset.
+- `CODE_INVALID` / `IDENTITY_MISMATCH` while reviewing a card or code: it was
+  truncated in transit, belongs to this node, or names another node.
 
 - `PEER_UNAVAILABLE` on commands: the peer is down or the segment is blocked —
   verify the listener port reachability, then retry; submissions queue

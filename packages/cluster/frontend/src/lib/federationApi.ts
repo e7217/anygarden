@@ -125,6 +125,47 @@ export interface InviteBundleView {
   grant_expires_at: string
 }
 
+/** ``POST /api/v1/node/invites`` result: the bundle plus its pasteable code. */
+export interface InviteCreatedView extends InviteBundleView {
+  /** ``aginvite1.`` code (bundle + issuer URL); null without an issuer URL. */
+  invite_code: string | null
+}
+
+export interface NodeIdentityView {
+  node_id: string
+  fingerprint: string
+  certificate_expires_at: string
+  public_url: string | null
+}
+
+export interface ConnectionCardView {
+  card: string
+  node_id: string
+  fingerprint: string
+  url: string
+}
+
+/** Dial prefill from the server. Never an approval by itself. */
+export interface DialPreview {
+  suggested_ips: string[]
+  requires_private: boolean
+}
+
+export interface ConnectionCardPreview extends DialPreview {
+  node_id: string
+  fingerprint: string
+  certificate_pem: string
+  certificate_expires_at: string
+  url: string
+}
+
+export interface InviteCodePreview extends DialPreview {
+  bundle: InviteBundleView
+  issuer_node_id: string
+  issuer_fingerprint: string
+  issuer_url: string
+}
+
 export interface InviteView {
   id: string
   intended_node_id: string
@@ -298,11 +339,27 @@ export async function createInvite(input: {
   scopes: Scope[]
   expires_in_seconds?: number
   grant_expires_in_seconds?: number
-}): Promise<InviteBundleView> {
-  return post('/api/v1/node/invites', {
-    protocol_version: 1,
-    ...input,
-  }) as Promise<InviteBundleView>
+  /** Wrapped into the returned invite code; defaults to the node's public URL. */
+  issuer_url?: string
+}): Promise<InviteCreatedView> {
+  // InviteCreate is a closed local admin schema: no protocol_version (#839).
+  return post('/api/v1/node/invites', input) as Promise<InviteCreatedView>
+}
+
+export async function getNodeIdentity(): Promise<NodeIdentityView> {
+  return request<NodeIdentityView>('/api/v1/node/identity')
+}
+
+export async function createConnectionCard(url?: string): Promise<ConnectionCardView> {
+  return post('/api/v1/node/connection-card', url ? { url } : {}) as Promise<ConnectionCardView>
+}
+
+export async function inspectConnectionCard(card: string): Promise<ConnectionCardPreview> {
+  return post('/api/v1/node/connection-card/inspect', { card }) as Promise<ConnectionCardPreview>
+}
+
+export async function inspectInviteCode(code: string): Promise<InviteCodePreview> {
+  return post('/api/v1/node/invite-code/inspect', { code }) as Promise<InviteCodePreview>
 }
 
 export async function acceptInvite(input: {

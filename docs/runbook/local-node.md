@@ -141,14 +141,20 @@ Without the option no listener runs — the default boot is unchanged.
 
 Requirements and behavior (PR609/PR615 fail-closed contract):
 
-- Peer credentials must already exist under `<data-dir>/peer/` as
-  `peer-cert.pem` + `peer-key.pem`. Startup never generates or rotates them;
-  create them explicitly with `anygarden federation init-credentials --data-dir <data-dir>`
-  (see the two-node runbook). Requesting `--peer-port`
-  without both files refuses the start before any boot work.
-- Unusable credential pairs (corrupt, expired, mismatched) abort startup with
-  `--peer-port was requested but peer services did not compose` instead of
-  running silently disabled.
+- Peer credentials live under `<data-dir>/peer/` as `peer-cert.pem` +
+  `peer-key.pem`. On the first `--peer-port` start, when that default
+  directory holds neither file, the node creates the pair (reusing the node ID
+  from `node-identity.json` when present) and prints the node ID and SHA-256
+  fingerprint; later starts only load and print them (#839). It never
+  overwrites or rotates a pair — rotation stays explicit with
+  `anygarden federation init-credentials --force`.
+- Startup is refused before any boot work when the pair is partial, when it
+  is unusable (corrupt, expired, mismatched), or when
+  `ANYGARDEN_PEER_CREDENTIALS_DIR` is set but holds no pair (most likely an
+  unmounted volume; a fresh identity there would silently break peers).
+  `anygarden federation init-credentials` still creates a pair ahead of time.
+- `--peer-public-url https://host:port` (or `ANYGARDEN_PEER_PUBLIC_URL`) is the
+  address peers dial. It only prefills connection cards and invite codes.
 - The listener starts only after the app lifespan composed the peer/channel
   services, and stops before the local execution backend closes — both
   `anygarden stop` and SIGINT/SIGTERM close the port and exit 0 after
