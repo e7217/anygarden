@@ -430,12 +430,15 @@ async def accessible_room_ids(
 
     #593 — shared-channel rooms stay hidden from the global-admin bypass and
     from guests (admin visibility is served by the shared-channel bindings
-    and snapshot APIs). For user/agent identities, callers that pass
-    ``include_shared=True`` together with a composed ``channel_service``
-    (metadata listings only — rooms collection and sub-rooms) list a bound
-    shared room while the shared visibility predicate passes: active roster
-    membership on the authority side, current unexpired grant actors on the
-    mirror side, re-evaluated per request in this transaction. Content
+    and snapshot APIs). Callers that pass ``include_shared=True`` together
+    with a composed ``channel_service`` (metadata listings only — rooms
+    collection and sub-rooms) list a bound shared room while the shared
+    visibility predicate passes: active roster membership on the authority
+    side, current unexpired grant actors on the mirror side, re-evaluated per
+    request in this transaction. User/agent identities additionally need a
+    Participant row; a global admin (#841) needs only the predicate, the
+    same rule room detail applies — the bypass alone never re-includes a
+    shared room. Content
     surfaces (saved messages, search) never pass ``include_shared`` —
     message/thread content remains exclusive to the shared-channel snapshot
     API (architecture criterion B-3). A ``None`` channel_service (sharing
@@ -467,7 +470,24 @@ async def accessible_room_ids(
                     "visible_room_count": len(room_ids),
                 },
             )
-        return await _without_shared(db, room_ids)
+        non_shared = await _without_shared(db, room_ids)
+        if not include_shared or channel_service is None:
+            return non_shared
+        from anygarden.shared_channels.visibility import visible_shared_room_ids
+
+        shared_bound = room_ids - non_shared
+        if not shared_bound:
+            return non_shared
+        # #841 — the bypass itself never re-includes shared rooms; an admin
+        # sees one only when the shared visibility predicate passes on its
+        # own (active roster / current grant actor), matching room detail.
+        visible = await visible_shared_room_ids(
+            db,
+            identity=identity,
+            room_ids=shared_bound,
+            channel_service=channel_service,
+        )
+        return non_shared | visible
 
     if identity.kind == "guest":
         if not isinstance(identity.claims, GuestClaims):
