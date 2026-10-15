@@ -2160,9 +2160,40 @@ class TestSelfUpdate:
         # Failure ⇒ daemon stays up.
         assert daemon._exit_requested is False
 
+    @pytest.mark.req("NODE-12")
+    async def test_node_managed_link_refuses_remote_update(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """#848 — the remote server must not reinstall the node's package."""
+        daemon.allow_self_update = False
+        sent = _capture_ws(daemon)
+        with patch("anygarden.machine.daemon.run_update") as run_update:
+            await daemon._handle_self_update(SelfUpdateFrame())
+        run_update.assert_not_called()
+        assert [f["status"] for f in sent] == ["failed"]
+        assert "node" in sent[0]["error"]
+        assert daemon._exit_requested is False
+
     async def test_dispatch_routes_self_update(self, daemon: MachineDaemon) -> None:
         _capture_ws(daemon)
         ok = UpdateResult(ok=True, from_version="0.12.0", to_version=None, error=None)
         with patch("anygarden.machine.daemon.run_update", return_value=ok):
             await daemon._handle({"type": "self_update"})
         assert daemon._exit_requested is True
+
+
+class TestConnectionState:
+    """Read-only status a node shows for the links it runs (#848)."""
+
+    def test_auth_rejection_is_told_apart_from_a_network_error(
+        self, daemon: MachineDaemon
+    ) -> None:
+        assert daemon.connection_state == "connecting"
+        rejected = type("Rejected", (Exception,), {})("server rejected WebSocket connection: HTTP 403")
+        rejected.response = type("Response", (), {"status_code": 403})()
+        daemon._record_disconnect(rejected)
+        assert daemon.connection_state == "auth_failed"
+        assert "403" in daemon.last_error
+        daemon._record_disconnect(ConnectionRefusedError(111, "Connection refused"))
+        assert daemon.connection_state == "disconnected"
+        assert "refused" in daemon.last_error

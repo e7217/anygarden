@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from anygarden.machine import cli, config, workspace_registry
+from anygarden.machine.agent_root_lock import AgentRootLock
 from click.testing import CliRunner
 
 TOKEN = "mch_" + "a" * 43
@@ -16,6 +17,9 @@ TOKEN = "mch_" + "a" * 43
 @pytest.fixture()
 def saved_files(tmp_path, monkeypatch):
     folder = tmp_path / "machine-settings"
+    # The default agents root (and its daemon lock) lives here too, so a
+    # real node running on the developer's machine never collides.
+    monkeypatch.setattr(config, "ANYGARDEN_DIR", folder)
     monkeypatch.setattr(config, "CONFIG_PATH", folder / "machine.toml")
     monkeypatch.setattr(config, "TOKEN_PATH", folder / "machine.token")
     return folder
@@ -230,3 +234,106 @@ def test_connect_name_round_trips_as_valid_toml(saved_files, name):
     )
     assert result.exit_code == 0, result.output
     assert config.MachineConfig.load().name == name
+
+
+# ── #848: a second daemon next to an integrated node ─────────────────
+
+
+def _capture_daemon(monkeypatch):
+    captures = []
+
+    def daemon(**kwargs):
+        captures.append(kwargs)
+        return type("Daemon", (), {"run": AsyncMock()})()
+
+    monkeypatch.setattr(cli, "MachineDaemon", daemon)
+    return captures
+
+
+def test_data_dir_keeps_connection_and_agent_state_apart(saved_files, tmp_path, monkeypatch):
+    data_dir = tmp_path / "remote-machines" / "m1"
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main,
+        [
+            "connect",
+            "--data-dir",
+            str(data_dir),
+            "--server",
+            "http://garden.test",
+            "--machine-id",
+            "m1",
+        ],
+        input=TOKEN + "\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert f"run --data-dir {data_dir}" in result.output
+    assert not config.CONFIG_PATH.exists()
+    assert not config.TOKEN_PATH.exists()
+    assert config.MachineConfig.load(data_dir / "machine.toml").machine_id == "m1"
+
+    captures = _capture_daemon(monkeypatch)
+    result = runner.invoke(cli.main, ["run", "--data-dir", str(data_dir)])
+    assert result.exit_code == 0, result.output
+    kwargs = captures[0]
+    assert kwargs["machine_id"] == "m1"
+    assert kwargs["machine_token"] == TOKEN
+    assert kwargs["agent_dirs_root"] == data_dir / "agents"
+    assert kwargs["token_path"] == data_dir / "machine.token"
+    assert kwargs["workspace_registry_path"] == data_dir / "workspaces.json"
+    assert kwargs["workspace_signing_key_path"] == data_dir / "workspace-signing.key"
+
+
+def test_data_dir_can_come_from_the_environment(saved_files, tmp_path, monkeypatch):
+    data_dir = tmp_path / "env-dir"
+    monkeypatch.setenv(config.DATA_DIR_ENV, str(data_dir))
+    result = CliRunner().invoke(
+        cli.main,
+        ["connect", "--server", "http://garden.test", "--machine-id", "m2"],
+        input=TOKEN + "\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert (data_dir / "machine.toml").exists()
+
+
+@pytest.mark.req("NODE-11")
+def test_run_refuses_an_agent_directory_another_daemon_owns(saved_files, monkeypatch):
+    config.save_connection(
+        config.MachineConfig(machine_id="m1", server_url="ws://h/ws/machines/m1"), TOKEN
+    )
+    held = AgentRootLock(config.ANYGARDEN_DIR / "agents")
+    held.acquire()
+    captures = _capture_daemon(monkeypatch)
+    try:
+        result = CliRunner().invoke(cli.main, ["run"])
+    finally:
+        held.release()
+    assert result.exit_code == 1
+    assert "--data-dir" in result.output
+    assert captures == []
+
+
+def test_run_releases_the_lock_when_the_daemon_stops(saved_files, monkeypatch):
+    config.save_connection(
+        config.MachineConfig(machine_id="m1", server_url="ws://h/ws/machines/m1"), TOKEN
+    )
+    _capture_daemon(monkeypatch)
+    assert CliRunner().invoke(cli.main, ["run"]).exit_code == 0
+    again = AgentRootLock(config.ANYGARDEN_DIR / "agents")
+    again.acquire()
+    again.release()
+
+
+def test_workspace_rejects_both_directory_options(tmp_path):
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "workspace",
+            "--node-data-dir",
+            str(tmp_path),
+            "--data-dir",
+            str(tmp_path / "d"),
+            "list",
+        ],
+    )
+    assert result.exit_code != 0

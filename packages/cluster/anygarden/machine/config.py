@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import Field
@@ -15,6 +16,49 @@ from anygarden.machine.safefs import secure_chmod
 ANYGARDEN_DIR = Path.home() / ".anygarden"
 CONFIG_PATH = ANYGARDEN_DIR / "machine.toml"
 TOKEN_PATH = ANYGARDEN_DIR / "machine.token"
+DATA_DIR_ENV = "ANYGARDEN_MACHINE_DATA_DIR"
+
+
+@dataclass(frozen=True)
+class MachinePaths:
+    """Where one machine daemon keeps its state (#848).
+
+    The default layout is the historical one under ``~/.anygarden`` so an
+    upgraded remote machine still re-adopts the agents it already runs. A
+    data directory holds everything one daemon owns, so a second daemon on
+    the same computer (for example next to an integrated node) never shares
+    agent runtime records or the workspace signing key with the first.
+    Engine installs and engine logins stay shared.
+    """
+
+    config: Path
+    token: Path
+    agents_root: Path
+    # ``None`` keeps the daemon's historical default for these two files.
+    workspace_registry: Path | None = None
+    signing_key: Path | None = None
+    data_dir: Path | None = None
+
+    @classmethod
+    def for_data_dir(cls, data_dir: Path | str | None) -> MachinePaths:
+        if data_dir is None or str(data_dir) == "":
+            # Read the module globals at call time: tests redirect them.
+            return cls(
+                config=CONFIG_PATH,
+                token=TOKEN_PATH,
+                agents_root=ANYGARDEN_DIR / "agents",
+            )
+        root = Path(data_dir).expanduser().absolute()
+        if root.is_symlink():
+            raise ValueError(f"Machine data directory must not be a symlink: {root}")
+        return cls(
+            config=root / "machine.toml",
+            token=root / "machine.token",
+            agents_root=root / "agents",
+            workspace_registry=root / "workspaces.json",
+            signing_key=root / "workspace-signing.key",
+            data_dir=root,
+        )
 
 
 class MachineConfig(BaseSettings):
@@ -99,19 +143,23 @@ def _write_private(path: Path, value: str) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def save_connection(config: MachineConfig, token: str) -> None:
+def save_connection(
+    config: MachineConfig, token: str, paths: MachinePaths | None = None
+) -> None:
     """Save a web-issued identity without creating another server machine.
 
     Restore the previous token if saving the companion config fails. Each file
     is replaced atomically and is private from the moment it is created.
     """
-    previous_token = TOKEN_PATH.read_text() if TOKEN_PATH.exists() else None
-    save_token(token)
+    paths = paths or MachinePaths.for_data_dir(None)
+    token_path = paths.token
+    previous_token = token_path.read_text() if token_path.exists() else None
+    save_token(token, path=token_path)
     try:
-        config.save()
+        config.save(paths.config)
     except Exception:
         if previous_token is None:
-            TOKEN_PATH.unlink(missing_ok=True)
+            token_path.unlink(missing_ok=True)
         else:
-            _write_private(TOKEN_PATH, previous_token)
+            _write_private(token_path, previous_token)
         raise

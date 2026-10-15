@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import MachineConnectionDialog, { machineRunCommand, machineServerUrl } from './MachineConnectionDialog'
+import MachineConnectionDialog, { machineLinkCode, machineRunCommand, machineServerUrl } from './MachineConnectionDialog'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -68,5 +68,28 @@ describe('machine server address validation', () => {
     const command = machineRunCommand(server, 'machine-1', false)
     expect(command).toContain("--server 'https://garden.example.com/any'\"'\"'garden'")
     expect(command).not.toContain('--token')
+  })
+})
+
+describe('machine link code (#848)', () => {
+  it('encodes what another node needs and decodes back to the same values', () => {
+    const code = machineLinkCode(new URL('https://garden.example.com/'), 'machine-123', 'mch_secret_token', 'Office 워커')
+    expect(code.startsWith('agmachine1.')).toBe(true)
+    expect(code).not.toMatch(/[+/=]/)
+    const body = code.slice('agmachine1.'.length).replace(/-/g, '+').replace(/_/g, '/')
+    const bytes = Uint8Array.from(atob(body + '='.repeat((4 - (body.length % 4)) % 4)), c => c.charCodeAt(0))
+    expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual({
+      v: 1, server: 'https://garden.example.com', machine_id: 'machine-123', token: 'mch_secret_token', name: 'Office 워커',
+    })
+  })
+
+  it('offers the code only while the one-time token is shown', () => {
+    const { unmount } = render(<MachineConnectionDialog open onOpenChange={vi.fn()} machine={machine} token="mch_secret_token" onCheck={vi.fn()} />)
+    expect(screen.getByText('Connect from another AnyGarden node')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy Connection code' })).toBeInTheDocument()
+    unmount()
+    render(<MachineConnectionDialog open onOpenChange={vi.fn()} machine={machine} onCheck={vi.fn()} />)
+    expect(screen.queryByText('Connect from another AnyGarden node')).not.toBeInTheDocument()
+    expect(screen.getByText(/rotate the token to get a connection code/)).toBeInTheDocument()
   })
 })

@@ -28,6 +28,17 @@ export function machineRunCommand(server: URL, machineId: string, needsToken: bo
   return `anygarden machine connect ${options} &&\nanygarden machine run`
 }
 
+/**
+ * ``agmachine1.`` code another AnyGarden node pastes to serve this server
+ * (#848). Mirrors ``anygarden.machine.link_code``; it carries the token.
+ */
+export function machineLinkCode(server: URL, machineId: string, token: string, name: string): string {
+  const payload = JSON.stringify({ v: 1, server: server.toString().replace(/\/$/, ''), machine_id: machineId, token, name })
+  let binary = ''
+  for (const byte of new TextEncoder().encode(payload)) binary += String.fromCharCode(byte)
+  return 'agmachine1.' + btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -97,6 +108,13 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
               {loopback && <p className="text-xs text-[var(--color-warning)]">{t('admin.machines.localhostHint')}</p>}
               {!serverUrl && <p role="alert" className="text-xs text-[var(--color-destructive)]">{t('admin.machines.invalidServerUrl')}</p>}
             </div>
+            {token && serverUrl ? (
+              <div className="space-y-2">
+                <h4 className="font-medium">{t('admin.machines.linkCodeTitle')}</h4>
+                <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeHint')}</p>
+                {commandBlock(machineLinkCode(serverUrl, machine.id, token, machine.name), t('admin.machines.linkCode'))}
+              </div>
+            ) : !token && <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeNeedsToken')}</p>}
             {token ? (
               <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
                 <div className="flex items-center justify-between gap-2">

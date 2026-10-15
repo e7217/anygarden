@@ -4,28 +4,35 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import hashlib
 import os
-import re
 import subprocess
 import sys
 from collections.abc import Iterable, MutableMapping
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import click
 import httpx
 import structlog
 
 from anygarden.machine import install_manifest
+from anygarden.machine.agent_root_lock import AgentRootInUseError, AgentRootLock
 from anygarden.machine.config import (
+    DATA_DIR_ENV,
     MachineConfig,
+    MachinePaths,
     load_token,
     save_connection,
     save_token,
 )
 from anygarden.machine.daemon import MachineDaemon
 from anygarden.machine.detector import detect_engines
+from anygarden.machine.link_code import (
+    InvalidMachineConnection,
+    check_machine_token,
+    machine_ws_url,
+)
 from anygarden.machine.updater import run_update
 from anygarden.machine.workspace_registry import WorkspaceRegistry
 from anygarden.observability.logging import (
@@ -108,6 +115,33 @@ def ensure_engine_paths(environ: MutableMapping[str, str] | None = None) -> None
             parts.append(as_str)
             existing.add(as_str)
     environ["PATH"] = ":".join(parts)
+
+
+def _data_dir_option(func):
+    """``--data-dir``: keep this daemon's state apart from another daemon (#848)."""
+    return click.option(
+        "--data-dir",
+        "data_dir",
+        type=click.Path(file_okay=False, path_type=Path),
+        default=None,
+        envvar=DATA_DIR_ENV,
+        help=(
+            "Directory for this daemon's connection, token and agent state "
+            "(default: ~/.anygarden). Use a separate one to serve another "
+            "server from a computer that already runs an AnyGarden node."
+        ),
+    )(func)
+
+
+def _paths(data_dir: Path | None) -> MachinePaths:
+    try:
+        return MachinePaths.for_data_dir(data_dir)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--data-dir") from exc
+
+
+def _where(paths: MachinePaths) -> str:
+    return str(paths.data_dir) if paths.data_dir else "~/.anygarden"
 
 
 @click.group()
@@ -211,38 +245,19 @@ def register(server: str, name: str) -> None:
     is_flag=True,
     help="Replace a different connection saved for this OS account",
 )
-def connect(server: str, machine_id: str, name: str, replace: bool) -> None:
+@_data_dir_option
+def connect(
+    server: str, machine_id: str, name: str, replace: bool, data_dir: Path | None
+) -> None:
     """Save an existing web-issued machine connection; prompt privately for its token."""
+    paths = _paths(data_dir)
     try:
-        parsed = urlsplit(server.strip())
-        _ = parsed.port  # Validate malformed ports without connecting.
-    except ValueError as exc:
-        raise click.BadParameter("Invalid server port", param_hint="--server") from exc
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise click.BadParameter(
-            "Use an HTTP(S) base URL without credentials, query, or fragment",
-            param_hint="--server",
-        )
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", machine_id):
-        raise click.BadParameter("Invalid machine ID", param_hint="--machine-id")
-    ws_url = urlunsplit(
-        (
-            "wss" if parsed.scheme == "https" else "ws",
-            parsed.netloc,
-            f"{parsed.path.rstrip('/')}/ws/machines/{machine_id}",
-            "",
-            "",
-        )
-    )
+        ws_url = machine_ws_url(server, machine_id)
+    except InvalidMachineConnection as exc:
+        hint = "--server" if exc.field == "server" else "--machine-id"
+        raise click.BadParameter(str(exc), param_hint=hint) from exc
     try:
-        existing = MachineConfig.load()
+        existing = MachineConfig.load(paths.config)
     except Exception as exc:
         raise click.ClickException(
             "The saved machine configuration could not be read; repair it before replacing the connection"
@@ -255,11 +270,10 @@ def connect(server: str, machine_id: str, name: str, replace: bool) -> None:
         raise click.ClickException(
             "A different machine connection is already saved. Use --replace only if this computer should replace that connection."
         )
-    token = click.prompt("Machine token", hide_input=True).strip()
-    if not re.fullmatch(r"mch_[A-Za-z0-9_-]{8,}", token):
-        raise click.ClickException(
-            "Invalid machine token format. Paste the token issued by the web UI."
-        )
+    try:
+        token = check_machine_token(click.prompt("Machine token", hide_input=True))
+    except InvalidMachineConnection as exc:
+        raise click.ClickException(str(exc)) from exc
     config = MachineConfig(
         machine_id=machine_id,
         name=name or machine_id,
@@ -267,15 +281,19 @@ def connect(server: str, machine_id: str, name: str, replace: bool) -> None:
         labels=existing.labels if not different else {},
     )
     try:
-        save_connection(config, token)
+        save_connection(config, token, paths)
     except OSError as exc:
         raise click.ClickException(
             "Could not save the machine connection. Check local configuration directory permissions."
         ) from exc
     click.echo(
-        "Connection saved to ~/.anygarden/machine.toml and ~/.anygarden/machine.token (private files)."
+        f"Connection saved to {paths.config} and {paths.token} (private files)."
     )
-    click.echo("Start or restart with: anygarden machine run")
+    click.echo(f"Start or restart with: anygarden machine run{_data_dir_arg(paths)}")
+
+
+def _data_dir_arg(paths: MachinePaths) -> str:
+    return f" --data-dir {paths.data_dir}" if paths.data_dir else ""
 
 
 @main.command()
@@ -295,13 +313,16 @@ def connect(server: str, machine_id: str, name: str, replace: bool) -> None:
     help="Machine token override (or use ~/.anygarden/machine.token)",
 )
 @click.option("--machine-id", default=None, help="Machine ID override")
+@_data_dir_option
 def run(
     config_path: str | None,
     server: str | None,
     token: str | None,
     machine_id: str | None,
+    data_dir: Path | None,
 ) -> None:
     """Run the machine daemon (connects to server via WebSocket)."""
+    paths = _paths(data_dir)
     # #545 — augment PATH before anything spawns/detects so engine CLIs
     # in ~/.local/bin and /usr/local/bin are visible even when launched
     # from a systemd unit with a pinned minimal PATH.
@@ -309,14 +330,14 @@ def run(
 
     # Try loading config file, but allow all-CLI usage
     try:
-        path = Path(config_path) if config_path else None
+        path = Path(config_path) if config_path else paths.config
         config = MachineConfig.load(path)
     except Exception:
         config = MachineConfig(machine_id="", name="", server_url="")
 
     file_token = None
     try:
-        file_token = load_token()
+        file_token = load_token(paths.token)
     except Exception:
         pass
 
@@ -353,12 +374,23 @@ def run(
         )
         sys.exit(1)
 
+    lock = AgentRootLock(paths.agents_root)
+    try:
+        lock.acquire()
+    except AgentRootInUseError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
     click.echo(f"Starting daemon: machine_id={final_id}, server={final_server}")
     daemon = MachineDaemon(
         server_url=final_server,
         machine_id=final_id,
         machine_token=final_token,
         labels=config.labels if hasattr(config, "labels") else {},
+        token_path=paths.token,
+        agent_dirs_root=paths.agents_root,
+        workspace_registry_path=paths.workspace_registry,
+        workspace_signing_key_path=paths.signing_key,
     )
     try:
         asyncio.run(daemon.run())
@@ -367,16 +399,20 @@ def run(
             click.echo("Daemon stopped.")
         except OSError:  # full disk: the stop notice is best effort
             pass
+    finally:
+        lock.release()
     # A clean stop must exit 0 even when a full disk left unflushable log
     # bytes behind (the interpreter's failing exit flush would make it 120).
     settle_standard_streams()
 
 
 @main.command()
-def status() -> None:
+@_data_dir_option
+def status(data_dir: Path | None) -> None:
     """Show machine status from the server."""
-    config = MachineConfig.load()
-    token = load_token()
+    paths = _paths(data_dir)
+    config = MachineConfig.load(paths.config)
+    token = load_token(paths.token)
 
     if not config.machine_id or not token:
         click.echo(
@@ -422,12 +458,19 @@ def status() -> None:
     default=None,
     help="Integrated node data directory used by 'anygarden start --data-dir' (omit for a remote daemon)",
 )
+@_data_dir_option
 @click.pass_context
-def workspace(ctx: click.Context, node_data_dir: Path | None) -> None:
+def workspace(
+    ctx: click.Context, node_data_dir: Path | None, data_dir: Path | None
+) -> None:
     """Manage machine-local external workspace registrations."""
+    if node_data_dir and data_dir:
+        raise click.UsageError("Use either --node-data-dir or --data-dir, not both")
     ctx.ensure_object(dict)
     ctx.obj["workspace_registry"] = (
-        node_data_dir / "workspace-registry.json" if node_data_dir else None
+        node_data_dir / "workspace-registry.json"
+        if node_data_dir
+        else _paths(data_dir).workspace_registry
     )
 
 
@@ -536,7 +579,21 @@ def workspace_revoke(workspace_id: str, registry: Path | None) -> None:
     click.echo("revoked")
 
 
-def _write_systemd_unit() -> Path:
+def _service_name(paths: MachinePaths | None = None) -> str:
+    """Default unit for the historical layout; one unit per data directory."""
+    if paths is None or paths.data_dir is None:
+        return SERVICE_NAME
+    digest = hashlib.sha256(str(paths.data_dir).encode()).hexdigest()[:8]
+    return f"{SERVICE_NAME}-{digest}"
+
+
+def _systemd_quote(value: str) -> str:
+    """Quote one ExecStart argument (spaces, quotes, ``%`` specifiers)."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    return f'"{escaped}"'
+
+
+def _write_systemd_unit(paths: MachinePaths | None = None) -> Path:
     """Write the systemd user unit pointing at the current interpreter.
 
     ``sys.executable`` is the owned venv's python when run from a
@@ -544,7 +601,12 @@ def _write_systemd_unit() -> Path:
     """
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
-    unit_path = unit_dir / "anygarden-machine.service"
+    unit_path = unit_dir / f"{_service_name(paths)}.service"
+    run_args = (
+        f" --data-dir {_systemd_quote(str(paths.data_dir))}"
+        if paths is not None and paths.data_dir is not None
+        else ""
+    )
 
     unit_content = f"""\
 [Unit]
@@ -554,7 +616,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart={sys.executable} -m anygarden.machine.cli run
+ExecStart={sys.executable} -m anygarden.machine.cli run{run_args}
 Restart=always
 RestartSec=5
 Environment=PATH={build_systemd_path()}
@@ -567,23 +629,25 @@ WantedBy=default.target
 
 
 @main.command("install-systemd-unit")
-def install_systemd_unit() -> None:
+@_data_dir_option
+def install_systemd_unit(data_dir: Path | None) -> None:
     """Generate and install a systemd user unit file."""
-    unit_path = _write_systemd_unit()
+    paths = _paths(data_dir)
+    unit_path = _write_systemd_unit(paths)
     click.echo(f"Unit file written to {unit_path}")
     click.echo("Enable and start with:")
     click.echo("  systemctl --user daemon-reload")
-    click.echo("  systemctl --user enable --now anygarden-machine")
+    click.echo(f"  systemctl --user enable --now {_service_name(paths)}")
 
 
 # systemd user service name — also the console-script / distribution name.
 SERVICE_NAME = "anygarden-machine"
 
 
-def _restart_service() -> None:
+def _restart_service(service: str = SERVICE_NAME) -> None:
     """Restart the systemd user service so the new version takes effect."""
     subprocess.run(
-        ["systemctl", "--user", "restart", SERVICE_NAME],
+        ["systemctl", "--user", "restart", service],
         check=False,
     )
 
@@ -600,7 +664,8 @@ def _restart_service() -> None:
     default=False,
     help="Restart the systemd user service after a successful update.",
 )
-def update(target_version: str | None, restart: bool) -> None:
+@_data_dir_option
+def update(target_version: str | None, restart: bool, data_dir: Path | None) -> None:
     """Update the machine daemon (``anygarden``) to the latest version (#550).
 
     Reinstalls into the owned venv recorded in the install manifest. The
@@ -614,12 +679,13 @@ def update(target_version: str | None, restart: bool) -> None:
 
     target = result.to_version or "latest"
     click.echo(f"Updated anygarden ({result.from_version} → {target}).")
+    service = _service_name(_paths(data_dir))
     if restart:
         click.echo("Restarting service…")
-        _restart_service()
+        _restart_service(service)
     else:
         click.echo("Restart to run the new version:")
-        click.echo(f"  systemctl --user restart {SERVICE_NAME}")
+        click.echo(f"  systemctl --user restart {service}")
 
 
 def _write_launcher_shim(shim_dir: Path) -> Path:

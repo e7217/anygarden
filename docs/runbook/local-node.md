@@ -170,3 +170,41 @@ Requirements and behavior (PR609/PR615 fail-closed contract):
   gate (PR615): the current inbound grant must be active, unexpired, carry
   `task.execute`, and list the authenticated remote agent among its actors.
   The gate is deny-by-default and only ever adds rejections.
+
+## Serving another server from a computer that runs a node (#848)
+
+A computer that runs `anygarden start` can also be a machine of another
+AnyGarden server, without stopping its own node. The other server places
+agents on it; this node keeps its own agents.
+
+Web UI (no terminal on this computer):
+
+1. On the other server, open Admin > Machines, register a machine, and copy
+   the **connection code** (`agmachine1.…`) from the connection guide. It
+   carries the machine token: treat it like a password.
+2. On this node, open Admin > Machines > **Serve another server** > Add, and
+   paste the code.
+
+The node saves the connection under `<data-dir>/remote-machines/<machine-id>/`
+and runs a machine daemon for it inside the node process. It dials the other
+server (this computer must reach that server's address; the server never
+dials back), starts and stops with the node, and stops its agents when the
+connection is removed. Such a connection refuses the other server's
+self-update request: its version follows this node.
+
+Terminal (computers without a node, or headless servers) — give the daemon
+its own directory:
+
+```bash
+anygarden machine connect --data-dir ~/.anygarden/remote-machines/<machine-id> \
+  --server 'http://<server>:8000' --machine-id '<machine-id>'
+anygarden machine run --data-dir ~/.anygarden/remote-machines/<machine-id>
+# or: anygarden machine install-systemd-unit --data-dir … (one unit per directory)
+```
+
+Every daemon — the node's built-in machine, `anygarden machine run`, and a
+node-managed connection — holds an exclusive lock on its `agents/` directory.
+A second daemon pointed at the same directory refuses to start instead of
+re-adopting and then stopping the first one's agents. `--data-dir` (or
+`ANYGARDEN_MACHINE_DATA_DIR`) also applies to `status`, `workspace` and
+`update --restart`. Without it the historical `~/.anygarden` layout is used.

@@ -13,6 +13,7 @@ import structlog
 from sqlalchemy import exists, func, select, tuple_, update
 
 from anygarden.db.models import Agent, AgentTurn, AgentTurnAttempt, Machine, User
+from anygarden.machine.agent_root_lock import AgentRootLock
 from anygarden.machine.daemon import MachineDaemon
 from anygarden.node.ownership import NodeOwnershipError
 from anygarden.ws.machine_handler import handle_machine_frame
@@ -89,6 +90,7 @@ class LocalExecutionBackend:
         self.failed = False
         self._registration_lock = asyncio.Lock()
         self._receive_lock = asyncio.Lock()
+        self.agent_root_lock = AgentRootLock(self.data_dir / "agents")
         self.daemon = LocalDaemon(
             server_url=app.state.config.cluster_external_url_or_default(),
             machine_id=self.machine_id,
@@ -105,6 +107,16 @@ class LocalExecutionBackend:
         )
 
     async def start(self) -> None:
+        # #848 — a standalone machine daemon pointed at this directory would
+        # re-adopt and then stop this node's agents. Fail loudly instead.
+        self.agent_root_lock.acquire()
+        try:
+            await self._start()
+        except BaseException:
+            self.agent_root_lock.release()
+            raise
+
+    async def _start(self) -> None:
         # A clean shutdown must remove every runtime receipt. Missing/corrupt
         # evidence on an unclean shutdown is rejected by NodeOwner even earlier.
         if any((self.data_dir / "agents").glob("*/runtime.json")):
@@ -323,6 +335,8 @@ class LocalExecutionBackend:
             if machine is not None:
                 machine.status = "offline"
                 await db.commit()
+        # Only after every agent process is confirmed gone.
+        self.agent_root_lock.release()
 
     async def _recover_closed_turns(
         self, owned_generations: list[tuple[str, int]]
