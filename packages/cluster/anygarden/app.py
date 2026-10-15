@@ -555,16 +555,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "agents in this process, or attach a machine daemon"
                 ),
             )
-        if app.state.config.peer_listen_port is not None:
-            # #594 real-machine tier — opt-in federation listener. Fails the
-            # startup when services did not compose (missing/invalid peer
-            # credentials): an explicitly requested listener must not silently
-            # run disabled. Never started without the explicit option (#591).
-            if app.state.peer_service is None:
-                raise RuntimeError(
-                    "--peer-port was requested but peer services did not compose; "
-                    "check the peer credential files under the node data directory"
-                )
+        if _federation_listener_enabled(app):
             from anygarden.federation.transport import PeerListener
 
             listener = PeerListener(
@@ -592,6 +583,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if owner is not None:
                 owner.release(clean=clean)
                 app.state.node_shutdown_complete = clean
+
+
+def _federation_listener_enabled(app: FastAPI) -> bool:
+    """Whether to start the requested peer listener.
+
+    #594 real-machine tier — opt-in federation listener, never started
+    without the explicit option (#591). A requested listener whose services
+    did not compose (missing/invalid credentials) fails the startup: it must
+    not silently run disabled. An expired certificate is the one exception
+    (#842): federation is off and says why, but the node keeps serving.
+    """
+    if app.state.config.peer_listen_port is None:
+        return False
+    if app.state.peer_service is not None:
+        return True
+    if getattr(app.state, "federation_disabled_reason", None) == "CERTIFICATE_EXPIRED":
+        import structlog
+
+        structlog.get_logger("federation").warning(
+            "peer_listener.skipped", reason="CERTIFICATE_EXPIRED"
+        )
+        return False
+    raise RuntimeError(
+        "--peer-port was requested but peer services did not compose; "
+        "check the peer credential files under the node data directory"
+    )
 
 
 def _compose_federation_services(app: FastAPI) -> None:
@@ -650,6 +667,26 @@ def _compose_federation_services(app: FastAPI) -> None:
         # sees why, and no child surface starts half-configured.
         import structlog
 
+        from anygarden.federation.certificates import (
+            certificate_expires_at,
+            is_expired,
+        )
+
+        try:
+            pem = cert_path.read_text()
+            inspect_certificate(pem, check_validity=False)
+            expired = is_expired(pem)
+        except Exception:
+            expired = False
+        if expired:
+            # #842: say why, so the API and UI can point at renewal.
+            app.state.federation_disabled_reason = "CERTIFICATE_EXPIRED"
+            structlog.get_logger("federation").error(
+                "peer_credentials.expired",
+                directory=str(peer_dir),
+                expired_at=certificate_expires_at(pem).isoformat(),
+            )
+            return
         structlog.get_logger("federation").error(
             "peer_credentials.invalid",
             directory=str(peer_dir),

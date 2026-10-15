@@ -40,7 +40,10 @@ remote_router = APIRouter(prefix="/api/v1/federation", tags=["peer-control"])
 def service(request: Request) -> PeerService:
     value = getattr(request.app.state, "peer_service", None)
     if value is None:
-        raise PeerError("PEERING_DISABLED", 503)
+        # #842: a known reason (CERTIFICATE_EXPIRED) is more useful than the
+        # generic code for the admin who has to fix it.
+        reason = getattr(request.app.state, "federation_disabled_reason", None)
+        raise PeerError(reason or "PEERING_DISABLED", 503)
     return value
 
 
@@ -265,6 +268,7 @@ async def peers(
                 "fingerprint": r.fingerprint,
                 "state": r.state,
                 "certificate_epoch": r.epoch,
+                "certificate_expires_at": certificate_expires_at(r.certificate_pem),
             }
             for r in rows
         ]
