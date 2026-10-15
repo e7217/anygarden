@@ -53,7 +53,7 @@ def inspect_certificate(
 
 
 def create_credentials(directory: Path, node_id: str) -> tuple[Path, Path]:
-    """Explicit local setup only. Never overwrites keys or regenerates node identity."""
+    """Write a fresh pair. Never overwrites keys or regenerates node identity."""
     node_id = str(UUID(node_id))
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     if directory.is_symlink():

@@ -376,12 +376,23 @@ class _NodeExitError(click.ClickException):
     "--peer-port",
     type=click.IntRange(1, 65535),
     default=None,
-    help="Opt-in mTLS federation listener port (#591 boundary; requires existing peer credentials)",
+    help=(
+        "Opt-in mTLS federation listener port. Creates peer credentials in "
+        "<data-dir>/peer on first run; never replaces an existing pair"
+    ),
 )
 @click.option(
     "--peer-host",
     default=None,
     help="Federation listener bind address (default: 0.0.0.0 when --peer-port is given)",
+)
+@click.option(
+    "--peer-public-url",
+    default=None,
+    help=(
+        "https://host:port peers use to reach the federation listener; "
+        "prefills connection cards and invite codes"
+    ),
 )
 def start_node(
     data_dir: Path,
@@ -392,6 +403,7 @@ def start_node(
     reload: bool,
     peer_port: int | None,
     peer_host: str | None,
+    peer_public_url: str | None,
 ) -> None:
     """Run the API and owned local execution together, in the foreground."""
     import os
@@ -429,15 +441,30 @@ def start_node(
     if "artifact_files_dir" not in config.model_fields_set:
         config.artifact_files_dir = data_dir / "artifact_files"
     config.local_node_data_dir = data_dir
-    if peer_port is not None:
-        peer_dir = config.peer_credentials_dir or (data_dir / "peer")
-        cert, key = peer_dir / "peer-cert.pem", peer_dir / "peer-key.pem"
-        if not (cert.exists() and key.exists()):
+    if peer_public_url is not None:
+        from anygarden.federation.endpoint import split_peer_url
+
+        try:
+            split_peer_url(peer_public_url)
+        except ValueError:
             raise click.ClickException(
-                f"--peer-port requires peer credentials under {peer_dir}; create them with "
-                f"`anygarden federation init-credentials --data-dir {data_dir}` "
-                "(explicit local setup, startup never generates or rotates them)"
-            )
+                "--peer-public-url must be a bare https://host[:port] URL"
+            ) from None
+        config.peer_public_url = peer_public_url
+    if peer_port is not None:
+        from anygarden.federation.credentials_setup import (
+            CredentialSetupError,
+            ensure_peer_credentials,
+        )
+
+        try:
+            identity, created = ensure_peer_credentials(data_dir, config)
+        except CredentialSetupError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if created:
+            click.echo("Created new peer credentials for this node (valid 90 days)")
+        click.echo(f"Federation node ID: {identity.node_id}")
+        click.echo(f"Certificate fingerprint (SHA-256): {identity.fingerprint}")
         config.peer_listen_port = peer_port
         config.peer_listen_host = peer_host or "0.0.0.0"
     if host is not None:
@@ -544,7 +571,6 @@ def federation_init_credentials(
     data_dir: Path, config_path: str | None, node_id: str | None, force: bool
 ) -> None:
     """Create the peer-cert.pem / peer-key.pem pair `start --peer-port` loads."""
-    import json
     import os
     import tempfile
     from uuid import UUID
@@ -554,18 +580,21 @@ def federation_init_credentials(
         create_credentials,
         inspect_certificate,
     )
+    from anygarden.federation.credentials_setup import (
+        CredentialSetupError,
+        local_node_id,
+        peer_directory,
+    )
     from anygarden.federation.errors import PeerError
 
     data_dir = data_dir.absolute()
     if data_dir.is_symlink():
         raise click.ClickException("Node data directory must not be a symlink")
-    # Resolve the directory exactly as `start` and app startup do.
     config = AnygardenSettings(_env_file=config_path or str(data_dir / "config.env"))
-    peer_dir = (config.peer_credentials_dir or (data_dir / "peer")).absolute()
-    if peer_dir.is_symlink():
-        raise click.ClickException(
-            f"Peer credential directory must not be a symlink: {peer_dir}"
-        )
+    try:
+        peer_dir = peer_directory(data_dir, config)
+    except CredentialSetupError as exc:
+        raise click.ClickException(str(exc)) from exc
     cert_path, key_path = peer_dir / "peer-cert.pem", peer_dir / "peer-key.pem"
     existing = [p for p in (cert_path, key_path) if p.exists() or p.is_symlink()]
     if existing and not force:
@@ -580,14 +609,10 @@ def federation_init_credentials(
         except (PeerError, OSError, UnicodeError):
             node_id = None
     if node_id is None:
-        identity_path = data_dir / "node-identity.json"
-        if identity_path.is_file():
-            try:
-                node_id = str(json.loads(identity_path.read_text())["node_id"])
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                raise click.ClickException(
-                    f"Cannot read node_id from {identity_path}; pass --node-id"
-                ) from exc
+        try:
+            node_id = local_node_id(data_dir)
+        except CredentialSetupError as exc:
+            raise click.ClickException(f"{exc}; pass --node-id") from exc
     if node_id is None:
         from uuid import uuid4
 

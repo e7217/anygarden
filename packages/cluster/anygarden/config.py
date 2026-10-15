@@ -27,10 +27,11 @@ class AnygardenSettings(BaseSettings):
 
     # #593 — where persisted peer-trust credentials live. When unset, the
     # startup composer looks in ``{local_node_data_dir or ~/.anygarden}/peer``
-    # for ``peer-cert.pem``/``peer-key.pem`` written by the explicit
-    # ``federation.certificates.create_credentials`` setup step. Startup
-    # never creates, overwrites, or rotates these files; missing credentials
-    # simply leave node/shared-channel APIs mounted but disabled (503).
+    # for ``peer-cert.pem``/``peer-key.pem``. The app never creates,
+    # overwrites, or rotates these files; missing credentials simply leave
+    # node/shared-channel APIs mounted but disabled (503). Only
+    # ``anygarden start --peer-port`` creates a first-run pair, and only in
+    # the default directory (#839, ``federation.credentials_setup``).
     peer_credentials_dir: Path | None = None
 
     # #594 real-machine tier — opt-in mTLS federation listener for the
@@ -39,6 +40,10 @@ class AnygardenSettings(BaseSettings):
     # when peer credentials composed successfully (fail-closed otherwise).
     peer_listen_port: int | None = None
     peer_listen_host: str | None = None
+    # #839 — the ``https://host:port`` peers dial to reach this node's
+    # listener. Advisory only: it prefills connection cards and invite codes;
+    # the receiving admin still approves the exact IPs.
+    peer_public_url: str | None = None
 
     host: str = "127.0.0.1"
     port: int = 8000
