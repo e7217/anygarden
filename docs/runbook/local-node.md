@@ -141,8 +141,7 @@ Without the option no listener runs — the default boot is unchanged.
 
 Requirements and behavior (PR609/PR615 fail-closed contract):
 
-- Peer credentials live under `<data-dir>/peer/` as `peer-cert.pem` +
-  `peer-key.pem`. On the first `--peer-port` start, when that default
+- Peer credentials live under `<data-dir>/peer/` (layout below). On the first `--peer-port` start, when that default
   directory holds neither file, the node creates the pair (reusing the node ID
   from `node-identity.json` when present) and prints the node ID and SHA-256
   fingerprint; later starts only load and print them (#839). It never
@@ -153,10 +152,14 @@ Requirements and behavior (PR609/PR615 fail-closed contract):
   `ANYGARDEN_PEER_CREDENTIALS_DIR` is set but holds no pair (most likely an
   unmounted volume; a fresh identity there would silently break peers).
   `anygarden federation init-credentials` still creates a pair ahead of time.
-- An expired but intact pair does not stop the node (#842): `start` prints a
+- New nodes get a root layout (#843): `peer-root-cert.pem`/`peer-root-key.pem`
+  (pinned by peers, 10 years) and `peer-leaf.pem` (TLS, 90 days). `start`, app
+  startup and a six-hourly task renew the leaf within 30 days of expiry, and
+  the listener serves it without a restart. Legacy `peer-cert.pem` pairs still
+  load; see the two-node runbook for switching.
+- An expired but intact pin does not stop the node (#842): `start` prints a
   warning, runs without the peer listener, and the node APIs answer
-  `CERTIFICATE_EXPIRED` (503). It also warns 30 days before expiry. New pairs
-  are valid for 2 years; renewal is in the two-node runbook.
+  `CERTIFICATE_EXPIRED` (503). It also warns 30 days before expiry.
 - `--peer-public-url https://host:port` (or `ANYGARDEN_PEER_PUBLIC_URL`) is the
   address peers dial. It only prefills connection cards and invite codes.
 - The listener starts only after the app lifespan composed the peer/channel

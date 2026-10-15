@@ -182,6 +182,9 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | FED-12 | 초대 만들기·수락은 관리자가 지문 대조를 확인하기 전에는 제출할 수 없다 | vitest |
 | FED-13 | 노드 인증서가 만료되면 서버는 기동하고 federation만 꺼지며, API와 UI가 `CERTIFICATE_EXPIRED`로 이유를 알린다 | pytest, vitest |
 | FED-14 | 노드·피어 인증서 만료 30일 전부터 CLI와 관리자 화면이 경고한다 | pytest, vitest |
+| FED-15 | 루트 방식 노드는 통신용 인증서를 스스로 재발급하고, 상대는 다시 고정하지 않아도 계속 통신한다 | pytest |
+| FED-16 | 다른 노드의 루트가 서명한 통신용 인증서로는 그 노드를 사칭할 수 없다 | pytest |
+| FED-17 | 이전 방식(자체 서명) 노드와 루트 방식 노드가 함께 동작하고, 관리자는 새 카드로 피어를 다시 고정할 수 있다 | pytest, vitest |
 
 ## 사용량·예산 (USE)
 
