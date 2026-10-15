@@ -25,15 +25,14 @@ usage API and preserved data; the embedded model gateway is removed.
 | [uv](https://docs.astral.sh/uv/) | any current release | installing and running the Python packages |
 | Node.js | 20+ | building the web UI |
 
-Node.js is not needed to *run* the server from PyPI — those packages ship a
-prebuilt web UI. It is needed from a checkout, and wherever the npm-distributed
-TypeScript agent runtime runs.
+Node.js is not needed to *run* the server from PyPI — the package ships a
+prebuilt web UI. It is needed to build the UI from a checkout, and on hosts that
+run the Pi engine, whose CLI runs on Node.
 
 Each agent engine additionally needs **its own CLI installed and authenticated**
 on the host that runs the agent (`codex` or `pi`). Engines are detected at startup,
-so install them before starting the node or machine daemon. Codex/Pi execution
-requires the Python agent runtime; the TypeScript client does not provide these
-engine adapters. Pi creation requires an explicit provider; its model is optional.
+so install them before starting the node or machine daemon. Pi creation requires
+an explicit provider; its model is optional.
 Direct endpoint configuration requires an explicit model.
 
 ## Quick Start
@@ -111,8 +110,25 @@ Extras pick what a host runs:
 | `anygarden[machine]` | `anygarden.machine` | per-host machine daemon; includes the agent runtime it launches |
 | `anygarden[agent]` | `anygarden.agent` | agent runtime and engine adapters (`anygarden agent`, `anygarden client`) — [docs](packages/cluster/docs/agent/README.md) |
 
-The separate `anygarden-machine` and `anygarden-agent` distributions are retired;
-if an old venv still has them, `pip uninstall anygarden-machine anygarden-agent`.
+The separate `anygarden-machine` and `anygarden-agent` distributions are retired.
+
+### Upgrading from 0.18
+
+0.19 ships the machine daemon and the agent runtime inside `anygarden`.
+
+- **Python 3.12+ is required.** On 3.11, an upgrade quietly stays on 0.18.x,
+  because pip only picks releases that support the interpreter. Recreate that
+  venv or tool with 3.12.
+- **Remove the retired distributions** if an old environment still has them:
+  `pip uninstall anygarden-machine anygarden-agent`, or
+  `uv tool uninstall anygarden-machine` for a uv tool install.
+- **Agents use the daemon's own interpreter** (`python -m anygarden.agent.cli`).
+  The daemon no longer looks for an `anygarden-agent` binary on PATH or fetches
+  one with `uvx`, so an agent always runs the version installed beside it.
+  Updating a machine (**Admin → Machines → Update** or `anygarden machine update`)
+  updates its agents too.
+- Use `anygarden agent` / `anygarden client` instead of the removed
+  `anygarden-agent` / `anygarden-client` commands.
 
 ## Docs
 

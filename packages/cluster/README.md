@@ -17,15 +17,15 @@ anygarden server        # start the server
 uvx --from "anygarden[server]" anygarden server
 ```
 
-> The legacy `anygarden-server` command still works for one release but is
-> deprecated — it prints a warning and forwards to `anygarden server`.
+> The legacy `anygarden-server` command is deprecated — it prints a warning and
+> forwards to `anygarden server`.
 
 Other components share the same dispatcher:
 
 ```bash
 pip install "anygarden[machine]" && anygarden machine run
 pip install "anygarden[agent]"   && anygarden agent \
-  --engine claude-code \
+  --engine codex-cli \
   --name demo-agent \
   --server ws://localhost:8000 \
   --room demo
@@ -74,10 +74,15 @@ anygarden client --server ws://localhost:8000 \
 
 ## Development
 
+From the repository root, `make setup` installs the workspace with every extra
+and enables the git hooks. Then run the tests from this directory:
+
 ```bash
-pip install -e ".[dev]"
-pytest
+cd packages/cluster
+uv run pytest -n logical    # server, machine (tests/machine) and agent (tests/agent)
 ```
+
+The Pi harness tests skip unless Node.js is on `PATH`; CI runs them.
 
 ## Environment
 
