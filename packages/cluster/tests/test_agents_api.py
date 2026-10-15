@@ -226,6 +226,106 @@ class TestAgentsAPI:
         assert data["machine_online"] is False
 
     @pytest.mark.asyncio
+    @pytest.mark.req("NODE-14")
+    async def test_agent_placement_marks_remote_machine(self, agents_env) -> None:
+        """#851 — an agent on a machine other than the node's own is remote."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+        machine = agents_env["machine"]
+        agents_env["app"].state.local_machine_id = "some-other-machine"
+
+        create = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "remote-placed"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 201
+        expected = {
+            "machine_id": machine.id,
+            "machine_name": "agents-machine",
+            "machine_hostname": "host-agents",
+            "is_local": False,
+        }
+        assert create.json()["placement"] == expected
+
+        listed = await client.get(
+            "/api/v1/agents", headers={"Authorization": f"Bearer {token}"}
+        )
+        listed_agent = next(a for a in listed.json() if a["id"] == create.json()["id"])
+        assert listed_agent["placement"] == expected
+
+        fetched = await client.get(
+            f"/api/v1/agents/{create.json()['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert fetched.json()["placement"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("NODE-14")
+    async def test_agent_placement_marks_local_machine(self, agents_env) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        agents_env["app"].state.local_machine_id = agents_env["machine"].id
+
+        create = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "local-placed"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 201
+        assert create.json()["placement"]["is_local"] is True
+
+        listed = await client.get(
+            "/api/v1/agents", headers={"Authorization": f"Bearer {token}"}
+        )
+        listed_agent = next(a for a in listed.json() if a["id"] == create.json()["id"])
+        assert listed_agent["placement"]["is_local"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("NODE-14")
+    async def test_agent_placement_without_local_machine_is_remote(self, agents_env) -> None:
+        """Server-only mode has no built-in machine: every placement is remote."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+        assert getattr(agents_env["app"].state, "local_machine_id", None) is None
+
+        create = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "server-only-placed"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 201
+        assert create.json()["placement"]["is_local"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("NODE-14")
+    async def test_unplaced_agent_has_no_placement(self, agents_env) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="unplaced",
+                engine="echo",
+                desired_state="stopped",
+                actual_state="stopped",
+                placed_on_machine_id=None,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        fetched = await client.get(
+            f"/api/v1/agents/{agent_id}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert fetched.json()["placement"] is None
+        listed = await client.get(
+            "/api/v1/agents", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert next(a for a in listed.json() if a["id"] == agent_id)["placement"] is None
+
+    @pytest.mark.asyncio
     async def test_delete_agent(self, agents_env) -> None:
         client = agents_env["client"]
         token = agents_env["token"]

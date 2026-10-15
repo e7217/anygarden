@@ -16,6 +16,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
+import MachineBadge from '@/components/MachineBadge'
 import UpdateDot from '@/components/UpdateDot'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import RoomEditDialog from '@/components/RoomEditDialog'
@@ -1274,6 +1275,7 @@ function AgentDMListAdmin({
                 <span className="min-w-0 truncate" title={agent.name}>
                   {agent.name}
                 </span>
+                <MachineBadge placement={agent.placement} online={!machineOffline} />
                 {soloDM?.has_updates && <UpdateDot className="ml-auto" />}
                 {hasMultipleDMs && (
                   // #243 — hide the DM count on hover so the space is
