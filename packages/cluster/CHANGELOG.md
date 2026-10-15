@@ -32,6 +32,11 @@
 
 ### Added
 
+- Agents running on a machine other than this node's own now carry that
+  machine's name as a badge in the sidebar and the agent settings header
+  (#851). Hovering shows the host and whether the machine is online. Local and
+  unplaced agents look as before. The agent API exposes this as
+  `placement: {machine_id, machine_name, machine_hostname, is_local}`.
 - A computer running a node can also serve another AnyGarden server as one of
   its machines, without stopping the node (#848). Paste the other server's
   connection code (`agmachine1.…`, shown in its machine connection guide) in

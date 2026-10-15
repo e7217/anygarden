@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 
+// #851 — where an agent runs. ``is_local`` is true for this node's own
+// machine; the UI marks the others with the machine's name.
+export interface AgentPlacement {
+  machine_id: string;
+  machine_name: string;
+  machine_hostname: string;
+  is_local: boolean;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -9,6 +18,7 @@ export interface Agent {
   actual_state: string;
   placed_on_machine_id?: string;
   machine_online?: boolean;
+  placement?: AgentPlacement | null;
   restart_policy: string;
   // Phase 0 file manifest. `agents_md` is the per-agent system
   // prompt / role / rules body the materializer writes into

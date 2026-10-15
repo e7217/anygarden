@@ -62,6 +62,12 @@ const agentsMockState = vi.hoisted(() => ({
     actual_state: string
     restart_policy: string
     machine_online?: boolean
+    placement?: {
+      machine_id: string
+      machine_name: string
+      machine_hostname: string
+      is_local: boolean
+    } | null
     context_window_opt_out?: boolean
   }>,
   deleteAgent: vi.fn(),
@@ -440,6 +446,42 @@ describe('Sidebar — update indicators (#385)', () => {
 
     expect(screen.getByTestId('sidebar-agent-a1')).toBeInTheDocument()
     expect(screen.getByLabelText('Unread updates')).toBeInTheDocument()
+  })
+
+  it('[NODE-15] marks only the agent placed on a remote machine', () => {
+    authMockState.isAdmin = true
+    const base = {
+      engine: 'codex-cli',
+      desired_state: 'running',
+      actual_state: 'running',
+      restart_policy: 'never',
+      machine_online: true,
+    }
+    agentsMockState.agents = [
+      {
+        ...base,
+        id: 'local',
+        name: 'Host agent',
+        placement: { machine_id: 'm1', machine_name: 'Local node', machine_hostname: 'dev', is_local: true },
+      },
+      {
+        ...base,
+        id: 'remote',
+        name: 'Remote agent',
+        placement: { machine_id: 'm2', machine_name: 'anygarden-svc', machine_hostname: 'svc', is_local: false },
+      },
+    ]
+    roomsMockState.agentDMs = [
+      { id: 'dm-local', name: 'DM: Host agent', project_id: null, is_dm: true, representative_agent_id: 'local' },
+      { id: 'dm-remote', name: 'DM: Remote agent', project_id: null, is_dm: true, representative_agent_id: 'remote' },
+    ]
+
+    renderSidebar()
+
+    const badges = screen.getAllByTestId('agent-machine-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveTextContent('anygarden-svc')
+    expect(screen.getByTestId('sidebar-dm-dm-remote')).toContainElement(badges[0])
   })
 })
 

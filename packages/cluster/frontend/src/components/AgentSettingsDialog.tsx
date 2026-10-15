@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
+import MachineBadge from '@/components/MachineBadge'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile, AttachedSkill, SkillPreview, EngineCatalog } from '@/hooks/useAgents'
 import OverviewPanel from '@/components/agent-settings/OverviewPanel'
@@ -252,6 +253,10 @@ export default function AgentSettingsDialog({
                 <span className="shrink-0 text-[var(--color-foreground-subtle)]">
                   ({agent.engine})
                 </span>
+                <MachineBadge
+                  placement={agent.placement}
+                  online={agent.machine_online !== false}
+                />
               </span>
             ) : null}
           </DialogTitle>

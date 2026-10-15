@@ -267,6 +267,17 @@ class UnavailableReasonOut(BaseModel):
     until: Optional[datetime] = None
 
 
+class AgentPlacementOut(BaseModel):
+    """#851 — where an agent runs, so the UI can mark remote agents."""
+
+    machine_id: str
+    machine_name: str
+    machine_hostname: str
+    # True for the integrated node's own machine (``app.state.local_machine_id``).
+    # A server without one (server-only mode) reports every placement as remote.
+    is_local: bool
+
+
 class AgentOut(BaseModel):
     provider: Optional[str] = None
     id: str
@@ -276,6 +287,7 @@ class AgentOut(BaseModel):
     actual_state: str
     placed_on_machine_id: Optional[str] = None
     machine_online: bool = False
+    placement: AgentPlacementOut | None = None
     # #516 — structured "why can't this agent respond" for the not-running
     # family. None when the agent is fine. Rendered for the admin audience.
     unavailable_reason: Optional[UnavailableReasonOut] = None
@@ -319,13 +331,26 @@ class AgentOut(BaseModel):
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
-def _agent_to_out(agent: Agent, machine_bus: MachineBus | None) -> AgentOut:
+def _agent_to_out(
+    agent: Agent,
+    machine_bus: MachineBus | None,
+    *,
+    machine: Machine | None = None,
+    local_machine_id: str | None = None,
+) -> AgentOut:
     out = AgentOut.model_validate(agent)
     out.machine_online = bool(
         agent.placed_on_machine_id
         and machine_bus
         and machine_bus.is_connected(agent.placed_on_machine_id)
     )
+    if machine is not None and machine.id == agent.placed_on_machine_id:
+        out.placement = AgentPlacementOut(
+            machine_id=machine.id,
+            machine_name=machine.name,
+            machine_hostname=machine.hostname,
+            is_local=machine.id == local_machine_id,
+        )
     # #516 — derive the admin-facing unavailability reason from the stored
     # code/detail (the human message is never persisted).
     if agent.unavailable_code:
@@ -342,6 +367,33 @@ def _agent_to_out(agent: Agent, machine_bus: MachineBus | None) -> AgentOut:
             until=agent.unavailable_until,
         )
     return out
+
+
+async def _agents_out(
+    request: Request, db: AsyncSession, agents: list[Agent]
+) -> list[AgentOut]:
+    """Convert agents with their placement, loading the machines in one query."""
+    machine_ids = {a.placed_on_machine_id for a in agents if a.placed_on_machine_id}
+    machines: dict[str, Machine] = {}
+    if machine_ids:
+        rows = await db.execute(select(Machine).where(Machine.id.in_(machine_ids)))
+        machines = {m.id: m for m in rows.scalars().all()}
+    state = request.app.state
+    machine_bus = getattr(state, "machine_bus", None)
+    local_machine_id = getattr(state, "local_machine_id", None)
+    return [
+        _agent_to_out(
+            agent,
+            machine_bus,
+            machine=machines.get(agent.placed_on_machine_id or ""),
+            local_machine_id=local_machine_id,
+        )
+        for agent in agents
+    ]
+
+
+async def _agent_out(request: Request, db: AsyncSession, agent: Agent) -> AgentOut:
+    return (await _agents_out(request, db, [agent]))[0]
 
 
 class AgentFileOut(BaseModel):
@@ -521,7 +573,7 @@ async def create_agent(
     )
     existing = await _existing_creation(db, creation_key, fingerprint)
     if existing is not None:
-        return _agent_to_out(existing, request.app.state.machine_bus)
+        return await _agent_out(request, db, existing)
     _validate_reasoning(body.engine, body.model, body.reasoning_effort)
     # Reject invalid file paths up-front. Defense-in-depth: the
     # machine materializer also validates, but catching here lets
@@ -556,7 +608,7 @@ async def create_agent(
         # waited for its machine lock (and used the last available slot).
         existing = await _existing_creation(db, creation_key, fingerprint)
         if existing is not None:
-            return _agent_to_out(existing, request.app.state.machine_bus)
+            return await _agent_out(request, db, existing)
         raise
 
     agent = Agent(
@@ -589,7 +641,7 @@ async def create_agent(
         await db.rollback()
         existing = await _existing_creation(db, creation_key, fingerprint)
         if existing is not None:
-            return _agent_to_out(existing, request.app.state.machine_bus)
+            return await _agent_out(request, db, existing)
         raise
 
     # Seed AgentFile rows from the request manifest.
@@ -625,7 +677,7 @@ async def create_agent(
 
     await db.commit()
     await db.refresh(agent)
-    created_out = _agent_to_out(agent, request.app.state.machine_bus)
+    created_out = await _agent_out(request, db, agent)
 
     # #732 — the rows above bypass ``ensure_agent_in_room`` to keep the
     # creation atomic, so push the refreshed roster to the agents
@@ -643,7 +695,7 @@ async def create_agent(
     try:
         await lifecycle.request_start(agent.id)
         await db.refresh(agent)
-        return _agent_to_out(agent, request.app.state.machine_bus)
+        return await _agent_out(request, db, agent)
     except Exception:
         # Creation is durable; dispatch failure is a pending lifecycle state,
         # never a failed create that invites a second Agent/DM. Do not clear
@@ -660,7 +712,7 @@ async def create_agent(
                 db.add(ActivityLog(agent_id=agent.id, event_type="initial_dispatch_deferred"))
                 await db.commit()
             if agent:
-                return _agent_to_out(agent, request.app.state.machine_bus)
+                return await _agent_out(request, db, agent)
         except Exception:
             logger.exception("Could not record deferred initial dispatch", extra={"agent_id": created_out.id})
         return created_out
@@ -819,7 +871,7 @@ async def update_agent(
         manager = getattr(request.app.state, "connection_manager", None)
         await broadcast_roster_for_agent(manager, db, agent_id=agent_id)
 
-    return _agent_to_out(agent, request.app.state.machine_bus)
+    return await _agent_out(request, db, agent)
 
 
 @router.put("/{agent_id}/engine", response_model=AgentOut)
@@ -894,7 +946,7 @@ async def change_agent_engine(
     await db.commit()
     await db.refresh(agent)
     await request.app.state.agent_lifecycle.bump_generation(agent_id)
-    return _agent_to_out(agent, request.app.state.machine_bus)
+    return await _agent_out(request, db, agent)
 
 
 # ── agent_files CRUD ────────────────────────────────────────────────
@@ -1029,8 +1081,7 @@ async def list_agents(
 ):
     """List all agents."""
     result = await db.execute(select(Agent).order_by(Agent.created_at))
-    machine_bus = getattr(request.app.state, "machine_bus", None)
-    return [_agent_to_out(agent, machine_bus) for agent in result.scalars().all()]
+    return await _agents_out(request, db, list(result.scalars().all()))
 
 
 @router.get("/{agent_id}", response_model=AgentOut)
@@ -1050,7 +1101,7 @@ async def get_agent(
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return _agent_to_out(agent, getattr(request.app.state, "machine_bus", None))
+    return await _agent_out(request, db, agent)
 
 
 class EngineInfo(BaseModel):
@@ -1345,7 +1396,7 @@ async def start_agent(
     await lifecycle.request_start(agent.id)
 
     await db.refresh(agent)
-    return _agent_to_out(agent, request.app.state.machine_bus)
+    return await _agent_out(request, db, agent)
 
 
 # ── Agent room management ───────────────────────────────────────────
