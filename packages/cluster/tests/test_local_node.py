@@ -184,6 +184,30 @@ def test_fresh_node_registers_machine_after_real_first_user_and_protects_it(tmp_
         assert client.app.state.local_execution.ready
 
 
+@pytest.mark.req("NODE-11")
+def test_node_refuses_an_agent_directory_a_machine_daemon_owns(tmp_path):
+    """#848 — a standalone daemon on the node's agents/ would kill its agents."""
+    from anygarden.machine.agent_root_lock import AgentRootInUseError, AgentRootLock
+
+    held = AgentRootLock(tmp_path / "agents")
+    held.acquire()
+    try:
+        with pytest.raises(AgentRootInUseError):
+            with TestClient(create_app(node_config(tmp_path))):
+                pytest.fail("node started on a directory another daemon owns")
+    finally:
+        held.release()
+    # Ownership was released, so the node starts once the daemon is gone,
+    # and a clean stop frees the directory again.
+    with TestClient(create_app(node_config(tmp_path))) as client:
+        assert client.get("/healthz").status_code == 200
+        with pytest.raises(AgentRootInUseError):
+            AgentRootLock(tmp_path / "agents").acquire()
+    after = AgentRootLock(tmp_path / "agents")
+    after.acquire()
+    after.release()
+
+
 async def test_partial_start_failure_releases_ownership_and_closes_resources(
     tmp_path, monkeypatch
 ):

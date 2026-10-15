@@ -24,6 +24,7 @@ from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
 from anygarden.api.v1.goals import router as goals_router
 from anygarden.api.v1.graph import router as graph_router
 from anygarden.api.v1.invites import router as invites_router
+from anygarden.api.v1.machine_links import router as machine_links_router
 from anygarden.api.v1.machines import router as machines_api_router
 from anygarden.api.v1.mcp_templates import router as mcp_templates_router
 from anygarden.api.v1.metrics import router as metrics_router
@@ -520,6 +521,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     owner = None
     backend = None
+    machine_links = None
     listener = None
     leaf_renewal = None
     engine_provided = getattr(app.state, "engine", None) is not None
@@ -540,6 +542,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             backend = LocalExecutionBackend(app, owner)
             app.state.local_execution = backend
             await backend.start()
+            # #848 — other servers this node also serves as a machine.
+            from anygarden.node.execution import AGENT_ENVIRONMENT_KEYS
+            from anygarden.node.machine_links import MachineLinkManager
+
+            machine_links = MachineLinkManager(
+                owner.data_dir,
+                local_machine_id=owner.identity["machine_id"],
+                agent_environment={
+                    key: os.environ[key]
+                    for key in AGENT_ENVIRONMENT_KEYS
+                    if key in os.environ
+                },
+            )
+            app.state.machine_links = machine_links
+            await machine_links.start_all()
             owner.write_state("running")
         else:
             # #649 — without an integrated node this process serves the API
@@ -579,8 +596,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     if listener is not None:
                         await listener.stop()
                 finally:
-                    if backend is not None:
-                        await backend.close()
+                    try:
+                        if machine_links is not None:
+                            await machine_links.close()
+                    finally:
+                        if backend is not None:
+                            await backend.close()
             finally:
                 await _shutdown_server(app, engine_provided)
             clean = True
@@ -1742,6 +1763,7 @@ def create_app(
     app.include_router(rooms_router)
     app.include_router(messages_router)
     app.include_router(machines_api_router)
+    app.include_router(machine_links_router)
     app.include_router(agents_api_router)
     app.include_router(room_memory_router)
     app.include_router(engine_endpoints_router)

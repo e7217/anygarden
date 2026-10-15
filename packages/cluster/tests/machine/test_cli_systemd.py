@@ -130,3 +130,22 @@ class TestInstallSystemdUnit:
         )
         assert str(tmp_path / ".local" / "bin") in path_line
         assert "/usr/local/bin" in path_line
+
+
+    def test_data_dir_gets_its_own_unit(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        data_dir = tmp_path / "remote machines" / "m1"
+        result = CliRunner().invoke(
+            main, ["install-systemd-unit", "--data-dir", str(data_dir)]
+        )
+        assert result.exit_code == 0, result.output
+        units = list((tmp_path / ".config" / "systemd" / "user").glob("*.service"))
+        assert len(units) == 1
+        name = units[0].stem
+        assert name.startswith("anygarden-machine-") and name != "anygarden-machine"
+        assert f"enable --now {name}" in result.output
+        exec_line = next(
+            line for line in units[0].read_text().splitlines()
+            if line.startswith("ExecStart=")
+        )
+        assert exec_line.endswith(f' run --data-dir "{data_dir}"')

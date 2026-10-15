@@ -32,6 +32,18 @@
 
 ### Added
 
+- A computer running a node can also serve another AnyGarden server as one of
+  its machines, without stopping the node (#848). Paste the other server's
+  connection code (`agmachine1.…`, shown in its machine connection guide) in
+  Admin > Machines > **Serve another server**; the node runs that machine
+  daemon itself, starts and stops it with the node, and refuses the other
+  server's self-update. `anygarden machine` commands accept `--data-dir`
+  (`ANYGARDEN_MACHINE_DATA_DIR`) to keep a daemon's state apart.
+- Every machine daemon now holds a lock on its `agents/` directory (#848). A
+  second daemon pointed at the same directory — for example `anygarden machine
+  run` next to `anygarden start` with default paths — refuses to start instead
+  of re-adopting and then stopping the first one's agents.
+
 - Federation certificates renew themselves (#843). New nodes get a node root
   (`peer-root-cert.pem`, 10 years) that peers pin, and a 90-day TLS leaf
   (`peer-leaf.pem`) the node re-issues within 30 days of expiry — at start,

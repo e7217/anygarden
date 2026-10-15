@@ -52,3 +52,15 @@ def test_update_restart_flag_invokes_systemctl() -> None:
     argv = sp.call_args.args[0]
     assert argv[:2] == ["systemctl", "--user"]
     assert "restart" in argv and "anygarden-machine" in argv
+
+
+def test_update_restart_with_data_dir_restarts_that_unit(tmp_path) -> None:
+    with patch("anygarden.machine.cli.run_update", return_value=_ok()), patch(
+        "anygarden.machine.cli.subprocess.run"
+    ) as sp:
+        result = CliRunner().invoke(
+            main, ["update", "--restart", "--data-dir", str(tmp_path / "d")]
+        )
+    assert result.exit_code == 0, result.output
+    service = sp.call_args.args[0][-1]
+    assert service.startswith("anygarden-machine-")

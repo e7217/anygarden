@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
@@ -148,8 +148,17 @@ class MachineDaemon:
         workspace_registry_path: Path | None = None,
         workspace_signing_key_path: Path | None = None,
         agent_environment: dict[str, str] | None = None,
+        allow_self_update: bool = True,
     ) -> None:
         self.server_url = server_url
+        # #848 — a node-managed link must not let the remote server reinstall
+        # the shared package and stop the node's process.
+        self.allow_self_update = allow_self_update
+        # Read-only connection status for whoever hosts this daemon (#848).
+        self.connection_state: Literal[
+            "connecting", "connected", "disconnected", "auth_failed"
+        ] = "connecting"
+        self.last_error: str | None = None
         self.machine_id = machine_id
         self.machine_token = machine_token
         self.labels = labels or {}
@@ -241,6 +250,7 @@ class MachineDaemon:
                 websockets.exceptions.WebSocketException,
                 OSError,
             ) as exc:
+                self._record_disconnect(exc)
                 log.warning(
                     "ws_disconnected",
                     error=str(exc),
@@ -261,6 +271,15 @@ class MachineDaemon:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, RECONNECT_MAX)
 
+    def _record_disconnect(self, exc: BaseException) -> None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        # The server closes an unauthenticated socket before accepting it,
+        # which the handshake reports as HTTP 403.
+        self.connection_state = (
+            "auth_failed" if status in (401, 403) else "disconnected"
+        )
+        self.last_error = str(exc) or type(exc).__name__
+
     async def _connect_and_serve(self) -> None:
         """Establish WS connection and run message + report loops."""
         subprotocols = [
@@ -276,6 +295,8 @@ class MachineDaemon:
             log.info("ws_connected", url=self.server_url)
 
             await self._register()
+            self.connection_state = "connected"
+            self.last_error = None
 
             # #451 — re-adopt agent processes that outlived a daemon
             # restart. Must run AFTER register (we're connected) and
@@ -1484,6 +1505,19 @@ class MachineDaemon:
         version — running agents are re-adopted per #451). On failure reports
         ``failed`` and keeps running the current version.
         """
+        if not self.allow_self_update:
+            await self._send(
+                SelfUpdateResultFrame(
+                    status="failed",
+                    from_version=__version__,
+                    to_version=frame.target_version,
+                    error=(
+                        "This machine is run by an AnyGarden node; "
+                        "update that node to change its version."
+                    ),
+                ).model_dump()
+            )
+            return
         await self._send(
             SelfUpdateResultFrame(
                 status="updating",

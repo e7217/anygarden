@@ -26,6 +26,7 @@ import { deriveAgentOnline, agentStatusLabel } from '@/lib/agent-liveness'
 import { shouldShowFallbackCrashWarning } from '@/lib/admin-agent-warning'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import MachineLinksSection from '@/components/MachineLinksSection'
 import type { Agent } from '@/hooks/useAgents'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -407,6 +408,7 @@ export default function AdminMachines() {
             </>
           )}
         </div>
+        <MachineLinksSection />
       </div>
 
       {/* ── Right: Machine Detail ── */}

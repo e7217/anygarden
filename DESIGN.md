@@ -69,7 +69,7 @@ After a UI change, run the frontend build and relevant component and browser tes
 
 ## 9. Setup and management journeys
 
-Machines is an administrator's execution-environment page. Registration leads to installation, server URL, a foreground CLI command, and a live connection check. Existing offline machines can reopen the connection guide. Copying a command does not embed the one-time token. The guide explicitly distinguishes registration from a running daemon and automatic startup.
+Machines is an administrator's execution-environment page. Registration leads to installation, server URL, a foreground CLI command, and a live connection check. Existing offline machines can reopen the connection guide. Copying a command does not embed the one-time token. The guide explicitly distinguishes registration from a running daemon and automatic startup. While the one-time token is shown, the guide also offers a connection code for a computer that already runs AnyGarden; on such a node, Machines lists the other servers it serves (text status, running agents) and adds or disconnects them, with confirmation for disconnecting.
 
 CreateAgentDialog owns the initial identity, engine/model, permission and room draft. The selected machine is passed to the server and validated before placement; older API clients may omit it for automatic placement. Description is distinct from optional AGENTS.md instructions. Successful creation leads to agent settings; a partially configured credential never silently creates a duplicate agent on retry.
 
