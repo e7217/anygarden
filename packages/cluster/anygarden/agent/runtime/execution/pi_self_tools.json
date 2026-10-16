@@ -20,6 +20,7 @@
     "get_project_execution",
     "publish_project_artifact",
     "read_project_artifact",
+    "read_room_messages",
     "request_project_approval",
     "request_project_input",
     "resume_project_task",

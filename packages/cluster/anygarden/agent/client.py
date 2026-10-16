@@ -700,6 +700,10 @@ class ChatClient:
             f"Current room ID: {room_id}. Use this exact value for Anygarden "
             "MCP tools that require room_id; the participant IDs below are "
             "only for assignee_pid and routing tokens."
+            # #866 — the turn carries only part of the room's history.
+            "\n\nIf you need earlier messages of this room or a thread that "
+            "are not in the conversation you were given, read them with the "
+            "read_room_messages tool instead of guessing what was said."
         )
         if self_line is not None:
             header += "\n\n" + self_line

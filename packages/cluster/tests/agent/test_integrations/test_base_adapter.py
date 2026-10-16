@@ -145,6 +145,40 @@ class TestAssembleUserContent:
         assert open_idx < out.index("[참고] @a") < close_idx
         assert open_idx < out.index("[참고] @b") < close_idx
 
+    def test_server_conversation_replaces_the_buffer(self) -> None:
+        """#866 — a leased delivery's server-computed conversation wins
+        over the lossy local buffer, which is drained so it never doubles."""
+        adapter = _BareAdapter()
+        append_context_line(adapter._pending_context, "r1", "[참고] @a: stale buffer")
+        metadata = {
+            "conversation_context": {
+                "version": 1,
+                "messages": [
+                    {"seq": 4, "speaker": "dev", "kind": "agent", "content": "@qa done?"},
+                    {"seq": 5, "speaker": "you", "kind": "agent", "content": "earlier reply"},
+                ],
+                "omitted": 3,
+            }
+        }
+
+        out = adapter.assemble_user_content("r1", "summarize", metadata)
+
+        assert "stale buffer" not in out
+        assert "r1" not in adapter._pending_context
+        body = out[out.index("<room_conversation>"):out.index("</room_conversation>")]
+        assert "[참고] dev(agent): @qa done?" in body
+        assert "[참고] you: earlier reply" in body
+        assert "3" in body and "read_room_messages" in body
+        assert out.endswith("summarize")
+
+    def test_malformed_server_conversation_falls_back_to_buffer(self) -> None:
+        adapter = _BareAdapter()
+        append_context_line(adapter._pending_context, "r1", "[참고] @a: buffered")
+        out = adapter.assemble_user_content(
+            "r1", "hi", {"conversation_context": {"messages": "nope"}}
+        )
+        assert "buffered" in out
+
     def test_per_room_isolation(self) -> None:
         """A line ingested for room r1 must not leak into room r2's
         next turn. Buffer keying was already correct in

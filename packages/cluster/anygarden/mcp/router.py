@@ -28,6 +28,7 @@ from anygarden.mcp.tools import (
     claim_task,
     clear_task_blocker,
     mark_task_status,
+    read_room_messages,
     request_task_input,
 )
 
@@ -311,6 +312,15 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                 )
                 if not tool_result.get("isError"):
                     await db.commit()
+            return _jsonrpc_ok(req_id, tool_result)
+
+        # ``read_room_messages`` (#866) is read-only: no commit, no broadcast.
+        if name == "read_room_messages":
+            session_factory = request.app.state.session_factory
+            async with session_factory() as db:
+                tool_result = await read_room_messages(
+                    db, agent_id=agent_id, arguments=arguments
+                )
             return _jsonrpc_ok(req_id, tool_result)
 
         # ``ask_peer`` (#762) posts the accepted questions and starts the

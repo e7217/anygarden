@@ -133,6 +133,38 @@ def drain_context(
     return "\n".join(lines)
 
 
+def format_server_context(context: Any) -> str | None:
+    """Render a delivery's ``conversation_context`` (#866) as breadcrumbs.
+
+    The server attaches what this agent missed in the conversation since
+    its last turn there (``anygarden.turns.conversation_context``). Lines
+    use the buffer's ``[참고]`` shape so the ``<room_conversation>``
+    wrapper reads the same either way. Returns ``None`` for anything
+    malformed, so the caller can fall back to the local buffer.
+    """
+    if not isinstance(context, dict):
+        return None
+    messages = context.get("messages")
+    if not isinstance(messages, list):
+        return None
+    lines: list[str] = []
+    omitted = context.get("omitted")
+    if isinstance(omitted, int) and omitted > 0:
+        lines.append(
+            f"(이전 메시지 {omitted}개는 생략됨 — 필요하면 read_room_messages 도구로 확인)"
+        )
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        speaker = m.get("speaker") or "unknown"
+        label = "you" if speaker == "you" else f"{speaker}({m.get('kind') or 'user'})"
+        lines.append(f"[참고] {label}: {content}")
+    return "\n".join(lines) if lines else None
+
+
 # Issue #284 — preamble injected before the drained pending context
 # inside the ``<room_conversation>`` wrapper. Spells out three things
 # the LLM must follow:

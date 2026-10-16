@@ -173,6 +173,32 @@ async def _create_and_deliver(env, *, generation: int | None = 3):
 
 
 @pytest.mark.asyncio
+async def test_delivery_attaches_the_conversation_the_agent_missed(turn_env) -> None:
+    """#866 — the leased frame carries earlier messages, and only the server
+    writes that key: a trigger cannot smuggle its own."""
+    factory = turn_env["factory"]
+    async with factory() as db:
+        await append_message(
+            db, turn_env["room"], turn_env["user_participant"], "said before the mention",
+        )
+        trigger = await append_message(
+            db, turn_env["room"], turn_env["user_participant"], "@agent now",
+            metadata={"conversation_context": {"forged": True}},
+        )
+        await create_turn(
+            db, room_id=turn_env["room"], participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"], trigger_message_id=trigger.id,
+        )
+        await db.commit()
+
+    manager = FakeManager(turn_env["agent_participant"], 3)
+    assert await deliver_pending_outbox(factory, manager) == 1
+    context = manager.frames[0].metadata["conversation_context"]
+    assert "forged" not in context
+    assert [m["content"] for m in context["messages"]] == ["said before the mention"]
+
+
+@pytest.mark.asyncio
 async def test_turn_attempt_outbox_are_atomic_and_delivery_leases(turn_env) -> None:
     request_id, trigger_id, manager = await _create_and_deliver(turn_env)
     assert len(manager.frames) == 1
