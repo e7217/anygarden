@@ -243,7 +243,7 @@ export default function ChatArea({
 
   if (messages.length === 0) {
     return (
-      <div className="chat-column flex flex-1 flex-col items-center justify-center bg-[var(--color-surface)] px-6 py-4 text-center">
+      <div className="chat-column flex flex-1 flex-col items-center justify-center bg-[var(--color-surface)] py-4 text-center">
         <MessageSquare className="mb-4 h-12 w-12 text-[var(--color-foreground-subtle)] opacity-60" />
         <p className="text-lead text-[var(--color-foreground)]">{t('chat.noMessages')}</p>
         <p className="text-caption text-[var(--color-foreground-muted)] mt-1">{t('chat.startConversation')}</p>
@@ -259,7 +259,7 @@ export default function ChatArea({
         onScrollTo={handleScrollTo}
       />
       <ScrollArea className="flex-1 bg-[var(--color-surface)]" ref={scrollRootRef}>
-        <div data-testid="chat-column" className="chat-column flex flex-col gap-5 px-6 py-4">
+        <div data-testid="chat-column" className="chat-column flex flex-col gap-5 py-4">
           {/* With a thread index, only top-level messages appear here —
               replies live in the panel. ``roots`` preserves stream order
               and keeps orphaned replies (root outside the loaded

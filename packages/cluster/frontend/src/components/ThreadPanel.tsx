@@ -151,7 +151,7 @@ export default function ThreadPanel({
         </div>
 
         <ScrollArea className="min-w-0 flex-1">
-          <div className="flex flex-col gap-4 px-4 py-4">
+          <div className="flex flex-col gap-4 px-6 py-4">
             <div data-message-id={root.id}>
               <MessageBubble
                 message={root}

@@ -318,10 +318,13 @@ code, pre, kbd, samp {
    with which panels are open — so collapsing a panel, resizing the
    right slot, opening a thread or resizing the window all follow the
    same rule. Agent replies fill the column, so the cap keeps a line of
-   Korean prose near 72 characters. */
+   Korean prose near 72 characters. The 24px gutter lives here too
+   (#864): when it sat on the list alone, the composer box ran out to
+   the column edge and overhung the text above it. */
 @utility chat-column {
   width: 100%;
   margin-inline: auto;
+  padding-inline: 1.5rem;
   max-width: 48rem;
   @container chat (min-width: 65rem) {
     max-width: 52rem;
