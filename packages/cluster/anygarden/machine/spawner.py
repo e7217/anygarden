@@ -704,6 +704,11 @@ class Spawner:
         outbox_dir = memory_dir / "outbox"
         outbox_dir.mkdir(parents=True, exist_ok=True)
         secure_chmod(outbox_dir, 0o700)
+        # #874 — the inbound counterpart: the agent runtime downloads the
+        # files a message attaches into ``inbox/<room_id>/`` before a turn.
+        inbox_dir = memory_dir / "inbox"
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        secure_chmod(inbox_dir, 0o700)
 
         # --- Writable skills directory --------------------------------
         #
@@ -837,7 +842,7 @@ class Spawner:
                 raise ValueError("workspace room-memory bridge conflicts with a user path")
             else:
                 rooms_link.symlink_to("../../memory/rooms")
-            for name in ("shared", "outbox"):
+            for name in ("shared", "outbox", "inbox"):
                 slot = ws_memory / name
                 if slot.is_symlink() or slot.exists():
                     self._remove_tree_entry(slot)

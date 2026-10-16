@@ -93,6 +93,15 @@ class ArtifactUploadError(Exception):
         self.status = status
 
 
+class ArtifactDownloadError(Exception):
+    """An attachment download failed (#874); ``status`` is ``None`` on
+    transport errors and ``413`` when the body ran past the size cap."""
+
+    def __init__(self, status: int | None) -> None:
+        super().__init__(f"artifact download failed (status={status})")
+        self.status = status
+
+
 def _close_code(exc: BaseException) -> int | None:
     """Best-effort extraction of the WS close code from a websockets
     ``ConnectionClosed`` (or similar) exception.
@@ -484,6 +493,45 @@ class ChatClient:
         if resp.status_code not in (200, 201):
             raise ArtifactUploadError(resp.status_code)
         return resp.json()
+
+    async def download_room_artifact(
+        self, room_id: str, artifact_id: str, dest: Path, *, max_bytes: int
+    ) -> int:
+        """Stream an attachment the turn's message references into *dest*
+        (#874) and return its size.
+
+        Uses the agent's own token, so a remote machine fetches exactly what
+        a local one would. The body goes to a sibling temp file first and is
+        renamed into place only when complete; a failure or a body past
+        *max_bytes* leaves nothing behind and raises
+        :class:`ArtifactDownloadError`.
+        """
+        http = await self._get_http()
+        base = self._server_url.replace("ws://", "http://").replace("wss://", "https://")
+        dest = Path(dest)
+        partial = dest.with_name(f".{dest.name}.part")
+        size = 0
+        try:
+            async with http.stream(
+                "GET",
+                f"{base}/api/v1/rooms/{room_id}/artifacts/{artifact_id}",
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=_ARTIFACT_UPLOAD_TIMEOUT_SEC,
+            ) as resp:
+                if resp.status_code != 200:
+                    raise ArtifactDownloadError(resp.status_code)
+                with partial.open("wb") as out:
+                    async for chunk in resp.aiter_bytes():
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise ArtifactDownloadError(413)
+                        out.write(chunk)
+            partial.replace(dest)
+        except httpx.HTTPError as exc:
+            raise ArtifactDownloadError(None) from exc
+        finally:
+            partial.unlink(missing_ok=True)
+        return size
 
     async def find_sub_room(self, parent_room_id: str, name: str) -> str | None:
         """Find a sub-room by name. Returns room_id or None."""

@@ -54,6 +54,7 @@ from anygarden.agent.integrations.process_helpers import (
     _subprocess_group_kwargs,
     _terminate_tree,
 )
+from anygarden.agent.runtime.attachments import materialize_inbox_attachments
 from anygarden.agent.runtime.execution.failure_feedback import (
     CodexFailureTracker,
     stderr_tail,
@@ -292,11 +293,18 @@ class CodexCliAdapter(EngineAdapter):
         # Issue #286 — shared drain → ``<room_conversation>`` wrap →
         # concat pipeline (same as codex/gemini/claude adapters).
         metadata = msg.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else None
+        # #874 — fetch the message's attachments into the inbox first, so the
+        # engine can open them by path on this machine, local or remote.
+        inbox_attachments = await materialize_inbox_attachments(
+            self._client, Path.cwd() / "memory" / "inbox", room_id, metadata
+        )
         turn_content = self.assemble_user_content(
             room_id,
             content,
-            metadata if isinstance(metadata, dict) else None,
+            metadata,
             sender_participant_id=msg.get("participant_id"),
+            inbox_attachments=inbox_attachments,
         )
 
         # Issue #237/#293 — sha-tracked memory + roster injection. codex
