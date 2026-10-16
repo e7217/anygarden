@@ -26,7 +26,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
-from anygarden.db.models import Participant, Room, Task, TaskBlocker
+from anygarden.db.models import Message, Participant, Room, Task, TaskBlocker
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.skills_library.service import (
     SkillLibraryService,
@@ -265,6 +265,45 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": ["room_id", "asks"],
+        },
+    },
+    {
+        "name": "read_room_messages",
+        "description": (
+            "Read earlier messages of a room you are in: the main channel "
+            "(threads folded, with their reply counts) or one thread. Use it "
+            "when the conversation you were given does not cover what you "
+            "need — do not guess what was said. Newest page first; page back "
+            "with before_seq."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_id": {
+                    "type": "string",
+                    "description": "The current room ID from your roster.",
+                },
+                "thread_root_id": {
+                    "type": "string",
+                    "description": "Read this thread (its root message id) instead of the main channel.",
+                },
+                "around_message_id": {
+                    "type": "string",
+                    "description": "Read the messages around this one, in its own conversation.",
+                },
+                "before_seq": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Only messages older than this seq (the next_before_seq of a previous call).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "How many messages (default 20).",
+                },
+            },
+            "required": ["room_id"],
         },
     },
     {
@@ -1253,6 +1292,119 @@ async def resolve_task_blockers(
             woken,
         )
     return woken
+
+
+READ_ROOM_DEFAULT_LIMIT = 20
+READ_ROOM_MAX_LIMIT = 50
+READ_ROOM_AROUND = 10
+
+
+async def read_room_messages(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Let an agent read a room it belongs to (#866).
+
+    Read-only. Scope is one conversation — the main channel or one thread —
+    and membership is checked against the calling agent's participant.
+    """
+    from anygarden.messages import agent_view
+
+    room_id = arguments.get("room_id")
+    if not isinstance(room_id, str) or not room_id:
+        return _error_result("room_id is required")
+    caller = (
+        await db.execute(
+            select(Participant).where(
+                Participant.room_id == room_id, Participant.agent_id == agent_id
+            )
+        )
+    ).scalars().first()
+    if caller is None:
+        return _error_result("you are not a participant of this room")
+
+    limit = arguments.get("limit", READ_ROOM_DEFAULT_LIMIT)
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        return _error_result("limit must be a positive integer")
+    limit = min(limit, READ_ROOM_MAX_LIMIT)
+    before_seq = arguments.get("before_seq")
+    if before_seq is not None and (not isinstance(before_seq, int) or isinstance(before_seq, bool)):
+        return _error_result("before_seq must be an integer")
+
+    async def _message(message_id: Any) -> Message | None:
+        if not isinstance(message_id, str):
+            return None
+        return (
+            await db.execute(
+                select(Message).where(Message.room_id == room_id, Message.id == message_id)
+            )
+        ).scalar_one_or_none()
+
+    thread_root_id = arguments.get("thread_root_id")
+    around_id = arguments.get("around_message_id")
+    anchor: Message | None = None
+    if around_id is not None:
+        anchor = await _message(around_id)
+        if anchor is None:
+            return _error_result("around_message_id is not a message in this room")
+        thread_root_id = anchor.root_message_id
+    elif thread_root_id is not None:
+        root = await _message(thread_root_id)
+        if root is None or root.root_message_id is not None:
+            return _error_result("thread_root_id is not a thread root in this room")
+
+    base = agent_view.in_conversation(
+        select(Message).where(Message.room_id == room_id), thread_root_id
+    )
+    if anchor is not None:
+        older = (
+            await db.execute(
+                base.where(Message.seq < anchor.seq)
+                .order_by(Message.seq.desc()).limit(READ_ROOM_AROUND + 1)
+            )
+        ).scalars().all()
+        newer = (
+            await db.execute(
+                base.where(Message.seq >= anchor.seq)
+                .order_by(Message.seq).limit(READ_ROOM_AROUND + 1)
+            )
+        ).scalars().all()
+        has_more = len(older) > READ_ROOM_AROUND
+        rows = [*reversed(older[:READ_ROOM_AROUND]), *newer]
+    else:
+        stmt = base
+        if before_seq is not None:
+            stmt = stmt.where(Message.seq < before_seq)
+        fetched = (
+            await db.execute(stmt.order_by(Message.seq.desc()).limit(limit + 1))
+        ).scalars().all()
+        has_more = len(fetched) > limit
+        rows = list(reversed(fetched[:limit]))
+
+    messages = await agent_view.describe(
+        db, room_id, rows, self_pids=[caller.id],
+        with_thread_counts=thread_root_id is None,
+    )
+    next_before = rows[0].seq if rows and has_more else None
+    where = f"thread {thread_root_id}" if thread_root_id else "the main channel"
+    if not messages:
+        text = f"No messages in {where}."
+    else:
+        text = f"Messages in {where}, oldest first:\n" + agent_view.render_lines(messages)
+    if next_before is not None:
+        text += f"\n\nOlder messages exist: call again with before_seq={next_before}."
+    if thread_root_id is None and any(m.get("thread_replies") for m in messages):
+        text += "\nTo read a thread, call again with its thread_root_id."
+    return _ok_result(
+        text,
+        {
+            "messages": messages,
+            "has_more_before": has_more,
+            "next_before_seq": next_before,
+        },
+    )
 
 
 async def ask_peer(

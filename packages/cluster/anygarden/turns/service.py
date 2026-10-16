@@ -35,6 +35,7 @@ from anygarden.db.models import (
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import append_message
 from anygarden.rooms.authorization import AGENT_EXECUTION_ROLES
+from anygarden.turns.conversation_context import build_conversation_context
 
 ACTIVE_ATTEMPT_STATES = frozenset({"leased", "started"})
 OPEN_TURN_STATES = frozenset({"pending", "leased", "retrying", "completing"})
@@ -759,6 +760,12 @@ async def deliver_pending_outbox(
                     turn, attempt, metadata, input_snapshot=input_snapshot,
                     operating_lead=await _is_operating_lead(db, turn),
                 )
+                # #866 — what the agent missed in this conversation since its
+                # last turn; only the server may say so.
+                metadata.pop("conversation_context", None)
+                conversation = await build_conversation_context(db, turn, msg)
+                if conversation is not None:
+                    metadata["conversation_context"] = conversation
             frame = message_to_frame(msg, metadata=metadata)
             participant_id = row.participant_id
             turn_id = row.turn_id

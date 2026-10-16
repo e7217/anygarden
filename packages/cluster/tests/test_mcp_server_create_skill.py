@@ -187,7 +187,8 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     # orchestrator-only ``create_task``. #737 added ``ask_peer`` (test_mcp_ask_peer.py).
     # #778 added the project execution tools (mcp/project_tools.py).
     # #806 added ``claim_current_request`` / ``request_task_input``
-    # (test_general_tasks.py).
+    # (test_general_tasks.py). #866 added ``read_room_messages``
+    # (test_mcp_read_room_messages.py).
     assert names == {
         "begin_project_execution",
         "delegate_project_task",
@@ -211,6 +212,7 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "add_task_blocker",
         "clear_task_blocker",
         "ask_peer",
+        "read_room_messages",
     }
 
 

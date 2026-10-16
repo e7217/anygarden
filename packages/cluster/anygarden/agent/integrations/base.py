@@ -13,6 +13,7 @@ import structlog
 
 from anygarden.agent.coordination.pending_context import (
     drain_context,
+    format_server_context,
     resolve_speaker_label,
     wrap_as_room_conversation,
 )
@@ -321,6 +322,14 @@ class EngineAdapter(ABC):
         parts: list[str] = []
 
         prefix = drain_context(self._pending_context, room_id)
+        # #866 — a leased delivery carries the server's account of what this
+        # agent missed here; it supersedes the lossy local buffer (drained
+        # above either way so the two never double up).
+        server_context = format_server_context(
+            (metadata or {}).get("conversation_context")
+        )
+        if server_context is not None:
+            prefix = server_context
         if prefix:
             parts.append(wrap_as_room_conversation(prefix))
 
@@ -678,12 +687,14 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
        session context without replying". The canonical producers
        are the ``[취합 결과]`` broadcast on issue #74 and the ambient
        chatter stamp on #148 Part 3.
-    5. **Explicit mentions present but NOT for us → SKIP.**
+    5. **Explicit mentions present but NOT for us → INGEST_ONLY**
+       (SKIP when the agent opted out of the context window).
        Previously this rule fired for every agent in the room
        regardless of mention target, so a multi-agent room echoed N
        responses to a single-addressed message. When the server saw
        at least one addressable mention, treat the message as
-       targeted and stay out unless rule 3 matched.
+       targeted and stay out of the reply unless rule 3 matched —
+       but keep it as context (#866).
     6. No addressable mentions + human sender → INGEST_ONLY (SKIP when
        the agent opted out of the context window) (#739). The server
        expands ``@everyone`` and the implicit call in a one-agent
@@ -888,14 +899,15 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         return MessagePolicy.INGEST_ONLY
 
     # 5. Explicit mention list exists and does not include us →
-    # someone else is being addressed, so we stay out. Stage B
-    # (#74) promoted peer-mention messages here to INGEST_ONLY when
-    # the local env accumulator opted in; with #148 Part 3 that
-    # decision is made server-side via ``metadata.ingest_only``
-    # (handled in rule 4 above), so we no longer need a second
-    # agent-side gate.
+    # someone else is being addressed, so we stay out of the reply.
+    # #866 — staying out of the reply is not the same as not seeing
+    # it: dropping the message here meant a third agent saw a peer's
+    # answer but never the question that prompted it. Keep it as
+    # context unless this agent opted out of the context window.
     if addressable:
-        return MessagePolicy.SKIP
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
+        return MessagePolicy.INGEST_ONLY
 
     # 6. No addressable mention from a human (#739). The message is
     # addressed to nobody in particular, so keep it as context without

@@ -596,8 +596,10 @@ def _is_ambient_candidate(
        agent forwarding path and must reach the representative as a
        real response.
 
-    Intentionally mirrors ``decide_policy``'s rule 5/7 surface in
-    agents/integrations/base.py — the two branches must stay
+    Intentionally mirrors ``decide_policy``'s rule 7 surface in
+    agents/integrations/base.py (rule 5 — addressed to someone else —
+    is absorbed agent-side since #866, so it needs no stamp here; a
+    stamp would also reach the addressee) — the two branches must stay
     symmetric so the server's "should I stamp it?" and the agent's
     "should I act on the stamp?" never drift. A contract test lives
     alongside the migration work plan (#148 §6).

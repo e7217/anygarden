@@ -78,6 +78,13 @@ class TestSelfLine:
         assert "routing token in the final reply" not in suffix
 
     @pytest.mark.asyncio
+    async def test_roster_points_to_read_room_messages(self) -> None:
+        """#866 — a turn carries only part of the room; say where the rest is."""
+        for roster in ([SELF], [SELF, PEER]):
+            client = await _client_in("room-a", "p-self", roster)
+            assert "read_room_messages" in client.compose_roster_suffix("room-a")
+
+    @pytest.mark.asyncio
     async def test_empty_roster_yields_no_suffix(self) -> None:
         client = ChatClient("ws://x", token="t")
         assert client.compose_roster_suffix("room-a") == ""

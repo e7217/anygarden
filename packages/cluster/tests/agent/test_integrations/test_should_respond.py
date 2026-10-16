@@ -227,6 +227,21 @@ class TestShouldRespond:
             },
         }
         assert should_respond(msg, client) is False
+        # #866 — not answering is not the same as not seeing: the
+        # exchange between other participants stays in context.
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+
+    def test_message_addressed_to_other_skips_when_opted_out(self):
+        """#866 — the context-window opt-out still drops it entirely."""
+        client = _make_client(agent_name="앨리스", context_window_opt_out=True)
+        msg = {
+            "participant_id": "human-pid",
+            "content": "@밥 이거 봐줘",
+            "metadata": {
+                "mentions": [{"type": "legacy", "name": "밥"}],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
 
     def test_human_message_addressed_to_me_among_others(self):
         """Multi-mention: as long as my name is in the list, I reply."""
@@ -331,6 +346,7 @@ class TestShouldRespond:
             },
         }
         assert should_respond(msg, client) is False
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
     def test_no_metadata(self):
         """Human message with no metadata at all → context only (#739)."""
