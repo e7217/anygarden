@@ -575,7 +575,14 @@ export default function MessageInput({
             }
             aria-label={placeholder ?? t('chat.messageInputLabel')}
             rows={1}
-            className="min-h-[var(--control-icon-size)] flex-1 resize-none bg-transparent px-2 py-[calc((var(--control-icon-size)-1.5rem)/2)] text-base leading-6 md:text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            // #867 — autoResize sizes the box to the typed value only, so a
+            // placeholder longer than the box wrapped inside one line of
+            // height and showed half a second line. Keep it on one line
+            // ending in an ellipsis: Chromium draws the ellipsis only when
+            // both the empty box (:placeholder-shown) and ::placeholder are
+            // nowrap/hidden/ellipsis, and drops it while focused (the text
+            // is then clipped, still on one line). Typed text still wraps.
+            className="min-h-[var(--control-icon-size)] flex-1 resize-none bg-transparent px-2 py-[calc((var(--control-icon-size)-1.5rem)/2)] text-base leading-6 md:text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] placeholder-shown:overflow-hidden placeholder-shown:text-ellipsis placeholder-shown:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           />
           <button
             type="button"

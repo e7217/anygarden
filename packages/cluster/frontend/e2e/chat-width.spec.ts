@@ -275,3 +275,40 @@ test.describe('composer edges (#864)', () => {
     )
   })
 })
+
+test.describe('composer placeholder (#867)', () => {
+  const textarea = (page: Page) => composerBox(page).locator('textarea')
+
+  async function lineBox(page: Page) {
+    return textarea(page).evaluate(el => {
+      const s = getComputedStyle(el)
+      return {
+        height: el.clientHeight,
+        oneLine: parseFloat(s.lineHeight) + parseFloat(s.paddingTop) + parseFloat(s.paddingBottom),
+      }
+    })
+  }
+
+  test('stays on one line with an ellipsis at 375px', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 })
+    await openRoom(page)
+    // Measured on the textarea while :placeholder-shown — Chromium needs
+    // the empty box itself styled to draw the placeholder's ellipsis.
+    const empty = await textarea(page).evaluate(el => {
+      const s = getComputedStyle(el)
+      return { whiteSpace: s.whiteSpace, overflowX: s.overflowX, textOverflow: s.textOverflow }
+    })
+    expect(empty).toEqual({ whiteSpace: 'nowrap', overflowX: 'hidden', textOverflow: 'ellipsis' })
+    const { height, oneLine } = await lineBox(page)
+    expect(Math.abs(height - oneLine)).toBeLessThanOrEqual(1)
+  })
+
+  test('typed text still wraps and grows the box', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 })
+    await openRoom(page)
+    await textarea(page).fill('a long message that cannot fit on a single line of a phone composer')
+    expect(await textarea(page).evaluate(el => getComputedStyle(el).whiteSpace)).not.toBe('nowrap')
+    const { height, oneLine } = await lineBox(page)
+    expect(height).toBeGreaterThan(oneLine + 1)
+  })
+})
