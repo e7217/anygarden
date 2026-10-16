@@ -471,7 +471,7 @@ export default function MessageInput({
     && !mentionUsers.some(o => value.includes(`@${o.display}`))
 
   return (
-    <div data-testid="message-composer" className="min-h-[var(--footer-min-height)] border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
+    <div data-testid="message-composer" className="min-h-[var(--footer-min-height)] border-t border-[var(--color-border)] bg-[var(--color-surface)] py-3">
       <div data-testid="composer-column" className="chat-column relative flex flex-col gap-2">
         {slashError && (
           <div
@@ -508,7 +508,7 @@ export default function MessageInput({
             )}
           </div>
         )}
-        <div className="relative flex w-full items-end gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[var(--color-brand-focus)] focus-within:ring-2 focus-within:ring-[var(--color-brand-focus)]/35">
+        <div data-testid="composer-box" className="relative flex w-full items-end gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[var(--color-brand-focus)] focus-within:ring-2 focus-within:ring-[var(--color-brand-focus)]/35">
           {mention && filtered.length > 0 && (
             <MentionPopover
               options={filtered}

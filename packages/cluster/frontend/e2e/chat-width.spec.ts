@@ -28,14 +28,14 @@ const LONG_REPLY = [
   '| Leaf expired | Federation off | Expired badge |',
 ].join('\n')
 
-function message(id: string, seq: number, participant: string, content: string) {
+function message(id: string, seq: number, participant: string, content: string, root: string | null = null) {
   return {
     id,
     room_id: ROOM_ID,
     participant_id: participant,
     content,
-    parent_message_id: null,
-    root_message_id: null,
+    parent_message_id: root,
+    root_message_id: root,
     seq,
     created_at: `2026-10-16T00:00:0${seq}Z`,
     metadata: null,
@@ -46,6 +46,7 @@ const HISTORY = [
   message('msg-me', 1, MY_PARTICIPANT, 'root message'),
   message('msg-long', 2, AGENT_PARTICIPANT, LONG_REPLY),
   message('msg-short', 3, AGENT_PARTICIPANT, 'short agent reply'),
+  message('msg-thread-reply', 4, AGENT_PARTICIPANT, 'agent reply in a thread', 'msg-long'),
 ]
 
 async function fulfillJson(route: Route, status: number, body: unknown) {
@@ -144,6 +145,7 @@ async function box(locator: Locator) {
 
 const column = (page: Page) => page.getByTestId('chat-column')
 const composer = (page: Page) => page.getByTestId('composer-column')
+const composerBox = (scope: Page | Locator) => scope.getByTestId('composer-box')
 const columnWidth = async (page: Page) => Math.round((await box(column(page))).width)
 const prose = (page: Page, id: string) =>
   page.locator(`[data-message-id="${id}"] [data-message-body]`)
@@ -235,5 +237,41 @@ test.describe('agent replies (#856)', () => {
     const mine = await box(prose(page, 'msg-me'))
     expect(mine.width).toBeLessThan(col.width * 0.75)
     expect(Math.abs(mine.x + mine.width - (col.x + col.width - 24))).toBeLessThanOrEqual(2)
+  })
+})
+
+test.describe('composer edges (#864)', () => {
+  async function expectSameEdges(a: Locator, b: Locator) {
+    await expect.poll(async () => {
+      const x = await box(a)
+      const y = await box(b)
+      return [Math.round(x.x - y.x), Math.round(x.x + x.width - (y.x + y.width))]
+    }).toEqual([0, 0])
+  }
+
+  for (const width of [375, 1440]) {
+    test(`the composer box lines up with agent prose at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 })
+      await openRoom(page)
+      await expectSameEdges(composerBox(page), prose(page, 'msg-short'))
+      if (width === 1440) {
+        await collapseLeft(page)
+        await collapseRight(page)
+        await expect.poll(() => columnWidth(page)).toBe(896)
+        await expectSameEdges(composerBox(page), prose(page, 'msg-short'))
+      }
+    })
+  }
+
+  test('the thread composer lines up with the replies above it', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await openRoom(page)
+    await page.locator('[data-thread-trigger="msg-long"]').click()
+    const panel = page.getByTestId('thread-panel-root')
+    await expect(panel).toBeVisible()
+    await expectSameEdges(
+      composerBox(panel),
+      panel.locator('[data-message-id="msg-thread-reply"] [data-message-body]'),
+    )
   })
 })
