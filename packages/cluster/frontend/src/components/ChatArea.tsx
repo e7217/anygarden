@@ -243,7 +243,7 @@ export default function ChatArea({
 
   if (messages.length === 0) {
     return (
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center bg-[var(--color-surface)] px-6 py-4 text-center">
+      <div className="chat-column flex flex-1 flex-col items-center justify-center bg-[var(--color-surface)] px-6 py-4 text-center">
         <MessageSquare className="mb-4 h-12 w-12 text-[var(--color-foreground-subtle)] opacity-60" />
         <p className="text-lead text-[var(--color-foreground)]">{t('chat.noMessages')}</p>
         <p className="text-caption text-[var(--color-foreground-muted)] mt-1">{t('chat.startConversation')}</p>
@@ -259,7 +259,7 @@ export default function ChatArea({
         onScrollTo={handleScrollTo}
       />
       <ScrollArea className="flex-1 bg-[var(--color-surface)]" ref={scrollRootRef}>
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-4">
+        <div data-testid="chat-column" className="chat-column flex flex-col gap-5 px-6 py-4">
           {/* With a thread index, only top-level messages appear here —
               replies live in the panel. ``roots`` preserves stream order
               and keeps orphaned replies (root outside the loaded
@@ -305,7 +305,9 @@ export default function ChatArea({
                 {typingNames.join(', ')}
               </span>
               <div className="flex max-w-full items-center gap-2">
-                <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] bg-[var(--color-surface)] border border-[var(--color-border)] px-4 py-2.5 sm:max-w-[75%] md:max-w-[70%]">
+                {/* #856 — unboxed like the agent reply it stands in for, so
+                    the row does not change shape when the answer lands. */}
+                <div className="px-1 py-1">
                   <BrailleSpinner />
                 </div>
                 {/* ENG-09 — stop control per agent working in the main

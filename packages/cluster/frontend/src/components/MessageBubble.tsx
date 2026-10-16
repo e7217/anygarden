@@ -528,6 +528,7 @@ export default memo(function MessageBubble({
           {avatar}
         </div>
         <div
+          data-message-body="bubble"
           className={`max-w-[85%] rounded-[var(--radius-lg)] rounded-tr-[var(--radius-xs)] px-3 py-2 sm:max-w-[75%] md:max-w-[70%] ${
             isDeleted
               ? 'border border-dashed border-[var(--color-border)] bg-transparent'
@@ -558,25 +559,31 @@ export default memo(function MessageBubble({
   }
 
   // 다른 참여자 = 왼쪽
+  // #856 — agent replies are results (tables, code, attachments) rather
+  // than chat lines, so they drop the bubble and fill the conversation
+  // column as prose under their sender row. A box sized to its content
+  // left short and long replies at different widths and a long one
+  // capped at 80% with an empty strip beside it. #329's reason for the
+  // cap (code running edge to edge on phones) is covered by the
+  // column's own px-6 gutter. People, orphaned and deleted messages
+  // keep their bubble so human conversation still reads as chat.
+  const isAgentProse = isAgent && !isOrphan && !isDeleted
   const bubbleClass = isOrphan
     ? 'bg-[var(--color-surface)] border border-dashed border-[var(--color-border)] opacity-80'
-    : isAgent
-      ? 'bg-[var(--color-surface)] border border-[var(--color-border)]'
-      : 'bg-[var(--color-surface-alt)]'
+    : 'bg-[var(--color-surface-alt)]'
+  const bodyClass = isAgentProse
+    ? 'w-full min-w-0 px-1'
+    : `max-w-[85%] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 sm:max-w-[75%] md:max-w-[70%] ${
+      isDeleted ? 'border border-dashed border-[var(--color-border)] bg-transparent' : bubbleClass
+    }`
 
   return (
-    <div className="group flex flex-col items-start">
+    <div className={`group flex flex-col ${isAgentProse ? 'items-stretch' : 'items-start'}`}>
       <div className="flex items-center gap-1.5 mb-1 pl-1">
         {sender}
         {bookmarkBtn}
       </div>
-      {/* #329 Phase 2 — agent replies were ``w-full`` so on narrow
-          viewports their markdown/code blocks ran edge-to-edge with
-          no breathing room. Stage them like the user bubble but a
-          step wider (info-container role): full width below sm,
-          progressively tighter at sm/md/lg. Non-agent (orphan/guest)
-          uses the tighter user-side ladder. */}
-      <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'max-w-full sm:max-w-[90%] md:max-w-[85%] lg:max-w-[80%]' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${isDeleted ? 'border border-dashed border-[var(--color-border)] bg-transparent' : bubbleClass}`}>
+      <div data-message-body={isAgentProse ? 'prose' : 'bubble'} className={bodyClass}>
         {isDeleted ? deletedPlaceholder : (
           <>
             <MarkdownContent
