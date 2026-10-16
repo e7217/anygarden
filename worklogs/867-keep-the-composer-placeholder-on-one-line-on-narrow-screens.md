@@ -32,10 +32,11 @@ The `MessageInput` textarea uses `autoResize` logic that sizes the box to the ty
 
 ## Decisions
 
-- **`placeholder-shown:` + `placeholder:` Tailwind variants over a CSS class or `::placeholder`-only rule**: Chromium renders the placeholder ellipsis only when the *element* itself is `overflow: hidden; white-space: nowrap; text-overflow: ellipsis` — styling `::placeholder` alone is insufficient. Firefox and Safari need `::placeholder` styled. Both variants are required; Tailwind's JIT generates them from the colon-variant syntax with no extra config.
-- **Tailwind utility classes over a one-off CSS rule**: stays consistent with the existing `className` pattern in the component; avoids a new CSS module or `global.css` entry.
-- **Reset on focus not forced explicitly**: when the user focuses the input, `autoResize` fires and the `whitespace-nowrap` constraint naturally stops mattering (the placeholder disappears and typed text uses the pre-existing wrapping rules). Forcing a reset via `:focus` overrides would add complexity for no user-visible benefit.
-- **Assumption**: if `autoResize` logic is ever changed to pre-size the box to the placeholder width, this fix becomes unnecessary and the added classes can be removed.
+- **One line with an ellipsis, over a narrow-screen short placeholder or a taller empty box**: the bug is that the placeholder can wrap at all, so stopping the wrap fixes every width, locale and composer (room, thread, guest). A second, shorter string needs JS to pick by width plus a catalog key per locale. Growing the empty box to fit the placeholder would make the composer shrink as soon as typing starts and would break the `--footer-min-height` line shared with the sidebar footer. Both were rejected for those reasons.
+- **Both `placeholder-shown:` and `placeholder:` variants**: verified in Chromium. With `::placeholder` styled alone, the text stayed on one line but was clipped without an ellipsis. With the empty box (`:placeholder-shown`) styled alone, the live check also showed no ellipsis. Only both together drew "…". Firefox and Safari were not checked (CI e2e runs Chromium only).
+- **Focused state**: while the textarea is focused and still empty, Chromium drops the ellipsis and clips the placeholder on the same line. That is accepted: it stays on one line, and the placeholder disappears as soon as the user types.
+- **Hint loss on phones**: the tail of the English hint ("# for rooms") is hidden at 375px. Mentions are also explained by the mention hint under the composer and the mention popover.
+- **Assumption**: if `autoResize` ever sizes the box to the placeholder, revisit these classes.
 
 ## Result
 
