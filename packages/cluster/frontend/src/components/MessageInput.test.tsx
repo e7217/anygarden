@@ -36,6 +36,16 @@ vi.mock('@/lib/roomFiles', async importOriginal => ({
   uploadRoomFile,
 }))
 
+const uploadRoomArtifact = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/roomArtifacts', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/roomArtifacts')>()),
+  uploadRoomArtifact,
+}))
+
+// jsdom has no blob URLs; image chips use them for thumbnails (#873).
+URL.createObjectURL = vi.fn(() => 'blob:preview')
+URL.revokeObjectURL = vi.fn()
+
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -191,6 +201,11 @@ describe('MessageInput drop and paste attachments (#872)', () => {
 
   function renderComposer(onSend = vi.fn()) {
     uploadRoomFile.mockImplementation(async (_roomId: string, file: File) => uploadedRow(file))
+    uploadRoomArtifact.mockImplementation(async (_roomId: string, file: File) => ({
+      ...uploadedRow(file),
+      id: `art-${file.name}`,
+      produced_by_agent_id: null,
+    }))
     render(<MessageInput onSend={onSend} onTyping={vi.fn()} roomId="room-1" />)
     return { onSend, input: screen.getByPlaceholderText(placeholder) }
   }
@@ -247,8 +262,8 @@ describe('MessageInput drop and paste attachments (#872)', () => {
     const shot = new File(['png'], 'image.png', { type: 'image/png' })
     fireEvent.paste(input, { clipboardData: { types: ['Files'], files: [shot] } })
 
-    await waitFor(() => expect(uploadRoomFile).toHaveBeenCalledTimes(1))
-    const sent = uploadRoomFile.mock.calls[0][1] as File
+    await waitFor(() => expect(uploadRoomArtifact).toHaveBeenCalledTimes(1))
+    const sent = uploadRoomArtifact.mock.calls[0][1] as File
     expect(sent.name).toMatch(/^pasted-\d{8}-\d{6}\.png$/)
     expect(sent.type).toBe('image/png')
   })
@@ -256,19 +271,25 @@ describe('MessageInput drop and paste attachments (#872)', () => {
   it('reports a rejected file by name and keeps the rest', async () => {
     renderComposer()
     uploadRoomFile.mockImplementation(async (_roomId: string, file: File) => {
-      if (file.name === 'photo.png') throw new RoomFileUploadError(415, '{"detail":"mime not allowed"}')
+      if (file.name === 'tool.sh') throw new RoomFileUploadError(415, '{"detail":"mime not allowed"}')
+      if (file.name === 'huge.txt') throw new RoomFileUploadError(413, '')
       return uploadedRow(file)
     })
     const column = screen.getByTestId('composer-column')
     fireEvent.drop(column, {
       dataTransfer: {
         types: ['Files'],
-        files: [new File(['x'], 'photo.png', { type: 'image/png' }), textFile('ok.txt')],
+        files: [
+          new File(['x'], 'tool.sh', { type: 'application/x-sh' }),
+          textFile('huge.txt'),
+          textFile('ok.txt'),
+        ],
       },
     })
 
     expect(await screen.findByText('ok.txt')).toBeInTheDocument()
-    expect(screen.getByText('photo.png — file type not allowed')).toBeInTheDocument()
+    expect(screen.getByText('tool.sh — file type not allowed')).toBeInTheDocument()
+    expect(screen.getByText('huge.txt — file too large')).toBeInTheDocument()
     expect(screen.queryByText(/mime not allowed/)).not.toBeInTheDocument()
   })
 
@@ -279,5 +300,100 @@ describe('MessageInput drop and paste attachments (#872)', () => {
     fireEvent.change(picker, { target: { files: [textFile('one.txt'), textFile('two.txt')] } })
     expect(await screen.findByText('two.txt')).toBeInTheDocument()
     expect(screen.getByText('one.txt')).toBeInTheDocument()
+  })
+})
+
+describe('MessageInput image attachments (#873)', () => {
+  const placeholder = 'Type a message... (@ to mention, # for rooms)'
+
+  function renderComposer() {
+    const onSend = vi.fn()
+    uploadRoomFile.mockImplementation(async (_roomId: string, file: File) => ({
+      id: `file-${file.name}`,
+      room_id: 'room-1',
+      filename: file.name,
+      storage_name: file.name,
+      sha256: `sha-${file.name}`,
+      size_bytes: file.size,
+      mime: file.type,
+      uploaded_by: null,
+      created_at: '2026-10-16T00:00:00Z',
+    }))
+    uploadRoomArtifact.mockImplementation(async (_roomId: string, file: File) => ({
+      id: `art-${file.name}`,
+      room_id: 'room-1',
+      produced_by_agent_id: null,
+      filename: file.name,
+      sha256: `sha-${file.name}`,
+      size_bytes: file.size,
+      mime: file.type,
+      created_at: '2026-10-16T00:00:00Z',
+    }))
+    render(<MessageInput onSend={onSend} onTyping={vi.fn()} roomId="room-1" />)
+    return { onSend, input: screen.getByPlaceholderText(placeholder) }
+  }
+
+  const drop = (files: File[]) =>
+    fireEvent.drop(screen.getByTestId('composer-column'), {
+      dataTransfer: { types: ['Files'], files },
+    })
+
+  it('stores images and PDFs as artifacts and text as shared files', async () => {
+    const { onSend, input } = renderComposer()
+    drop([
+      new File(['png'], 'shot.png', { type: 'image/png' }),
+      new File(['%PDF'], 'report.pdf', { type: 'application/pdf' }),
+      new File(['hi'], 'notes.txt', { type: 'text/plain' }),
+    ])
+
+    expect(await screen.findByText('notes.txt')).toBeInTheDocument()
+    expect(uploadRoomArtifact.mock.calls.map(call => (call[1] as File).name)).toEqual(['shot.png', 'report.pdf'])
+    expect(uploadRoomFile.mock.calls.map(call => (call[1] as File).name)).toEqual(['notes.txt'])
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const [content, metadata] = onSend.mock.calls[0]
+    expect(content).toBe('📎 3 files')
+    expect(metadata.references).toEqual([
+      {
+        type: 'shared_file',
+        id: 'file-notes.txt',
+        name: 'notes.txt',
+        storage_name: 'notes.txt',
+        sha256: 'sha-notes.txt',
+        origin: 'attachment',
+      },
+      { type: 'artifact', id: 'art-shot.png' },
+      { type: 'artifact', id: 'art-report.pdf' },
+    ])
+  })
+
+  it('shows a thumbnail for an attached image', async () => {
+    renderComposer()
+    drop([new File(['png'], 'shot.png', { type: 'image/png' })])
+    expect(await screen.findByRole('img', { name: 'shot.png' })).toBeInTheDocument()
+  })
+
+  it('recognises an image by extension when the browser gives no type', async () => {
+    renderComposer()
+    drop([new File(['jpg'], 'photo.JPG', { type: '' })])
+    await waitFor(() => expect(uploadRoomArtifact).toHaveBeenCalledTimes(1))
+    expect(uploadRoomFile).not.toHaveBeenCalled()
+  })
+
+  it('refuses SVG without uploading it', async () => {
+    renderComposer()
+    drop([new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' })])
+    expect(await screen.findByText('logo.svg — file type not allowed')).toBeInTheDocument()
+    expect(uploadRoomArtifact).not.toHaveBeenCalled()
+    expect(uploadRoomFile).not.toHaveBeenCalled()
+  })
+
+  it('lets the file picker offer images and PDFs', () => {
+    renderComposer()
+    const accept = (screen.getByTestId('composer-file-input') as HTMLInputElement).accept
+    for (const type of ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']) {
+      expect(accept).toContain(type)
+    }
+    expect(accept).not.toContain('svg')
   })
 })

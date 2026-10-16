@@ -289,6 +289,31 @@ describe('MessageBubble — plain regression', () => {
     expect(screen.getByTestId('message-attachment-file')).toHaveTextContent('report.pdf')
   })
 
+  it('renders the files I attached to my own message (#873)', () => {
+    const msg = baseMsg({
+      participant_id: 'user-alice',
+      content: '📎 report.pdf',
+      metadata: {
+        references: [
+          {
+            type: 'artifact',
+            id: 'art-2',
+            room_id: 'room-b',
+            name: 'report.pdf',
+            mime: 'application/pdf',
+            size_bytes: 2048,
+            sha256: 's',
+          },
+        ],
+      },
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={true} />,
+    )
+    expect(screen.getByTestId('message-attachments')).toHaveClass('items-end')
+    expect(screen.getByTestId('message-attachment-file')).toHaveTextContent('report.pdf')
+  })
+
   it('highlights metadata-backed file references even without roomFiles', () => {
     const msg = baseMsg({
       content: 'please review $spec.md',

@@ -2,11 +2,12 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 /**
  * Composer attachments by drag-and-drop and paste (#872), in a real
- * browser so the native ``DataTransfer`` / ``ClipboardEvent`` paths run.
+ * browser so the native ``DataTransfer`` / ``ClipboardEvent`` paths run,
+ * and images attached to a person's own message (#873).
  *
  * Like ``chat-width.spec.ts`` this runs against Vite alone with REST and
- * WebSocket stubbed. The file upload stub accepts text and answers 415
- * for images, which is the server's policy until #873.
+ * WebSocket stubbed. Text goes to the shared-file stub; images go to the
+ * artifact stub.
  */
 
 const user = { id: 'e2e-user', email: 'e2e@example.com', is_admin: true }
@@ -14,12 +15,51 @@ const PROJECT_ID = 'proj-1'
 const ROOM_ID = 'room-1'
 const MY_PARTICIPANT = 'part-me'
 
+// 1×1 transparent PNG.
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  'base64',
+)
+
+const HISTORY = [
+  {
+    id: 'msg-shot',
+    room_id: ROOM_ID,
+    participant_id: MY_PARTICIPANT,
+    content: '📎 screenshot.png',
+    parent_message_id: null,
+    root_message_id: null,
+    seq: 1,
+    created_at: '2026-10-16T00:00:01Z',
+    metadata: {
+      references: [
+        {
+          type: 'artifact',
+          id: 'art-history',
+          room_id: ROOM_ID,
+          name: 'screenshot.png',
+          mime: 'image/png',
+          size_bytes: PNG.length,
+          sha256: 'sha',
+        },
+      ],
+    },
+  },
+]
+
 async function fulfillJson(route: Route, status: number, body: unknown) {
   await route.fulfill({
     status,
     contentType: 'application/json',
     body: JSON.stringify(body),
   })
+}
+
+function multipartFile(body: string) {
+  return {
+    filename: /filename="([^"]+)"/.exec(body)?.[1] ?? 'upload',
+    mime: /Content-Type: ([^\r\n]+)/.exec(body)?.[1] ?? '',
+  }
 }
 
 async function stubApi(page: Page, uploads: string[]) {
@@ -56,12 +96,30 @@ async function stubApi(page: Page, uploads: string[]) {
         ],
       })
     }
-    if (pathname === `/api/v1/rooms/${ROOM_ID}/files` && request.method() === 'POST') {
-      const body = request.postDataBuffer()?.toString('latin1') ?? ''
-      const filename = /filename="([^"]+)"/.exec(body)?.[1] ?? 'upload'
-      const mime = /Content-Type: ([^\r\n]+)/.exec(body)?.[1] ?? ''
+    if (pathname === `/api/v1/rooms/${ROOM_ID}/messages`) {
+      return fulfillJson(route, 200, HISTORY)
+    }
+    if (pathname === `/api/v1/rooms/${ROOM_ID}/artifacts/art-history`) {
+      return route.fulfill({ status: 200, contentType: 'image/png', body: PNG })
+    }
+    if (pathname === `/api/v1/rooms/${ROOM_ID}/artifacts` && request.method() === 'POST') {
+      const { filename, mime } = multipartFile(request.postDataBuffer()?.toString('latin1') ?? '')
       uploads.push(filename)
-      if (mime.startsWith('image/')) {
+      return fulfillJson(route, 201, {
+        id: `art-${uploads.length}`,
+        room_id: ROOM_ID,
+        produced_by_agent_id: null,
+        filename,
+        sha256: `sha-${uploads.length}`,
+        size_bytes: 5,
+        mime,
+        created_at: '2026-10-16T00:00:00Z',
+      })
+    }
+    if (pathname === `/api/v1/rooms/${ROOM_ID}/files` && request.method() === 'POST') {
+      const { filename, mime } = multipartFile(request.postDataBuffer()?.toString('latin1') ?? '')
+      uploads.push(filename)
+      if (!mime.startsWith('text/')) {
         return fulfillJson(route, 415, { detail: `mime not allowed: '${mime}'` })
       }
       return fulfillJson(route, 201, {
@@ -166,9 +224,18 @@ test.describe('composer attachments (#872)', () => {
     }, transfer)
 
     expect(prevented).toBe(true)
-    await expect(page.getByRole('alert')).toHaveText(/^pasted-\d{8}-\d{6}\.png — file type not allowed$/)
+    const thumbnail = page.getByRole('img', { name: /^pasted-\d{8}-\d{6}\.png$/ })
+    await expect(thumbnail).toBeVisible()
     expect(uploads).toHaveLength(1)
     expect(uploads[0]).toMatch(/^pasted-\d{8}-\d{6}\.png$/)
     await expect(input).toHaveValue('')
+  })
+
+  test("a person's image attachment renders in their message (#873)", async ({ page }) => {
+    await openRoom(page)
+    const message = page.locator('[data-message-id="msg-shot"]')
+    const image = message.getByRole('img', { name: 'screenshot.png' })
+    await expect(image).toBeVisible()
+    await expect.poll(() => image.evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(1)
   })
 })
