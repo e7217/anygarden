@@ -126,6 +126,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
         runtime_cls = RoomPiRuntime if self._engine == "pi-cli" else RoomCodexRuntime
         runtime = runtime_cls(Path(self._codex_path).absolute())
         if self._engine == "codex-cli":
+            runtime.outbox_dir = self._root / "memory" / "outbox"
             await runtime.observe_version(self._root, self._environment)
         self._runtime = runtime
         self._runtime_version = runtime.capabilities().engine_version

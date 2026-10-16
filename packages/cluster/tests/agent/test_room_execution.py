@@ -379,6 +379,24 @@ def test_local_codex_preserves_configuration_without_widening_remote(tmp_path):
     assert isolated.environment(remote)["CODEX_HOME"] == str(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("tier", "expected"),
+    [("standard", True), ("restricted", False), ("trusted", False)],
+)
+def test_room_codex_outbox_writable_only_under_workspace_write(tmp_path, tier, expected):
+    # #858 — outbox is a symlink target outside the codex workspace.
+    scope = SessionScope("node", "agent", "node", "room", None, "workspace", 0, 0)
+    invocation = RoomInvocation(
+        "one", scope, "hello", tmp_path, tmp_path, permission_level=tier
+    )
+    runtime = RoomCodexRuntime(Path("/fake/codex"))
+    runtime.outbox_dir = tmp_path / "memory" / "outbox"
+    cmd = runtime.command(invocation, None, tmp_path / "out")
+    root = f'sandbox_workspace_write.writable_roots=["{runtime.outbox_dir}"]'
+    assert (root in cmd) is expected
+    assert cmd[-3:] == ["-o", str(tmp_path / "out"), "-"]
+
+
 def test_pi_timeout_precedence(monkeypatch):
     monkeypatch.delenv("ANYGARDEN_AGENT_TURN_TIMEOUT_SEC", raising=False)
     monkeypatch.setenv("ANYGARDEN_AGENT_PI_TURN_TIMEOUT_SEC", "99")
