@@ -5,6 +5,7 @@ import { getAvatarTone, getInitials } from '@/lib/avatar'
 import { lookupLucideIcon } from '@/lib/avatar-options'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/i18n/LocaleProvider'
+import PresenceDot, { type PresenceDotProps } from '@/components/PresenceDot'
 
 export type EntityAvatarSize = 'xs' | 'sm' | 'md' | 'lg'
 export type EntityKind = 'user' | 'agent' | 'guest' | 'room'
@@ -33,6 +34,9 @@ interface EntityAvatarProps {
    *    that exists in ``LUCIDE_COMPONENTS``. Unknown names fall
    *    back to initials so stale server values don't crash the UI. */
   avatarValue?: string | null
+  /** Issue #869 — liveness shown as a dot on the top-right corner
+   *  (the engine glyph owns bottom-right). Omit to render no dot. */
+  presence?: Pick<PresenceDotProps, 'online' | 'lastSeenAt' | 'variant' | 'agentState'>
   className?: string
   'data-testid'?: string
 }
@@ -51,6 +55,14 @@ const GLYPH_PX: Record<EntityAvatarSize, number> = {
   sm: 11,
   md: 14,
   lg: 16,
+}
+
+// Presence-dot diameter for the top-right overlay (#869).
+const PRESENCE_PX: Record<EntityAvatarSize, number> = {
+  xs: 8,
+  sm: 8,
+  md: 10,
+  lg: 12,
 }
 
 const INITIAL_CLASS: Record<EntityAvatarSize, string> = {
@@ -90,9 +102,10 @@ const LUCIDE_PX: Record<EntityAvatarSize, number> = {
  * - Guests get a dashed border rather than a distinct tone so the
  *   "tentative / anonymous" affordance is readable independent of
  *   the hash-assigned color.
- * - Presence is intentionally not baked in; callers that already
- *   render ``<PresenceDot/>`` simply place it adjacent to the avatar
- *   to avoid double-signaling.
+ * - Presence (#869) is an opt-in ``presence`` overlay on the top-right
+ *   corner, so callers no longer spend row width on a separate dot
+ *   between avatar and name. The dot is haloed with ``--presence-ring``;
+ *   callers set that var to the background the avatar sits on.
  *
  * Issue #101 — body render order (falls through on miss):
  *   imageUrl → emoji → lucide → initials.
@@ -109,6 +122,7 @@ export function EntityAvatar({
   imageUrl,
   avatarKind,
   avatarValue,
+  presence,
   className,
   'data-testid': testId,
 }: EntityAvatarProps) {
@@ -194,6 +208,15 @@ export function EntityAvatar({
         >
           <EngineGlyph engine={engine} size={glyphPx} />
         </span>
+      )}
+      {presence && (
+        <PresenceDot
+          {...presence}
+          ring
+          size={PRESENCE_PX[size]}
+          className="absolute -right-0.5 -top-0.5"
+          data-testid="entity-avatar-presence"
+        />
       )}
     </span>
   )

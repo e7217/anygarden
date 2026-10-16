@@ -34,6 +34,12 @@ export interface PresenceDotProps {
    *  "unreachable" when the hosting machine is offline). Only
    *  read when ``variant === 'agent'``. */
   agentState?: string
+  /** Overlay mode (#869): halo the dot with ``--presence-ring`` so it
+   *  reads as cut out of the surface it sits on (callers set the var
+   *  to their row background), and draw offline as a hollow ring so
+   *  state is not carried by color alone. */
+  ring?: boolean
+  'data-testid'?: string
 }
 
 const agentStateKeys = {
@@ -68,6 +74,8 @@ export default function PresenceDot({
   className = '',
   variant = 'user',
   agentState,
+  ring = false,
+  'data-testid': testId,
 }: PresenceDotProps) {
   const { locale, t } = useLocale()
   const offline = t('common.offline')
@@ -82,9 +90,17 @@ export default function PresenceDot({
       })}`
 
   // Semantic colors follow the active light or dark theme.
-  const bg = online
-    ? 'var(--color-status-online, #5b9e6d)'
-    : 'var(--color-foreground-subtle)'
+  const onlineBg = 'var(--color-status-online, #5b9e6d)'
+  const offlineBg = 'var(--color-foreground-subtle)'
+  const ringColor = 'var(--presence-ring, var(--color-surface))'
+  const bg = online ? onlineBg : ring ? ringColor : offlineBg
+  const boxShadow = ring
+    ? online
+      ? `0 0 0 2px ${ringColor}`
+      : `0 0 0 2px ${ringColor}, inset 0 0 0 1.5px ${offlineBg}`
+    // Whisper border (DESIGN.md §4) so the offline dot still
+    // reads against a white participant row.
+    : '0 0 0 1px color-mix(in srgb, var(--color-foreground) 5%, transparent)'
 
   return (
     <span
@@ -92,13 +108,13 @@ export default function PresenceDot({
       aria-label={title}
       title={title}
       className={`inline-block rounded-full ${className}`}
+      data-presence={online ? 'online' : 'offline'}
+      data-testid={testId}
       style={{
         width: size,
         height: size,
         background: bg,
-        // Whisper border (DESIGN.md §4) so the offline dot still
-        // reads against a white participant row.
-        boxShadow: '0 0 0 1px color-mix(in srgb, var(--color-foreground) 5%, transparent)',
+        boxShadow,
         flexShrink: 0,
       }}
     />

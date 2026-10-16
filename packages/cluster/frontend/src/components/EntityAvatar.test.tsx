@@ -207,4 +207,42 @@ describe('EntityAvatar', () => {
     expect(getByTestId('entity-avatar-emoji')).toHaveTextContent('⚡')
     expect(getByTestId('entity-avatar-engine-glyph')).toBeInTheDocument()
   })
+
+  describe('presence overlay (#869)', () => {
+    it('renders no presence dot unless presence is supplied', () => {
+      const { queryByRole } = render(
+        <EntityAvatar id="a-1" name="Agent" kind="agent" engine="claude-code" />,
+      )
+      expect(queryByRole('status')).toBeNull()
+    })
+
+    it('pins the dot to the top-right corner inside the avatar', () => {
+      const { getByTestId } = render(
+        <EntityAvatar
+          id="a-1"
+          name="Agent"
+          kind="agent"
+          engine="claude-code"
+          size="xs"
+          presence={{ online: true, variant: 'agent' }}
+          data-testid="avatar"
+        />,
+      )
+      const avatar = getByTestId('avatar')
+      const dot = getByTestId('entity-avatar-presence')
+      expect(avatar).toContainElement(dot)
+      expect(dot).toHaveClass('absolute', '-right-0.5', '-top-0.5')
+      expect(dot).toHaveAttribute('role', 'status')
+      expect(dot.style.width).toBe('8px')
+      // The engine glyph keeps the bottom-right corner.
+      expect(getByTestId('entity-avatar-engine-glyph')).toBeInTheDocument()
+    })
+
+    it('scales the dot with the avatar size', () => {
+      const { getByTestId } = render(
+        <EntityAvatar id="u-1" name="User" kind="user" size="lg" presence={{ online: false }} />,
+      )
+      expect(getByTestId('entity-avatar-presence').style.width).toBe('12px')
+    })
+  })
 })

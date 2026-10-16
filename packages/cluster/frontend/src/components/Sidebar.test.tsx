@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act, within } from '@testing-library/react'
 import { requestAgentAction } from '@/lib/agentActions'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
@@ -139,7 +139,16 @@ vi.mock('@/hooks/useSidebarLayout', () => ({
 // — the suite is focused on layout/props for the collapse feature,
 // avatar rendering is covered by EntityAvatar.test.tsx.
 vi.mock('@/components/EntityAvatar', () => ({
-  EntityAvatar: () => null,
+  // Surface only the presence wiring (#869); the avatar body is
+  // covered by EntityAvatar.test.tsx.
+  EntityAvatar: ({ presence }: { presence?: { online: boolean; agentState?: string } }) =>
+    presence ? (
+      <span
+        data-testid="avatar-presence"
+        data-online={String(presence.online)}
+        data-state={presence.agentState}
+      />
+    ) : null,
 }))
 
 beforeEach(() => {
@@ -446,6 +455,33 @@ describe('Sidebar — update indicators (#385)', () => {
 
     expect(screen.getByTestId('sidebar-agent-a1')).toBeInTheDocument()
     expect(screen.getByLabelText('Unread updates')).toBeInTheDocument()
+  })
+
+  it('[#869] overlays agent presence on the avatar instead of a dot beside the name', () => {
+    authMockState.isAdmin = true
+    agentsMockState.agents = [
+      {
+        id: 'a1',
+        name: 'agent01',
+        engine: 'codex-cli',
+        desired_state: 'running',
+        actual_state: 'running',
+        restart_policy: 'never',
+        machine_online: true,
+      },
+    ]
+    roomsMockState.agentDMs = [
+      { id: 'dm-a1', name: 'DM: agent01', project_id: null, is_dm: true, representative_agent_id: 'a1' },
+    ]
+
+    renderSidebar()
+
+    const row = screen.getByTestId('sidebar-dm-dm-a1')
+    const presence = within(row).getByTestId('avatar-presence')
+    expect(presence).toHaveAttribute('data-online', 'true')
+    expect(presence).toHaveAttribute('data-state', 'running')
+    // No standalone PresenceDot between the avatar and the name.
+    expect(within(row).queryAllByRole('status')).toHaveLength(0)
   })
 
   it('[NODE-15] marks only the agent placed on a remote machine', () => {

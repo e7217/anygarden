@@ -1227,10 +1227,12 @@ function AgentDMListAdmin({
         return (
           <div key={agent.id} className="flex flex-col">
             <div
+              // --presence-ring tracks the row fill so the avatar's
+              // presence dot stays cut out of it on hover/selection (#869).
               className={`group relative flex w-full items-center rounded-[var(--radius-sm)] transition-colors ${
                 soloIsSelected
-                  ? 'bg-[var(--color-surface)] shadow-whisper'
-                  : 'hover:bg-[var(--color-surface-hover)]'
+                  ? 'bg-[var(--color-surface)] shadow-whisper [--presence-ring:var(--color-surface)]'
+                  : '[--presence-ring:var(--color-surface-alt)] hover:bg-[var(--color-surface-hover)] hover:[--presence-ring:var(--color-surface-hover)]'
               }`}
             >
               <button
@@ -1266,11 +1268,7 @@ function AgentDMListAdmin({
                     (agent.avatar_kind as AvatarKind | null | undefined) ?? null
                   }
                   avatarValue={agent.avatar_value ?? null}
-                />
-                <PresenceDot
-                  variant="agent"
-                  online={online}
-                  agentState={displayState}
+                  presence={{ variant: 'agent', online, agentState: displayState }}
                 />
                 <span className="min-w-0 truncate" title={agent.name}>
                   {agent.name}

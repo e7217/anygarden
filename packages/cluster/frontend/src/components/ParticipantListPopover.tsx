@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { X } from 'lucide-react'
 import type { Participant } from '@/pages/ChatPage'
-import PresenceDot from '@/components/PresenceDot'
 import { EntityAvatar, type AvatarKind, type EntityKind } from '@/components/EntityAvatar'
 import type { PresenceMap } from '@/hooks/useParticipantPresence'
 import { useLocale } from '@/i18n/LocaleProvider'
@@ -11,7 +10,7 @@ interface Props {
   participants: Record<string, Participant>
   /**
    * Realtime presence map from ``useParticipantPresence``. When
-   * present, each row renders a ``<PresenceDot>`` that updates
+   * present, each row's avatar overlays a presence dot that updates
    * without re-fetching the room. Optional so the popover still
    * works for callers that haven't wired presence yet (e.g. the
    * guest room view).
@@ -96,7 +95,7 @@ export default function ParticipantListPopover({
     <div
       ref={rootRef}
       className={
-        'absolute top-12 z-40 w-64 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg ' +
+        'absolute top-12 z-40 w-64 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg [--presence-ring:var(--color-surface-elevated)] ' +
         (anchorRight ? 'right-4' : 'left-4')
       }
       // ``role="dialog"`` would contract us into the APG-specified
@@ -145,14 +144,10 @@ export default function ParticipantListPopover({
                     : null
                 }
                 avatarValue={avatarKind === 'agent' ? (p.avatar_value ?? null) : null}
-              />
-              <PresenceDot
-                online={
-                  presence?.[p.id]?.online ?? Boolean(p.online)
-                }
-                lastSeenAt={
-                  presence?.[p.id]?.lastSeenAt ?? p.last_seen_at ?? null
-                }
+                presence={{
+                  online: presence?.[p.id]?.online ?? Boolean(p.online),
+                  lastSeenAt: presence?.[p.id]?.lastSeenAt ?? p.last_seen_at ?? null,
+                }}
               />
               {/* Stack name + description in a column so the
                   description (when present) reads as a secondary line
