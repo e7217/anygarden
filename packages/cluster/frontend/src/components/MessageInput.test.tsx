@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import MessageInput from './MessageInput'
-import type { RoomSharedFile } from '@/lib/roomFiles'
+import { RoomFileUploadError, type RoomSharedFile } from '@/lib/roomFiles'
 
 const files: RoomSharedFile[] = [
   {
@@ -28,6 +28,12 @@ vi.mock('@/hooks/useRoomFiles', () => ({
     upload: vi.fn(),
     remove: vi.fn(),
   }),
+}))
+
+const uploadRoomFile = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/roomFiles', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/roomFiles')>()),
+  uploadRoomFile,
 }))
 
 afterEach(() => {
@@ -163,5 +169,115 @@ describe('MessageInput @everyone and mention hint (#739)', () => {
     expect(
       screen.queryByText('Agents reply only when mentioned. Use @name or @everyone.'),
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('MessageInput drop and paste attachments (#872)', () => {
+  const placeholder = 'Type a message... (@ to mention, # for rooms)'
+
+  function uploadedRow(file: File): RoomSharedFile {
+    return {
+      id: `id-${file.name}`,
+      room_id: 'room-1',
+      filename: file.name,
+      storage_name: file.name,
+      sha256: `sha-${file.name}`,
+      size_bytes: file.size,
+      mime: file.type,
+      uploaded_by: null,
+      created_at: '2026-10-16T00:00:00Z',
+    }
+  }
+
+  function renderComposer(onSend = vi.fn()) {
+    uploadRoomFile.mockImplementation(async (_roomId: string, file: File) => uploadedRow(file))
+    render(<MessageInput onSend={onSend} onTyping={vi.fn()} roomId="room-1" />)
+    return { onSend, input: screen.getByPlaceholderText(placeholder) }
+  }
+
+  const textFile = (name: string) => new File(['hello'], name, { type: 'text/plain' })
+
+  it('uploads every dropped file and lists each as an attachment', async () => {
+    const { onSend, input } = renderComposer()
+    const column = screen.getByTestId('composer-column')
+    const dropped = [textFile('a.txt'), textFile('b.txt')]
+
+    fireEvent.dragEnter(column, { dataTransfer: { types: ['Files'], files: dropped } })
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
+    fireEvent.drop(column, { dataTransfer: { types: ['Files'], files: dropped } })
+
+    expect(await screen.findByText('b.txt')).toBeInTheDocument()
+    expect(screen.getByText('a.txt')).toBeInTheDocument()
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+    expect(uploadRoomFile).toHaveBeenCalledTimes(2)
+    expect(uploadRoomFile.mock.calls.map(call => (call[1] as File).name)).toEqual(['a.txt', 'b.txt'])
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const metadata = onSend.mock.calls[0][1] as { references: { id: string }[] }
+    expect(metadata.references.map(ref => ref.id)).toEqual(['id-a.txt', 'id-b.txt'])
+  })
+
+  it('ignores a drag that carries no files', () => {
+    renderComposer()
+    const column = screen.getByTestId('composer-column')
+    fireEvent.dragEnter(column, { dataTransfer: { types: ['text/plain'], files: [] } })
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+  })
+
+  it('uploads a pasted file instead of pasting it as text', async () => {
+    const { input } = renderComposer()
+    const notPrevented = fireEvent.paste(input, {
+      clipboardData: { types: ['Files'], files: [textFile('notes.txt')] },
+    })
+    expect(notPrevented).toBe(false)
+    expect(await screen.findByText('notes.txt')).toBeInTheDocument()
+  })
+
+  it('leaves a text-only paste to the textarea', () => {
+    const { input } = renderComposer()
+    const notPrevented = fireEvent.paste(input, {
+      clipboardData: { types: ['text/plain'], files: [] },
+    })
+    expect(notPrevented).toBe(true)
+    expect(uploadRoomFile).not.toHaveBeenCalled()
+  })
+
+  it('names a pasted screenshot after the moment it was pasted', async () => {
+    const { input } = renderComposer()
+    const shot = new File(['png'], 'image.png', { type: 'image/png' })
+    fireEvent.paste(input, { clipboardData: { types: ['Files'], files: [shot] } })
+
+    await waitFor(() => expect(uploadRoomFile).toHaveBeenCalledTimes(1))
+    const sent = uploadRoomFile.mock.calls[0][1] as File
+    expect(sent.name).toMatch(/^pasted-\d{8}-\d{6}\.png$/)
+    expect(sent.type).toBe('image/png')
+  })
+
+  it('reports a rejected file by name and keeps the rest', async () => {
+    renderComposer()
+    uploadRoomFile.mockImplementation(async (_roomId: string, file: File) => {
+      if (file.name === 'photo.png') throw new RoomFileUploadError(415, '{"detail":"mime not allowed"}')
+      return uploadedRow(file)
+    })
+    const column = screen.getByTestId('composer-column')
+    fireEvent.drop(column, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['x'], 'photo.png', { type: 'image/png' }), textFile('ok.txt')],
+      },
+    })
+
+    expect(await screen.findByText('ok.txt')).toBeInTheDocument()
+    expect(screen.getByText('photo.png — file type not allowed')).toBeInTheDocument()
+    expect(screen.queryByText(/mime not allowed/)).not.toBeInTheDocument()
+  })
+
+  it('attaches several files picked at once', async () => {
+    renderComposer()
+    const picker = screen.getByTestId('composer-file-input') as HTMLInputElement
+    expect(picker.multiple).toBe(true)
+    fireEvent.change(picker, { target: { files: [textFile('one.txt'), textFile('two.txt')] } })
+    expect(await screen.findByText('two.txt')).toBeInTheDocument()
+    expect(screen.getByText('one.txt')).toBeInTheDocument()
   })
 })
