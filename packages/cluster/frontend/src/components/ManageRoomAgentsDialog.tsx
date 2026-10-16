@@ -5,8 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
-import { Bot, Plus, Minus, Loader2 } from 'lucide-react'
-import PresenceDot from '@/components/PresenceDot'
+import { Plus, Minus, Loader2 } from 'lucide-react'
+import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import { useLocale } from '@/i18n/LocaleProvider'
 
@@ -125,14 +125,18 @@ export default function ManageRoomAgentsDialog({
                     return (
                       <li
                         key={agent.id}
-                        className="flex items-center justify-between bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
+                        className="flex items-center justify-between bg-[var(--color-surface-alt)] [--presence-ring:var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                          <PresenceDot
-                            variant="agent"
-                            online={online}
-                            agentState={localizedState(displayState)}
+                          <EntityAvatar
+                            id={agent.id}
+                            name={agent.name}
+                            kind="agent"
+                            engine={agent.engine}
+                            size="xs"
+                            avatarKind={(agent.avatar_kind as AvatarKind | null | undefined) ?? null}
+                            avatarValue={agent.avatar_value ?? null}
+                            presence={{ variant: 'agent', online, agentState: localizedState(displayState) }}
                           />
                           <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
                           <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
@@ -180,14 +184,18 @@ export default function ManageRoomAgentsDialog({
                     return (
                       <li
                         key={agent.id}
-                        className="flex items-center justify-between bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
+                        className="flex items-center justify-between bg-[var(--color-surface-alt)] [--presence-ring:var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                          <PresenceDot
-                            variant="agent"
-                            online={online}
-                            agentState={localizedState(displayState)}
+                          <EntityAvatar
+                            id={agent.id}
+                            name={agent.name}
+                            kind="agent"
+                            engine={agent.engine}
+                            size="xs"
+                            avatarKind={(agent.avatar_kind as AvatarKind | null | undefined) ?? null}
+                            avatarValue={agent.avatar_value ?? null}
+                            presence={{ variant: 'agent', online, agentState: localizedState(displayState) }}
                           />
                           <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
                           <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
