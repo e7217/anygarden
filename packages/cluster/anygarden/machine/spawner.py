@@ -257,7 +257,9 @@ class Spawner:
     def _compose_agents_md(msg: SpawnManifest) -> str:
         """Return the AGENTS.md body rendered from the manifest.
 
-        Base content is ``msg.agents_md`` verbatim. If the manifest
+        Base content is ``msg.agents_md`` verbatim (omitted when the
+        admin gave no instructions — #857: the platform sections below
+        are still needed, so AGENTS.md is always written). If the manifest
         contains any ``skills/<name>/SKILL.md`` files, their bodies
         are auto-inlined into a trailing ``## Available skills``
         section sorted by path for deterministic output.
@@ -275,8 +277,8 @@ class Spawner:
         engines (Claude Code, gemini-cli) that DO discover them
         natively.
         """
-        base = msg.agents_md or ""
-        sections: list[str] = [base.rstrip()]
+        base = (msg.agents_md or "").rstrip()
+        sections: list[str] = [base] if base else []
 
         # ── Skills auto-inline ──────────────────────────────────
         skill_paths = sorted(
@@ -402,7 +404,7 @@ class Spawner:
         # Only add trailing newline if we appended extra sections.
         if len(sections) > 1:
             sections.append("")
-        return "\n".join(sections)
+        return "\n".join(sections).lstrip("\n")
 
     @staticmethod
     def _remove_tree_entry(path: Path) -> None:
@@ -588,7 +590,8 @@ class Spawner:
 
         Builds ``<agent_dirs_root>/<agent_id>/`` so that after this call:
 
-        - ``AGENTS.md`` mirrors ``msg.agents_md`` (absent if ``None``)
+        - ``AGENTS.md`` holds ``msg.agents_md`` plus the platform
+          sections; it is written even when ``agents_md`` is ``None``
         - every entry in ``msg.files`` exists at that relative path
           with mode 0o600
         - engine-convention symlinks (``CLAUDE.md`` → ``AGENTS.md``,
@@ -661,9 +664,8 @@ class Spawner:
         # carrying every skills/*/SKILL.md body. See the helper's
         # docstring for why codex needs this and why claude-code /
         # gemini-cli tolerate the extra content.
-        if msg.agents_md is not None:
-            agents_md = agent_root / "AGENTS.md"
-            safe_write_text(agents_md, self._compose_agents_md(msg), mode=0o600)
+        agents_md = agent_root / "AGENTS.md"
+        safe_write_text(agents_md, self._compose_agents_md(msg), mode=0o600)
 
         # --- Write memory/notes.md (#237) ------------------------------
         #
@@ -723,14 +725,12 @@ class Spawner:
         self._seed_manifest_skill_files(agent_root, msg.files)
 
         # --- Synthetic symlinks (engine convention aliases) -----------
-        # CLAUDE.md → AGENTS.md (Claude Code auto-discovers CLAUDE.md)
-        # Only link when AGENTS.md actually exists; otherwise a dead
-        # symlink would confuse the engine.
-        if msg.agents_md is not None:
-            claude_md = agent_root / "CLAUDE.md"
-            if claude_md.exists() or claude_md.is_symlink():
-                claude_md.unlink()
-            claude_md.symlink_to("AGENTS.md")
+        # CLAUDE.md → AGENTS.md (Claude Code auto-discovers CLAUDE.md).
+        # AGENTS.md always exists (#857), so the link is never dead.
+        claude_md = agent_root / "CLAUDE.md"
+        if claude_md.exists() or claude_md.is_symlink():
+            claude_md.unlink()
+        claude_md.symlink_to("AGENTS.md")
 
         # .agents/skills and .claude/skills → ../skills (so Gemini CLI
         # and Claude Code both find the canonical skill directory). The
@@ -817,15 +817,11 @@ class Spawner:
                 mode=0o600,
             )
 
-            composed = (
-                self._compose_agents_md(msg) if msg.agents_md is not None else None
-            )
             for slot_name in ("AGENTS.md", "CLAUDE.md"):
                 slot = workspace / slot_name
                 if slot.is_symlink() or slot.exists():
                     self._remove_tree_entry(slot)
-                if composed is not None:
-                    slot.symlink_to(f"../{slot_name}")
+                slot.symlink_to(f"../{slot_name}")
 
             ws_memory = workspace / "memory"
             ws_memory.mkdir(parents=True, exist_ok=True)
