@@ -64,13 +64,14 @@ async def env():
     await engine.dispose()
 
 
-async def _canonicalize(env, refs, *, sender_agent_id):
+async def _canonicalize(env, refs, *, sender_agent_id, allow_room_artifacts=False):
     return await canonicalize_message_references(
         env["db"],
         room_id=env["room_id"],
         metadata={"references": refs},
         allow_shared_files=True,
         sender_agent_id=sender_agent_id,
+        allow_room_artifacts=allow_room_artifacts,
     )
 
 
@@ -151,3 +152,52 @@ async def test_unknown_reference_type_is_dropped(env) -> None:
         sender_agent_id=env["author_id"],
     )
     assert [ref["type"] for ref in out["references"]] == ["artifact"]
+
+
+# #873 — people attach images through room artifacts too. An artifact is
+# already visible to every room participant, so a person may reference any
+# artifact of the same room (including one an agent produced first: uploads
+# dedupe on bytes). Agents keep the stricter own-artifacts-only rule.
+
+
+@pytest.mark.asyncio
+async def test_person_references_same_room_artifact(env) -> None:
+    out = await _canonicalize(
+        env,
+        [{"type": "artifact", "id": env["artifact_id"], "name": "spoof.exe"}],
+        sender_agent_id=None,
+        allow_room_artifacts=True,
+    )
+    assert out["references"] == [
+        {
+            "type": "artifact",
+            "id": env["artifact_id"],
+            "room_id": env["room_id"],
+            "name": "chart.png",
+            "mime": "image/png",
+            "size_bytes": 42,
+            "sha256": "a" * 64,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_person_cannot_reference_another_rooms_artifact(env) -> None:
+    with pytest.raises(InvalidSharedFileReference):
+        await _canonicalize(
+            env,
+            [{"type": "artifact", "id": env["foreign_id"]}],
+            sender_agent_id=None,
+            allow_room_artifacts=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_rule_ignores_room_artifact_flag(env) -> None:
+    with pytest.raises(InvalidSharedFileReference):
+        await _canonicalize(
+            env,
+            [{"type": "artifact", "id": env["artifact_id"]}],
+            sender_agent_id=env["peer_id"],
+            allow_room_artifacts=True,
+        )

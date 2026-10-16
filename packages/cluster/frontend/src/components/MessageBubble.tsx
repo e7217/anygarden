@@ -544,6 +544,7 @@ export default memo(function MessageBubble({
                 fileReferenceCandidates={fileReferenceCandidates}
               />
               <MessageReferences metadata={message.metadata} align="end" />
+              <MessageAttachments metadata={message.metadata} align="end" />
             </>
           )}
         </div>

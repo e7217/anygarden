@@ -165,14 +165,24 @@ function DialogDownloadButton({ attachment }: { attachment: ArtifactReference })
 
 /** #854 — files an agent attached to its reply: images inline (click to
  * enlarge), other types as download cards, plus a note for each file the
- * agent wrote but could not attach. */
-export default function MessageAttachments({ metadata }: { metadata?: Record<string, unknown> }) {
+ * agent wrote but could not attach. #873 — also a person's own images,
+ * aligned to the end of their right-hand bubble. */
+export default function MessageAttachments({
+  metadata,
+  align = 'start',
+}: {
+  metadata?: Record<string, unknown>
+  align?: 'start' | 'end'
+}) {
   const { t } = useLocale()
   const attachments = extractArtifactReferences(metadata)
   const undelivered = extractUndeliveredAttachments(metadata)
   if (attachments.length === 0 && undelivered.length === 0) return null
   return (
-    <div className="mt-2 flex flex-col items-start gap-2" data-testid="message-attachments">
+    <div
+      className={`mt-2 flex flex-col gap-2 ${align === 'end' ? 'items-end' : 'items-start'}`}
+      data-testid="message-attachments"
+    >
       {attachments.map(attachment =>
         isImageMime(attachment.mime)
           ? <ImageAttachment key={attachment.id} attachment={attachment} />

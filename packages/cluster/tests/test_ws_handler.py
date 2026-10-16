@@ -16,7 +16,16 @@ from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, Base, Participant, Project, Room, RoomSharedFile, User
+from anygarden.db.models import (
+    Agent,
+    Base,
+    Participant,
+    Project,
+    Room,
+    RoomArtifact,
+    RoomSharedFile,
+    User,
+)
 from anygarden.db.repository import append_message
 from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import (
@@ -550,6 +559,60 @@ class TestWSEndpoint:
                 "storage_name": "spec.md",
                 "sha256": "real-sha",
                 "origin": "inline",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_ws_keeps_a_persons_image_attachment(self, ws_env) -> None:
+        """#873 — a pasted screenshot is a room artifact the person
+        references from their own message."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+
+        async with ws_env["session_factory"]() as db:
+            db.add(
+                RoomArtifact(
+                    id="art-1",
+                    room_id=room_id,
+                    produced_by_agent_id=None,
+                    filename="pasted.png",
+                    storage_path=f"{room_id}/art-1",
+                    sha256="png-sha",
+                    size_bytes=99,
+                    mime="image/png",
+                )
+            )
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "welcome"
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": "📎 pasted.png",
+                    "metadata": {
+                        "references": [
+                            {"type": "artifact", "id": "art-1", "name": "spoof.exe"}
+                        ]
+                    },
+                }))
+                msg = json.loads(ws.receive_text())
+
+        assert msg["metadata"]["references"] == [
+            {
+                "type": "artifact",
+                "id": "art-1",
+                "room_id": room_id,
+                "name": "pasted.png",
+                "mime": "image/png",
+                "size_bytes": 99,
+                "sha256": "png-sha",
             }
         ]
 

@@ -37,6 +37,7 @@ async def canonicalize_message_references(
     metadata: dict[str, Any],
     allow_shared_files: bool,
     sender_agent_id: str | None = None,
+    allow_room_artifacts: bool = False,
 ) -> dict[str, Any]:
     """Validate and canonicalize ``metadata.references``.
 
@@ -47,8 +48,13 @@ async def canonicalize_message_references(
     - ``shared_file`` — a user upload, rebuilt from ``room_shared_files``
       (including the ``memory/shared/<room_id>/<storage_name>`` path).
     - ``artifact`` — a file an agent attached to its own reply (#854),
-      rebuilt from ``room_artifacts``. Only the producing agent may
-      reference it; artifact references from anyone else are dropped.
+      rebuilt from ``room_artifacts``. An agent may reference only the
+      artifacts it produced. A person may reference any artifact of the
+      room when ``allow_room_artifacts`` is set (#873): people attach
+      images through artifacts, every participant can already see them,
+      and uploads dedupe on bytes, so "their own" would reject a picture
+      an agent happened to store first. Otherwise artifact references
+      are dropped.
 
     Reference types outside these two are dropped.
     """
@@ -63,7 +69,11 @@ async def canonicalize_message_references(
     shared_ids = _reference_ids(raw, "shared_file")
     if shared_ids and not allow_shared_files:
         raise InvalidSharedFileReference("shared file references are not allowed")
-    artifact_ids = _reference_ids(raw, "artifact") if sender_agent_id else []
+    artifact_ids = (
+        _reference_ids(raw, "artifact")
+        if sender_agent_id or allow_room_artifacts
+        else []
+    )
 
     shared_by_id: dict[str, RoomSharedFile] = {}
     if shared_ids:
@@ -81,15 +91,13 @@ async def canonicalize_message_references(
 
     artifact_by_id: dict[str, RoomArtifact] = {}
     if artifact_ids:
-        rows = (
-            await db.execute(
-                select(RoomArtifact).where(
-                    RoomArtifact.room_id == room_id,
-                    RoomArtifact.id.in_(artifact_ids),
-                    RoomArtifact.produced_by_agent_id == sender_agent_id,
-                )
-            )
-        ).scalars().all()
+        query = select(RoomArtifact).where(
+            RoomArtifact.room_id == room_id,
+            RoomArtifact.id.in_(artifact_ids),
+        )
+        if sender_agent_id:
+            query = query.where(RoomArtifact.produced_by_agent_id == sender_agent_id)
+        rows = (await db.execute(query)).scalars().all()
         artifact_by_id = {row.id: row for row in rows}
         if any(file_id not in artifact_by_id for file_id in artifact_ids):
             raise InvalidSharedFileReference("artifact reference not found")

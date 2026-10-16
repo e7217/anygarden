@@ -4,6 +4,8 @@
  * by a browser blob URL for previews or downloads.
  */
 
+import { RoomFileUploadError } from '@/lib/roomFiles'
+
 export interface RoomArtifact {
   id: string
   room_id: string
@@ -28,6 +30,25 @@ export function isImageMime(mime: string): boolean {
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('anygarden_token')
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** #873 — attach a binary file (image, PDF) to the sender's own message.
+ * Bytes already in the room come back as the existing artifact. */
+export async function uploadRoomArtifact(
+  roomId: string,
+  file: File,
+): Promise<RoomArtifact> {
+  const fd = new FormData()
+  fd.append('upload', file)
+  const resp = await fetch(`/api/v1/rooms/${roomId}/artifacts`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: fd,
+  })
+  if (!resp.ok) {
+    throw new RoomFileUploadError(resp.status, await resp.text())
+  }
+  return resp.json()
 }
 
 export async function listRoomArtifacts(

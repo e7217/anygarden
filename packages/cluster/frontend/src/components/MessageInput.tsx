@@ -4,6 +4,7 @@ import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
 import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
 import { readDraft, writeDraft, clearDraft } from '@/lib/composerDrafts'
 import { RoomFileUploadError, uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
+import { uploadRoomArtifact } from '@/lib/roomArtifacts'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { parseSlashCommand } from '@/lib/slashCommands'
 import { apiFetch } from '@/lib/api'
@@ -50,11 +51,44 @@ const EVERYONE_OPTION_ID = '__everyone__'
 const EVERYONE_PATTERN = /(?<!\w)@everyone(?![\w-])/
 const USER_TOKEN_PATTERN = /<@user:[^>]+>/
 
-interface Attachment {
-  id: string
-  filename: string
-  storage_name: string
-  sha256?: string
+/** A file uploaded since the last send. Text goes to the room's shared
+ * files (#246); images and PDFs are room artifacts (#873), shown with a
+ * local thumbnail until the message goes out. */
+type Attachment =
+  | { kind: 'shared_file'; id: string; filename: string; storage_name: string; sha256?: string }
+  | { kind: 'artifact'; id: string; filename: string; previewUrl?: string }
+
+/** #873 — binaries that travel as room artifacts. SVG is left out on
+ * purpose: a person's SVG can carry script once downloaded and opened. */
+const ARTIFACT_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  pdf: 'application/pdf',
+}
+const ARTIFACT_MIMES = new Set(Object.values(ARTIFACT_TYPES))
+const TEXT_ACCEPT = '.txt,.md,.markdown,.json,.yaml,.yml,.csv,.py,.html,.xml,text/*,application/json,application/yaml,application/xml'
+const FILE_ACCEPT = [
+  TEXT_ACCEPT,
+  ...Object.keys(ARTIFACT_TYPES).map(ext => `.${ext}`),
+  ...ARTIFACT_MIMES,
+].join(',')
+
+/** Where a file goes: ``artifact``, ``shared_file``, or ``null`` when no
+ * store takes it. Browsers sometimes leave ``type`` empty, so the
+ * extension decides then. */
+function attachmentStore(file: File): 'artifact' | 'shared_file' | null {
+  const ext = /\.(\w+)$/.exec(file.name)?.[1].toLowerCase() ?? ''
+  const mime = file.type || ARTIFACT_TYPES[ext] || ''
+  if (ARTIFACT_MIMES.has(mime)) return 'artifact'
+  if (mime === 'image/svg+xml' || ext === 'svg') return null
+  return 'shared_file'
+}
+
+function releasePreview(attachment: Attachment) {
+  if (attachment.kind === 'artifact' && attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl)
 }
 
 /** A file that didn't make it into the draft, shown by name (#872). */
@@ -172,6 +206,21 @@ export default function MessageInput({
   // server-side at this point, we just carry their ids to include
   // in the next outbound message's ``references`` metadata.
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  // Thumbnails are blob URLs; release each one when its chip goes away
+  // and whatever is left when the composer unmounts.
+  const attachmentsRef = useRef(attachments)
+  attachmentsRef.current = attachments
+  useEffect(() => () => attachmentsRef.current.forEach(releasePreview), [])
+  const addAttachment = (next: Attachment) => {
+    setAttachments(prev => {
+      // Uploads dedupe on bytes, so the same file twice is one attachment.
+      if (prev.some(a => a.kind === next.kind && a.id === next.id)) {
+        releasePreview(next)
+        return prev
+      }
+      return [...prev, next]
+    })
+  }
   const [pendingUploads, setPendingUploads] = useState(0)
   const uploading = pendingUploads > 0
   const [uploadFailures, setUploadFailures] = useState<UploadFailure[]>([])
@@ -356,18 +405,22 @@ export default function MessageInput({
         : `📎 ${t('chat.filesCount', { count: attachments.length })}`
     }
     const mentions = extractMentionsMetadata(content)
-    const references = dedupeSharedFileReferences([
-      ...trackedFileReferences.current.map(f => f.reference),
-      ...resolveFileReferencesInText(content, roomFiles),
-      ...attachments.map(a => ({
-        type: 'shared_file' as const,
-        id: a.id,
-        name: a.filename,
-        storage_name: a.storage_name,
-        sha256: a.sha256,
-        origin: 'attachment' as const,
-      })),
-    ])
+    const references: Record<string, unknown>[] = [
+      ...dedupeSharedFileReferences([
+        ...trackedFileReferences.current.map(f => f.reference),
+        ...resolveFileReferencesInText(content, roomFiles),
+        ...attachments.flatMap(a => a.kind !== 'shared_file' ? [] : [{
+          type: 'shared_file' as const,
+          id: a.id,
+          name: a.filename,
+          storage_name: a.storage_name,
+          sha256: a.sha256,
+          origin: 'attachment' as const,
+        }]),
+      ]),
+      // The server rebuilds name/mime/size from the artifact row.
+      ...attachments.flatMap(a => a.kind === 'artifact' ? [{ type: 'artifact', id: a.id }] : []),
+    ]
     const metadata: Record<string, unknown> = {}
     if (mentions.length > 0) metadata.mentions = mentions
     if (references.length > 0) metadata.references = references
@@ -376,6 +429,7 @@ export default function MessageInput({
     clearDraft(draftKey)
     trackedMentions.current = []
     trackedFileReferences.current = []
+    attachments.forEach(releasePreview)
     setAttachments([])
     setUploadFailures([])
     setMention(null)
@@ -395,17 +449,23 @@ export default function MessageInput({
     let uploadedAny = false
     for (const file of files) {
       try {
-        const uploaded: RoomSharedFile = await uploadRoomFile(roomId, file)
-        uploadedAny = true
-        setAttachments(prev => [
-          ...prev,
-          {
+        const store = attachmentStore(file)
+        if (store === null) throw new RoomFileUploadError(415, '')
+        if (store === 'artifact') {
+          const uploaded = await uploadRoomArtifact(roomId, file)
+          const previewUrl = uploaded.mime.startsWith('image/') ? URL.createObjectURL(file) : undefined
+          addAttachment({ kind: 'artifact', id: uploaded.id, filename: uploaded.filename, previewUrl })
+        } else {
+          const uploaded: RoomSharedFile = await uploadRoomFile(roomId, file)
+          uploadedAny = true
+          addAttachment({
+            kind: 'shared_file',
             id: uploaded.id,
             filename: uploaded.filename,
             storage_name: uploaded.storage_name,
             sha256: uploaded.sha256,
-          },
-        ])
+          })
+        }
       } catch (err) {
         setUploadFailures(prev => [...prev, { name: file.name, reason: uploadFailureReason(err) }])
       } finally {
@@ -461,8 +521,9 @@ export default function MessageInput({
     void uploadFiles(Array.from(e.dataTransfer.files ?? []))
   }
 
-  const removeAttachment = (id: string) => {
-    setAttachments(prev => prev.filter(a => a.id !== id))
+  const removeAttachment = (removed: Attachment) => {
+    releasePreview(removed)
+    setAttachments(prev => prev.filter(a => a !== removed))
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -589,16 +650,24 @@ export default function MessageInput({
           <div className="flex flex-wrap items-center gap-1.5">
             {attachments.map(a => (
               <span
-                key={a.id}
+                key={`${a.kind}-${a.id}`}
                 className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-0.5 text-xs text-[var(--color-foreground)]"
               >
-                <Paperclip className="h-3 w-3 text-[var(--color-foreground-subtle)]" />
+                {a.kind === 'artifact' && a.previewUrl ? (
+                  <img
+                    src={a.previewUrl}
+                    alt={a.filename}
+                    className="h-5 w-5 rounded-[var(--radius-sm)] object-cover"
+                  />
+                ) : (
+                  <Paperclip className="h-3 w-3 text-[var(--color-foreground-subtle)]" />
+                )}
                 <span className="max-w-[200px] truncate" title={a.filename}>
                   {a.filename}
                 </span>
                 <button
                   type="button"
-                  onClick={() => removeAttachment(a.id)}
+                  onClick={() => removeAttachment(a)}
                   className="flex size-[var(--control-icon-size)] items-center justify-center text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
                   aria-label={t('chat.removeAttachment', { name: a.filename })}
                   title={t('chat.remove')}
@@ -637,7 +706,7 @@ export default function MessageInput({
                 multiple
                 className="hidden"
                 onChange={handleFileSelected}
-                accept=".txt,.md,.markdown,.json,.yaml,.yml,.csv,.py,.html,.xml,text/*,application/json,application/yaml,application/xml"
+                accept={FILE_ACCEPT}
               />
               <button
                 type="button"

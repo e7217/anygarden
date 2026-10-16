@@ -1354,6 +1354,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 if identity is not None and identity.kind == "agent"
                                 else None
                             ),
+                            allow_room_artifacts=(
+                                identity is not None and identity.kind == "user"
+                            ),
                         )
                     except InvalidSharedFileReference:
                         await websocket.send_text(
