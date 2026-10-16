@@ -39,6 +39,8 @@ export interface PresenceDotProps {
    *  to their row background), and draw offline as a hollow ring so
    *  state is not carried by color alone. */
   ring?: boolean
+  /** Halo thickness in px when ``ring`` is set. Default 2. */
+  ringWidth?: number
   'data-testid'?: string
 }
 
@@ -75,6 +77,7 @@ export default function PresenceDot({
   variant = 'user',
   agentState,
   ring = false,
+  ringWidth = 2,
   'data-testid': testId,
 }: PresenceDotProps) {
   const { locale, t } = useLocale()
@@ -96,8 +99,8 @@ export default function PresenceDot({
   const bg = online ? onlineBg : ring ? ringColor : offlineBg
   const boxShadow = ring
     ? online
-      ? `0 0 0 2px ${ringColor}`
-      : `0 0 0 2px ${ringColor}, inset 0 0 0 1.5px ${offlineBg}`
+      ? `0 0 0 ${ringWidth}px ${ringColor}`
+      : `0 0 0 ${ringWidth}px ${ringColor}, inset 0 0 0 1.5px ${offlineBg}`
     // Whisper border (DESIGN.md §4) so the offline dot still
     // reads against a white participant row.
     : '0 0 0 1px color-mix(in srgb, var(--color-foreground) 5%, transparent)'

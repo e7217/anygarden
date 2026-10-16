@@ -57,12 +57,21 @@ const GLYPH_PX: Record<EntityAvatarSize, number> = {
   lg: 16,
 }
 
-// Presence-dot diameter for the top-right overlay (#869).
+// Presence-dot diameter for the top-right overlay (#869), ~30% of the
+// avatar. xs also thins the halo so dot + ring stays under half of
+// the 20px avatar it shares with the engine glyph (#875).
 const PRESENCE_PX: Record<EntityAvatarSize, number> = {
-  xs: 8,
+  xs: 6,
   sm: 8,
   md: 10,
   lg: 12,
+}
+
+const PRESENCE_RING_PX: Record<EntityAvatarSize, number> = {
+  xs: 1.5,
+  sm: 2,
+  md: 2,
+  lg: 2,
 }
 
 const INITIAL_CLASS: Record<EntityAvatarSize, string> = {
@@ -214,6 +223,7 @@ export function EntityAvatar({
           {...presence}
           ring
           size={PRESENCE_PX[size]}
+          ringWidth={PRESENCE_RING_PX[size]}
           className="absolute -right-0.5 -top-0.5"
           data-testid="entity-avatar-presence"
         />

@@ -233,7 +233,9 @@ describe('EntityAvatar', () => {
       expect(avatar).toContainElement(dot)
       expect(dot).toHaveClass('absolute', '-right-0.5', '-top-0.5')
       expect(dot).toHaveAttribute('role', 'status')
-      expect(dot.style.width).toBe('8px')
+      // xs keeps the dot at ~30% of the 20px avatar with a thinner halo (#875).
+      expect(dot.style.width).toBe('6px')
+      expect(dot.style.boxShadow).toContain('0 0 0 1.5px')
       // The engine glyph keeps the bottom-right corner.
       expect(getByTestId('entity-avatar-engine-glyph')).toBeInTheDocument()
     })
@@ -242,7 +244,9 @@ describe('EntityAvatar', () => {
       const { getByTestId } = render(
         <EntityAvatar id="u-1" name="User" kind="user" size="lg" presence={{ online: false }} />,
       )
-      expect(getByTestId('entity-avatar-presence').style.width).toBe('12px')
+      const dot = getByTestId('entity-avatar-presence')
+      expect(dot.style.width).toBe('12px')
+      expect(dot.style.boxShadow).toContain('0 0 0 2px')
     })
   })
 })
