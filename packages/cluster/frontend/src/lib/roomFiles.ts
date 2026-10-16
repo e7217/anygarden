@@ -24,6 +24,18 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+/** Upload rejection carrying the HTTP status, so callers can tell an
+ * oversize (413) or disallowed (415) file from other failures. */
+export class RoomFileUploadError extends Error {
+  readonly status: number
+
+  constructor(status: number, detail: string) {
+    super(detail || `Upload failed (HTTP ${status})`)
+    this.name = 'RoomFileUploadError'
+    this.status = status
+  }
+}
+
 export async function uploadRoomFile(
   roomId: string,
   file: File,
@@ -36,8 +48,7 @@ export async function uploadRoomFile(
     body: fd,
   })
   if (!resp.ok) {
-    const detail = await resp.text()
-    throw new Error(detail || `Upload failed (HTTP ${resp.status})`)
+    throw new RoomFileUploadError(resp.status, await resp.text())
   }
   return resp.json()
 }

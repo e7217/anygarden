@@ -3,11 +3,12 @@ import { ArrowUp, Paperclip, Plus, X } from 'lucide-react'
 import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
 import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
 import { readDraft, writeDraft, clearDraft } from '@/lib/composerDrafts'
-import { uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
+import { RoomFileUploadError, uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { parseSlashCommand } from '@/lib/slashCommands'
 import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
+import type { MessageKey } from '@/i18n/messages'
 import {
   buildSharedFileReference,
   dedupeSharedFileReferences,
@@ -55,6 +56,39 @@ interface Attachment {
   storage_name: string
   sha256?: string
 }
+
+/** A file that didn't make it into the draft, shown by name (#872). */
+interface UploadFailure {
+  name: string
+  reason: MessageKey
+}
+
+function uploadFailureReason(err: unknown): MessageKey {
+  const status = err instanceof RoomFileUploadError ? err.status : null
+  if (status === 413) return 'chat.attachmentReasonTooLarge'
+  if (status === 415) return 'chat.attachmentReasonUnsupportedType'
+  return 'chat.attachmentReasonUploadFailed'
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+/** Browsers hand a pasted screenshot over as ``image.png``; every paste
+ * would then upsert the same room file. Give it the paste time instead.
+ * Files copied from disk keep their own names. */
+function namePastedFile(file: File, now = new Date()): File {
+  const generic = /^image\.(\w+)$/.exec(file.name)
+  if (!generic || !file.type.startsWith('image/')) return file
+  const stamp = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}`
+    + `-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`
+  return new File([file], `pasted-${stamp}.${generic[1]}`, {
+    type: file.type,
+    lastModified: file.lastModified,
+  })
+}
+
+/** Only drags that carry files are ours; text drags keep editing. */
+const carriesFiles = (types: readonly string[] | DOMStringList | undefined) =>
+  Array.from(types ?? []).includes('Files')
 
 interface MentionState {
   type: '@' | '#' | '$'
@@ -138,8 +172,13 @@ export default function MessageInput({
   // server-side at this point, we just carry their ids to include
   // in the next outbound message's ``references`` metadata.
   const [attachments, setAttachments] = useState<Attachment[]>([])
-  const [uploading, setUploading] = useState(false)
-  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [pendingUploads, setPendingUploads] = useState(0)
+  const uploading = pendingUploads > 0
+  const [uploadFailures, setUploadFailures] = useState<UploadFailure[]>([])
+  // dragenter/dragleave fire for every child the pointer crosses; count
+  // them so the drop hint doesn't flicker while moving over the chips.
+  const dragDepth = useRef(0)
+  const [dragActive, setDragActive] = useState(false)
   const { files: roomFiles, refresh: refreshRoomFiles } = useRoomFiles(roomId ?? null)
 
   const autoResize = useCallback(() => {
@@ -338,39 +377,88 @@ export default function MessageInput({
     trackedMentions.current = []
     trackedFileReferences.current = []
     setAttachments([])
-    setUploadError(null)
+    setUploadFailures([])
     setMention(null)
     onTyping(false)
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
   }
 
-  const handleFileSelected = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = e.target.files?.[0]
+  const canAttach = Boolean(roomId) && !disabled
+
+  // #872 — picking, dropping and pasting all land here. Files go up one
+  // at a time: re-uploading a name upserts the room file, and parallel
+  // upserts of the same name would race on the server.
+  const uploadFiles = async (files: File[]) => {
+    if (!roomId || files.length === 0) return
+    setUploadFailures([])
+    setPendingUploads(n => n + files.length)
+    let uploadedAny = false
+    for (const file of files) {
+      try {
+        const uploaded: RoomSharedFile = await uploadRoomFile(roomId, file)
+        uploadedAny = true
+        setAttachments(prev => [
+          ...prev,
+          {
+            id: uploaded.id,
+            filename: uploaded.filename,
+            storage_name: uploaded.storage_name,
+            sha256: uploaded.sha256,
+          },
+        ])
+      } catch (err) {
+        setUploadFailures(prev => [...prev, { name: file.name, reason: uploadFailureReason(err) }])
+      } finally {
+        setPendingUploads(n => n - 1)
+      }
+    }
+    if (uploadedAny) void refreshRoomFiles()
+  }
+
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
     // Reset the input so selecting the same file twice in a row
     // still fires ``change``.
     e.target.value = ''
-    if (!file || !roomId) return
-    setUploading(true)
-    setUploadError(null)
-    try {
-      const uploaded: RoomSharedFile = await uploadRoomFile(roomId, file)
-      setAttachments(prev => [
-        ...prev,
-        {
-          id: uploaded.id,
-          filename: uploaded.filename,
-          storage_name: uploaded.storage_name,
-          sha256: uploaded.sha256,
-        },
-      ])
-      void refreshRoomFiles()
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setUploading(false)
-    }
+    void uploadFiles(files)
+  }
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.files ?? [])
+    // Text-only clipboards paste as usual; a clipboard with files (a
+    // screenshot, files copied in a file manager) attaches them instead.
+    if (!canAttach || files.length === 0) return
+    e.preventDefault()
+    const now = new Date()
+    void uploadFiles(files.map(file => namePastedFile(file, now)))
+  }
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!canAttach || !carriesFiles(e.dataTransfer?.types)) return
+    e.preventDefault()
+    dragDepth.current += 1
+    setDragActive(true)
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!canAttach || !carriesFiles(e.dataTransfer?.types)) return
+    // Without this the browser opens the file instead of firing ``drop``.
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleDragLeave = () => {
+    if (dragDepth.current === 0) return
+    dragDepth.current -= 1
+    if (dragDepth.current === 0) setDragActive(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    dragDepth.current = 0
+    setDragActive(false)
+    if (!canAttach || !carriesFiles(e.dataTransfer?.types)) return
+    e.preventDefault()
+    void uploadFiles(Array.from(e.dataTransfer.files ?? []))
   }
 
   const removeAttachment = (id: string) => {
@@ -472,7 +560,23 @@ export default function MessageInput({
 
   return (
     <div data-testid="message-composer" className="min-h-[var(--footer-min-height)] border-t border-[var(--color-border)] bg-[var(--color-surface)] py-3">
-      <div data-testid="composer-column" className="chat-column relative flex flex-col gap-2">
+      <div
+        data-testid="composer-column"
+        className="chat-column relative flex flex-col gap-2"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {dragActive && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[var(--radius-lg)] border-2 border-dashed border-[var(--color-brand-focus)] bg-[var(--color-surface)] text-caption text-[var(--color-brand-text)]"
+          >
+            <Paperclip className="mr-2 h-4 w-4" />
+            {t('chat.dropFilesHere')}
+          </div>
+        )}
         {slashError && (
           <div
             data-testid="slash-error"
@@ -481,7 +585,7 @@ export default function MessageInput({
             {slashError}
           </div>
         )}
-        {(attachments.length > 0 || uploadError) && (
+        {(attachments.length > 0 || uploadFailures.length > 0) && (
           <div className="flex flex-wrap items-center gap-1.5">
             {attachments.map(a => (
               <span
@@ -503,9 +607,15 @@ export default function MessageInput({
                 </button>
               </span>
             ))}
-            {uploadError && (
-              <span className="text-xs text-[var(--color-destructive)]">{uploadError}</span>
-            )}
+            {uploadFailures.map((failure, index) => (
+              <span
+                key={`${failure.name}-${index}`}
+                role="alert"
+                className="text-caption text-[var(--color-destructive)]"
+              >
+                {`${failure.name} — ${t(failure.reason)}`}
+              </span>
+            ))}
           </div>
         )}
         <div data-testid="composer-box" className="relative flex w-full items-end gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[var(--color-brand-focus)] focus-within:ring-2 focus-within:ring-[var(--color-brand-focus)]/35">
@@ -522,7 +632,9 @@ export default function MessageInput({
             <div ref={addMenuRef} className="relative shrink-0">
               <input
                 ref={fileInputRef}
+                data-testid="composer-file-input"
                 type="file"
+                multiple
                 className="hidden"
                 onChange={handleFileSelected}
                 accept=".txt,.md,.markdown,.json,.yaml,.yml,.csv,.py,.html,.xml,text/*,application/json,application/yaml,application/xml"
@@ -567,6 +679,7 @@ export default function MessageInput({
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             disabled={disabled}
             placeholder={
               disabled
