@@ -1020,3 +1020,14 @@ class TestMemoryOutboxDirectory:
         assert outbox.is_dir()
         assert (outbox / "snap.png").read_bytes().startswith(b"\x89PNG")
         assert not (agent_root / "workspace").exists()
+
+
+class TestOutboxInstructions:
+    """#854 — the outbox prompt tells agents that files written during a
+    turn are attached to that turn's reply."""
+
+    def test_instructions_describe_reply_attachments(self) -> None:
+        text = Spawner._compose_agents_md(_msg())
+        assert "attached to that reply" in text
+        assert "PDF" in text
+        assert "20 MiB" in text

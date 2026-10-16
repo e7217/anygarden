@@ -64,6 +64,7 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset({
     "application/xml",
     "text/xml",
     "text/html",
+    "application/pdf",
 })
 
 
@@ -73,6 +74,10 @@ class ArtifactRejectedError(Exception):
     Caller logs the reason and continues — the WebSocket loop must
     not tear down on individual frame validation failures.
     """
+
+
+class ArtifactMimeNotAllowedError(ArtifactRejectedError):
+    """The upload's MIME type is outside :data:`ALLOWED_MIME_TYPES`."""
 
 
 def _validate_frame(frame: dict[str, Any]) -> tuple[str, str, str, bytes, str, int]:
@@ -207,69 +212,180 @@ async def handle_artifact_produced(
 
     inserted: list[RoomArtifact] = []
     for room_id in target_rooms:
-        artifact = RoomArtifact(
+        artifact = await _insert_artifact(
+            session,
             room_id=room_id,
-            produced_by_agent_id=agent_id,
+            agent_id=agent_id,
             filename=filename,
-            storage_path="",  # filled after disk write
-            sha256=sha256,
-            size_bytes=size,
             mime=mime,
+            raw=raw,
+            sha256=sha256,
+            artifact_files_dir=artifact_files_dir,
+            max_size_bytes=ARTIFACT_MAX_BYTES,
         )
-        session.add(artifact)
-        try:
-            await session.flush()
-        except IntegrityError:
-            # ``(room_id, sha256)`` collision → duplicate re-delivery.
-            # Roll back the failed flush and move on without raising.
-            await session.rollback()
-            log.info(
-                "room_artifact_dedup",
-                room_id=room_id,
-                sha256=sha256,
-                agent_id=agent_id,
-            )
-            continue
-
-        # Disk write happens AFTER the row insert so that a write
-        # failure rolls back the row in the same transaction. The
-        # storage_path mirrors the row id.
-        try:
-            stored = artifact_storage.save_bytes(
-                artifact_files_dir=artifact_files_dir,
-                room_id=room_id,
-                file_id=artifact.id,
-                data=raw,
-                max_size_bytes=ARTIFACT_MAX_BYTES,
-            )
-        except Exception as exc:
-            await session.rollback()
-            log.error(
-                "room_artifact_disk_write_failed",
-                room_id=room_id,
-                agent_id=agent_id,
-                error=str(exc),
-            )
-            continue
-        artifact.storage_path = stored.storage_path
-        try:
-            await session.commit()
-        except Exception as exc:
-            # Commit failure leaves the disk file orphaned — clean up.
-            artifact_storage.delete_file(
-                artifact_files_dir, stored.storage_path
-            )
-            await session.rollback()
-            log.error(
-                "room_artifact_commit_failed",
-                room_id=room_id,
-                agent_id=agent_id,
-                error=str(exc),
-            )
-            continue
-        inserted.append(artifact)
+        if artifact is not None:
+            inserted.append(artifact)
 
     return inserted
+
+
+async def _insert_artifact(
+    session: AsyncSession,
+    *,
+    room_id: str,
+    agent_id: str,
+    filename: str,
+    mime: str,
+    raw: bytes,
+    sha256: str,
+    artifact_files_dir: Path,
+    max_size_bytes: int,
+) -> RoomArtifact | None:
+    """Insert one row and its bytes; ``None`` on dedup or write failure."""
+    artifact = RoomArtifact(
+        room_id=room_id,
+        produced_by_agent_id=agent_id,
+        filename=filename,
+        storage_path="",  # filled after disk write
+        sha256=sha256,
+        size_bytes=len(raw),
+        mime=mime,
+    )
+    session.add(artifact)
+    try:
+        await session.flush()
+    except IntegrityError:
+        # ``(room_id, sha256)`` collision → duplicate re-delivery.
+        # Roll back the failed flush and move on without raising.
+        await session.rollback()
+        log.info(
+            "room_artifact_dedup",
+            room_id=room_id,
+            sha256=sha256,
+            agent_id=agent_id,
+        )
+        return None
+
+    # Disk write happens AFTER the row insert so that a write
+    # failure rolls back the row in the same transaction. The
+    # storage_path mirrors the row id.
+    try:
+        stored = artifact_storage.save_bytes(
+            artifact_files_dir=artifact_files_dir,
+            room_id=room_id,
+            file_id=artifact.id,
+            data=raw,
+            max_size_bytes=max_size_bytes,
+        )
+    except Exception as exc:
+        await session.rollback()
+        log.error(
+            "room_artifact_disk_write_failed",
+            room_id=room_id,
+            agent_id=agent_id,
+            error=str(exc),
+        )
+        return None
+    artifact.storage_path = stored.storage_path
+    try:
+        await session.commit()
+    except Exception as exc:
+        # Commit failure leaves the disk file orphaned — clean up.
+        artifact_storage.delete_file(artifact_files_dir, stored.storage_path)
+        await session.rollback()
+        log.error(
+            "room_artifact_commit_failed",
+            room_id=room_id,
+            agent_id=agent_id,
+            error=str(exc),
+        )
+        return None
+    return artifact
+
+
+async def _find_by_sha(
+    session: AsyncSession, *, room_id: str, sha256: str
+) -> RoomArtifact | None:
+    return await session.scalar(
+        select(RoomArtifact).where(
+            RoomArtifact.room_id == room_id, RoomArtifact.sha256 == sha256
+        )
+    )
+
+
+async def store_uploaded_artifact(
+    session: AsyncSession,
+    *,
+    room_id: str,
+    agent_id: str,
+    filename: str,
+    mime: str,
+    raw: bytes,
+    artifact_files_dir: Path,
+    max_size_bytes: int,
+) -> tuple[RoomArtifact, bool]:
+    """Persist an agent's HTTP upload into *room_id* only (#854).
+
+    Returns ``(row, created)``. Bytes already in the room — e.g. the
+    daemon's outbox poller got there first — return the existing row so
+    the caller can still reference it from the reply. Unlike the outbox
+    frame path there is no project fan-out: the upload attaches to one
+    message in one room.
+    """
+    if mime not in ALLOWED_MIME_TYPES:
+        raise ArtifactMimeNotAllowedError(f"mime {mime!r} not allowed")
+    try:
+        safe_name = sanitize_storage_name(filename)
+    except InvalidFilenameError as exc:
+        raise ArtifactRejectedError(str(exc)) from exc
+    sha256 = hashlib.sha256(raw).hexdigest()
+
+    existing = await _find_by_sha(session, room_id=room_id, sha256=sha256)
+    if existing is not None:
+        return existing, False
+    artifact = await _insert_artifact(
+        session,
+        room_id=room_id,
+        agent_id=agent_id,
+        filename=safe_name,
+        mime=mime,
+        raw=raw,
+        sha256=sha256,
+        artifact_files_dir=artifact_files_dir,
+        max_size_bytes=max_size_bytes,
+    )
+    if artifact is not None:
+        return artifact, True
+    # Lost a race with a concurrent delivery of the same bytes.
+    existing = await _find_by_sha(session, room_id=room_id, sha256=sha256)
+    if existing is None:
+        raise ArtifactRejectedError("artifact could not be stored")
+    return existing, False
+
+
+def artifact_payload(row: RoomArtifact) -> dict[str, Any]:
+    """Wire shape shared by ``room_artifact.added`` and REST responses."""
+    return {
+        "id": row.id,
+        "room_id": row.room_id,
+        "produced_by_agent_id": row.produced_by_agent_id,
+        "filename": row.filename,
+        "sha256": row.sha256,
+        "size_bytes": row.size_bytes,
+        "mime": row.mime,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+async def broadcast_artifact_added(connection_manager: Any, row: RoomArtifact) -> None:
+    """Tell live room subscribers a new artifact landed."""
+    if connection_manager is None:
+        return
+    from anygarden.ws.protocol import RoomArtifactAddedOut
+
+    await connection_manager.broadcast(
+        row.room_id, RoomArtifactAddedOut(artifact=artifact_payload(row))
+    )
 
 
 async def list_artifacts(

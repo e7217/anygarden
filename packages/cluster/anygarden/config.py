@@ -71,6 +71,10 @@ class AnygardenSettings(BaseSettings):
     # divergent retention / quota policies later without mass-moving
     # files. Same on-disk layout: ``<artifact_files_dir>/<room_id>/<id>``.
     artifact_files_dir: Path = _DEFAULT_ARTIFACT_FILES_DIR
+    # #854 — Cap for artifacts an agent uploads over HTTP to attach to a
+    # reply. The daemon's outbox WS frame stays at 768 KiB; this path has
+    # no frame envelope to fit under.
+    artifact_upload_max_bytes: int = 20 * 1024 * 1024
     # #277 — Public URL agents use to reach this cluster's MCP / REST
     # endpoints. Empty string falls back to
     # ``http://{reachable_host()}:{port}`` so loopback / single-host

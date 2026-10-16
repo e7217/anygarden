@@ -612,7 +612,11 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
     """Shared policy, delegation, typing and lifecycle handler for room engines."""
     engine_timeout = resolve_supervisor_timeout(turn_timeout)
     supervisor = RoomHandlerSupervisor(
-        client=client, engine_name=engine_name, engine_timeout=engine_timeout
+        client=client,
+        engine_name=engine_name,
+        engine_timeout=engine_timeout,
+        # #854 — the agent runs from its root; see the outbox prompt section.
+        outbox_dir=Path.cwd() / "memory" / "outbox",
     )
     client._turn_supervisor = supervisor
 

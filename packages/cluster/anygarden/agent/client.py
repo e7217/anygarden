@@ -80,6 +80,18 @@ _TERMINAL_CLOSE_CODE = 4040
 _TERMINAL_GIVE_UP_ATTEMPTS = 3
 _TERMINAL_COOLDOWN = 5.0
 
+# #854 — reply attachments go up over HTTP; a 20 MiB file on a slow link
+# needs more than httpx's 5s default.
+_ARTIFACT_UPLOAD_TIMEOUT_SEC = 60.0
+
+
+class ArtifactUploadError(Exception):
+    """A reply attachment upload failed; ``status`` is ``None`` on transport errors."""
+
+    def __init__(self, status: int | None) -> None:
+        super().__init__(f"artifact upload failed (status={status})")
+        self.status = status
+
 
 def _close_code(exc: BaseException) -> int | None:
     """Best-effort extraction of the WS close code from a websockets
@@ -449,6 +461,29 @@ class ChatClient:
                 frame.turn_lease == self._turn_context.get(request_id, {}).get("turn_lease")
             ):
                 self._turn_context.pop(request_id, None)
+
+    async def upload_room_artifact(self, room_id: str, path: Path, mime: str) -> dict:
+        """Upload a reply attachment (#854) and return the artifact row.
+
+        Raises :class:`ArtifactUploadError` carrying the HTTP status so the
+        caller can tell an oversize or disallowed file from a transport
+        failure.
+        """
+        http = await self._get_http()
+        base = self._server_url.replace("ws://", "http://").replace("wss://", "https://")
+        data = await asyncio.to_thread(Path(path).read_bytes)
+        try:
+            resp = await http.post(
+                f"{base}/api/v1/rooms/{room_id}/artifacts",
+                files={"upload": (Path(path).name, data, mime)},
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=_ARTIFACT_UPLOAD_TIMEOUT_SEC,
+            )
+        except httpx.HTTPError as exc:
+            raise ArtifactUploadError(None) from exc
+        if resp.status_code not in (200, 201):
+            raise ArtifactUploadError(resp.status_code)
+        return resp.json()
 
     async def find_sub_room(self, parent_room_id: str, name: str) -> str | None:
         """Find a sub-room by name. Returns room_id or None."""

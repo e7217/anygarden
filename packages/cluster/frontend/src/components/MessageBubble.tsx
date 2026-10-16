@@ -26,6 +26,7 @@ import {
 } from '@/lib/fileReferences'
 import type { RoomSharedFile } from '@/lib/roomFiles'
 import { extractUndeliveredCalls } from '@/lib/undeliveredCalls'
+import MessageAttachments from '@/components/MessageAttachments'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
@@ -585,6 +586,7 @@ export default memo(function MessageBubble({
               fileReferenceCandidates={fileReferenceCandidates}
             />
             <MessageReferences metadata={message.metadata} />
+            <MessageAttachments metadata={message.metadata} />
             <UndeliveredCalls metadata={message.metadata} resolveUser={resolveUser} />
           </>
         )}

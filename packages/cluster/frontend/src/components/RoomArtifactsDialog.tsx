@@ -13,25 +13,18 @@ import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   deleteRoomArtifact,
   fetchArtifactBlobUrl,
+  formatBytes,
+  isImageMime,
   listRoomArtifacts,
   startArtifactDownload,
   type RoomArtifact,
 } from '@/lib/roomArtifacts'
+import { useArtifactBlobUrl } from '@/components/ArtifactImage'
 
 interface RoomArtifactsDialogProps {
   roomId: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function isImage(mime: string): boolean {
-  return mime.startsWith('image/')
 }
 
 /** Renders an image artifact inline by fetching the bytes through the
@@ -46,28 +39,8 @@ function ArtifactImagePreview({
   artifactId: string
   alt: string
 }) {
-  const [src, setSrc] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    let cleanup: (() => void) | null = null
-    fetchArtifactBlobUrl(roomId, artifactId)
-      .then(({ url, revoke }) => {
-        if (cancelled) {
-          revoke()
-        } else {
-          setSrc(url)
-          cleanup = revoke
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setSrc(null)
-      })
-    return () => {
-      cancelled = true
-      if (cleanup) cleanup()
-    }
-  }, [roomId, artifactId])
-  if (!src) {
+  const image = useArtifactBlobUrl(roomId, artifactId)
+  if (image.status !== 'ready') {
     return (
       <div className="flex h-32 w-full items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)]">
         <ImageIcon className="h-6 w-6 text-[var(--color-foreground-subtle)]" />
@@ -76,7 +49,7 @@ function ArtifactImagePreview({
   }
   return (
     <img
-      src={src}
+      src={image.src}
       alt={alt}
       loading="lazy"
       decoding="async"
@@ -210,7 +183,7 @@ export default function RoomArtifactsDialog({
                   key={item.id}
                   className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
                 >
-                  {isImage(item.mime) && roomId ? (
+                  {isImageMime(item.mime) && roomId ? (
                     <ArtifactImagePreview
                       roomId={roomId}
                       artifactId={item.id}

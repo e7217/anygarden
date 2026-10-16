@@ -21,10 +21,12 @@ from httpx import ASGITransport, AsyncClient
 
 from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
+from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
     Agent,
+    AgentToken,
     Base,
     Machine,
     Participant,
@@ -71,9 +73,26 @@ async def env(tmp_path: Path):
         )
         db.add(agent)
         await db.flush()
+        outsider_agent = Agent(
+            name="codex-2",
+            engine="codex",
+            placed_on_machine_id="m1",
+        )
+        db.add(outsider_agent)
+        await db.flush()
         db.add_all([
             Participant(room_id=room.id, user_id=owner.id, role="admin"),
             Participant(room_id=room.id, agent_id=agent.id, role="member"),
+        ])
+        agent_token = generate_token()
+        hashed, hint = hash_agent_token(agent_token)
+        outsider_agent_token = generate_token()
+        o_hashed, o_hint = hash_agent_token(outsider_agent_token)
+        db.add_all([
+            AgentToken(agent_id=agent.id, token_hash=hashed, lookup_hint=hint),
+            AgentToken(
+                agent_id=outsider_agent.id, token_hash=o_hashed, lookup_hint=o_hint
+            ),
         ])
         await db.commit()
         await db.refresh(owner)
@@ -100,6 +119,8 @@ async def env(tmp_path: Path):
             "owner_token": owner_token,
             "outsider_token": outsider_token,
             "agent": agent,
+            "agent_token": agent_token,
+            "outsider_agent_token": outsider_agent_token,
         }
     await engine.dispose()
 
@@ -231,3 +252,120 @@ class TestDelete:
             headers=_auth(env["owner_token"]),
         )
         assert resp.status_code == 404
+
+
+class TestUpload:
+    """#854 — agents upload a reply attachment over HTTP and get its id
+    back before they send the message that references it."""
+
+    def _url(self, env) -> str:
+        return f"/api/v1/rooms/{env['room'].id}/artifacts"
+
+    async def test_agent_upload_creates_artifact(
+        self, client: AsyncClient, env
+    ) -> None:
+        body = b"\x89PNG\r\n\x1a\n chart"
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("chart.png", body, "image/png")},
+        )
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["filename"] == "chart.png"
+        assert data["mime"] == "image/png"
+        assert data["size_bytes"] == len(body)
+        assert data["sha256"] == hashlib.sha256(body).hexdigest()
+        assert data["produced_by_agent_id"] == env["agent"].id
+
+        download = await client.get(
+            f"{self._url(env)}/{data['id']}", headers=_auth(env["owner_token"])
+        )
+        assert download.status_code == 200
+        assert download.content == body
+
+    async def test_same_bytes_return_existing_row(
+        self, client: AsyncClient, env
+    ) -> None:
+        body = b"same-bytes"
+        first = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("a.txt", body, "text/plain")},
+        )
+        second = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("a.txt", body, "text/plain")},
+        )
+        assert first.status_code == 201
+        assert second.status_code == 200
+        assert second.json()["id"] == first.json()["id"]
+
+    async def test_upload_after_daemon_delivery_reuses_row(
+        self, client: AsyncClient, env
+    ) -> None:
+        body = b"binary-bytes"
+        seeded = await _seed_artifact(env, body=body)
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("snap.png", body, "image/png")},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["id"] == seeded.id
+
+    async def test_pdf_is_allowed(self, client: AsyncClient, env) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("report.pdf", b"%PDF-1.7 body", "application/pdf")},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["mime"] == "application/pdf"
+
+    async def test_mime_falls_back_to_filename(
+        self, client: AsyncClient, env
+    ) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("notes.md", b"# hi", "application/octet-stream")},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["mime"] == "text/markdown"
+
+    async def test_disallowed_mime_415(self, client: AsyncClient, env) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("tool.exe", b"MZ", "application/x-msdownload")},
+        )
+        assert resp.status_code == 415
+
+    async def test_oversize_413(self, client: AsyncClient, env) -> None:
+        env["config"].artifact_upload_max_bytes = 16
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("big.txt", b"x" * 17, "text/plain")},
+        )
+        assert resp.status_code == 413
+
+    async def test_human_upload_403(self, client: AsyncClient, env) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["owner_token"]),
+            files={"upload": ("a.txt", b"hi", "text/plain")},
+        )
+        assert resp.status_code == 403
+
+    async def test_non_participant_agent_403(
+        self, client: AsyncClient, env
+    ) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["outsider_agent_token"]),
+            files={"upload": ("a.txt", b"hi", "text/plain")},
+        )
+        assert resp.status_code == 403

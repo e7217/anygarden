@@ -233,8 +233,10 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
         # ``memory/outbox/`` and the daemon shipped it. Persist
         # to disk + DB and broadcast ``room_artifact.added`` to
         # live subscribers in every target room.
-        from anygarden.rooms.artifacts import handle_artifact_produced
-        from anygarden.ws.protocol import RoomArtifactAddedOut
+        from anygarden.rooms.artifacts import (
+            broadcast_artifact_added,
+            handle_artifact_produced,
+        )
 
         async with session_factory() as db:
             inserted = await handle_artifact_produced(
@@ -244,21 +246,8 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
                 expected_machine_id=machine_id,
             )
         connection_manager = getattr(app.state, "connection_manager", None)
-        if connection_manager is not None:
-            for row in inserted:
-                out = RoomArtifactAddedOut(
-                    artifact={
-                        "id": row.id,
-                        "room_id": row.room_id,
-                        "produced_by_agent_id": row.produced_by_agent_id,
-                        "filename": row.filename,
-                        "sha256": row.sha256,
-                        "size_bytes": row.size_bytes,
-                        "mime": row.mime,
-                        "created_at": row.created_at.isoformat(),
-                    }
-                )
-                await connection_manager.broadcast(row.room_id, out)
+        for row in inserted:
+            await broadcast_artifact_added(connection_manager, row)
 
     else:
         logger.warning(
