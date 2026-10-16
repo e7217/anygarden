@@ -188,6 +188,7 @@ async def _write_message(
             metadata=metadata,
             allow_shared_files=identity.kind != "guest",
             sender_agent_id=identity.id if identity.kind == "agent" else None,
+            allow_room_artifacts=identity.kind == "user",
         )
     except InvalidSharedFileReference as exc:
         raise HTTPException(

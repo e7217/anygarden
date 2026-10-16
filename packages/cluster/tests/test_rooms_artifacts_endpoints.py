@@ -352,11 +352,46 @@ class TestUpload:
         )
         assert resp.status_code == 413
 
-    async def test_human_upload_403(self, client: AsyncClient, env) -> None:
+    async def test_human_upload_creates_artifact(
+        self, client: AsyncClient, env
+    ) -> None:
+        """#873 — a person attaching an image to their message."""
+        body = b"\x89PNG\r\n\x1a\n screenshot"
         resp = await client.post(
             self._url(env),
             headers=_auth(env["owner_token"]),
-            files={"upload": ("a.txt", b"hi", "text/plain")},
+            files={"upload": ("pasted-20261016-120000.png", body, "image/png")},
+        )
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["filename"] == "pasted-20261016-120000.png"
+        assert data["mime"] == "image/png"
+        assert data["produced_by_agent_id"] is None
+
+        download = await client.get(
+            f"{self._url(env)}/{data['id']}", headers=_auth(env["agent_token"])
+        )
+        assert download.status_code == 200
+        assert download.content == body
+
+    async def test_human_upload_of_agent_bytes_reuses_row(
+        self, client: AsyncClient, env
+    ) -> None:
+        body = b"binary-bytes"
+        seeded = await _seed_artifact(env, body=body)
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["owner_token"]),
+            files={"upload": ("snap.png", body, "image/png")},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["id"] == seeded.id
+
+    async def test_non_participant_human_403(self, client: AsyncClient, env) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["outsider_token"]),
+            files={"upload": ("a.png", b"png", "image/png")},
         )
         assert resp.status_code == 403
 

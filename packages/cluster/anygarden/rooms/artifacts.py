@@ -233,7 +233,7 @@ async def _insert_artifact(
     session: AsyncSession,
     *,
     room_id: str,
-    agent_id: str,
+    agent_id: str | None,
     filename: str,
     mime: str,
     raw: bytes,
@@ -317,14 +317,17 @@ async def store_uploaded_artifact(
     session: AsyncSession,
     *,
     room_id: str,
-    agent_id: str,
+    agent_id: str | None,
     filename: str,
     mime: str,
     raw: bytes,
     artifact_files_dir: Path,
     max_size_bytes: int,
 ) -> tuple[RoomArtifact, bool]:
-    """Persist an agent's HTTP upload into *room_id* only (#854).
+    """Persist an HTTP upload into *room_id* only (#854).
+
+    ``agent_id`` is the producing agent, or ``None`` for a person
+    attaching a file to their own message (#873).
 
     Returns ``(row, created)``. Bytes already in the room — e.g. the
     daemon's outbox poller got there first — return the existing row so

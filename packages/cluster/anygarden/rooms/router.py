@@ -1946,14 +1946,13 @@ async def upload_room_artifact(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ) -> RoomArtifactOut:
-    """Store a file an agent attaches to its reply (#854).
+    """Store a file attached to a message: an agent's reply (#854) or a
+    person's own message, e.g. a pasted screenshot (#873).
 
-    Agent participants only — the returned id goes into the reply's
-    ``metadata.references``. Bytes already in the room return the
-    existing row with ``200`` instead of ``201``.
+    Participants who may send messages only — the returned id goes into
+    the message's ``metadata.references``. Bytes already in the room
+    return the existing row with ``200`` instead of ``201``.
     """
-    if identity.kind != "agent":
-        raise HTTPException(status_code=403, detail="Only agents upload artifacts")
     await _require_room_participant(room_id, identity, db, Capability.MESSAGE_SEND)
 
     config = request.app.state.config
@@ -1974,7 +1973,7 @@ async def upload_room_artifact(
         row, created = await artifacts_service.store_uploaded_artifact(
             db,
             room_id=room_id,
-            agent_id=identity.id,
+            agent_id=identity.id if identity.kind == "agent" else None,
             filename=filename,
             mime=mime,
             raw=raw,
