@@ -932,6 +932,19 @@ class TestMemorySharedDirectory:
         assert bridge.is_symlink()
         assert bridge.resolve() == shared.resolve()
 
+    def test_codex_inbox_bridge_points_to_direct_directory(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """#874 — codex runs from ``workspace/``, so the attachment paths the
+        turn prompt gives (``memory/inbox/<room>/<file>``) need this bridge."""
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex-cli"))
+        inbox = agent_root / "memory" / "inbox"
+        bridge = agent_root / "workspace" / "memory" / "inbox"
+        assert inbox.is_dir()
+        assert not inbox.is_symlink()
+        assert bridge.is_symlink()
+        assert bridge.resolve() == inbox.resolve()
+
     def test_daemon_written_file_is_readable_from_agent_cwd(
         self, spawner: Spawner, agent_dirs_root: Path
     ) -> None:
