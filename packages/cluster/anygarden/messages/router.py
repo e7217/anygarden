@@ -21,7 +21,7 @@ from anygarden.dependencies import get_current_identity, get_db
 from anygarden.messages.metadata import strip_turn_proof
 from anygarden.messages.references import (
     InvalidSharedFileReference,
-    canonicalize_shared_file_references,
+    canonicalize_message_references,
 )
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import (
@@ -182,11 +182,12 @@ async def _write_message(
     metadata.pop("next_speaker_participant_id", None)
     metadata.pop("delegation_outcome", None)
     try:
-        metadata = await canonicalize_shared_file_references(
+        metadata = await canonicalize_message_references(
             db,
             room_id=room_id,
             metadata=metadata,
             allow_shared_files=identity.kind != "guest",
+            sender_agent_id=identity.id if identity.kind == "agent" else None,
         )
     except InvalidSharedFileReference as exc:
         raise HTTPException(

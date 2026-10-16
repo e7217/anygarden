@@ -94,6 +94,8 @@ ARTIFACT_ALLOWED_MIMES: frozenset[str] = frozenset(
         "application/xml",
         "text/xml",
         "text/html",
+        # #854 — reports agents attach to a reply.
+        "application/pdf",
     }
 )
 

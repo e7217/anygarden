@@ -15,6 +15,16 @@ export interface RoomArtifact {
   created_at: string
 }
 
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+export function isImageMime(mime: string): boolean {
+  return mime.startsWith('image/')
+}
+
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('anygarden_token')
   return token ? { Authorization: `Bearer ${token}` } : {}

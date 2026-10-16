@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 from datetime import UTC, datetime
 from typing import Optional
 from urllib.parse import quote
@@ -15,6 +16,7 @@ from fastapi import (
     File,
     HTTPException,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -1931,6 +1933,70 @@ async def list_room_artifacts(
     return [RoomArtifactOut.from_row(r) for r in rows]
 
 
+@router.post(
+    "/{room_id}/artifacts",
+    status_code=status.HTTP_201_CREATED,
+    response_model=RoomArtifactOut,
+)
+async def upload_room_artifact(
+    room_id: str,
+    request: Request,
+    response: Response,
+    upload: UploadFile = File(...),
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+) -> RoomArtifactOut:
+    """Store a file an agent attaches to its reply (#854).
+
+    Agent participants only — the returned id goes into the reply's
+    ``metadata.references``. Bytes already in the room return the
+    existing row with ``200`` instead of ``201``.
+    """
+    if identity.kind != "agent":
+        raise HTTPException(status_code=403, detail="Only agents upload artifacts")
+    await _require_room_participant(room_id, identity, db, Capability.MESSAGE_SEND)
+
+    config = request.app.state.config
+    cap = config.artifact_upload_max_bytes
+    raw = await upload.read(cap + 1)
+    if len(raw) > cap:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"artifact exceeds {cap} bytes",
+        )
+    filename = upload.filename or "upload"
+    mime = upload.content_type or ""
+    if mime not in artifacts_service.ALLOWED_MIME_TYPES:
+        guessed, _ = mimetypes.guess_type(filename)
+        mime = guessed or mime
+
+    try:
+        row, created = await artifacts_service.store_uploaded_artifact(
+            db,
+            room_id=room_id,
+            agent_id=identity.id,
+            filename=filename,
+            mime=mime,
+            raw=raw,
+            artifact_files_dir=config.artifact_files_dir,
+            max_size_bytes=cap,
+        )
+    except artifacts_service.ArtifactMimeNotAllowedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
+        )
+    except artifacts_service.ArtifactRejectedError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    if created:
+        await artifacts_service.broadcast_artifact_added(
+            getattr(request.app.state, "connection_manager", None), row
+        )
+    else:
+        response.status_code = status.HTTP_200_OK
+    return RoomArtifactOut.from_row(row)
+
+
 @router.get("/{room_id}/artifacts/{artifact_id}")
 async def download_room_artifact(
     room_id: str,
@@ -1944,8 +2010,6 @@ async def download_room_artifact(
     save-as dialog while still rendering inline previews when the MIME
     permits (image/*, text/*).
     """
-    from fastapi.responses import Response
-
     await _require_room_participant(room_id, identity, db, Capability.ARTIFACT_READ)
     row = await artifacts_service.get_artifact(
         db, room_id=room_id, artifact_id=artifact_id

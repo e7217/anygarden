@@ -34,9 +34,19 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Optional, Tuple, Union
 
+import structlog
+
 from anygarden.agent.observability import metrics as _metrics
+from anygarden.agent.runtime.attachments import (
+    changed_outbox_files,
+    snapshot_outbox,
+    upload_reply_attachments,
+)
+
+logger = structlog.get_logger(__name__)
 
 _ERROR_MAX_CHARS = 500
 
@@ -280,10 +290,20 @@ _STALE_NOTICE = "⚠️ 대기 중이던 메시지가 너무 오래되어 처리
 class RoomHandlerSupervisor:
     """Serialize handler invocations per-room and emit lifecycle events."""
 
-    def __init__(self, client: Any, engine_name: str, engine_timeout: float) -> None:
+    def __init__(
+        self,
+        client: Any,
+        engine_name: str,
+        engine_timeout: float,
+        *,
+        outbox_dir: Path | None = None,
+    ) -> None:
         self._client = client
         self._engine = engine_name
         self._timeout = engine_timeout
+        # #854 — ``memory/outbox``; files written there during a turn are
+        # attached to its reply. ``None`` disables attachments.
+        self._outbox_dir = outbox_dir
         self._room_locks: dict[str, asyncio.Lock] = {}
         self._inflight: dict[str, Optional[str]] = {}
         # #457 — bounded per-room FIFO of deferred follow-ups. Touched only
@@ -456,6 +476,7 @@ class RoomHandlerSupervisor:
         await self._lifecycle(
             room_id, request_id, turn_context, event="handler_started"
         )
+        outbox_before = await self._snapshot_outbox(room_id)
 
         # #457 — opt-in transient retry (default OFF). The handler_started
         # above fires once; each attempt emits its own engine_call_started/
@@ -720,6 +741,9 @@ class RoomHandlerSupervisor:
         if server_retries:
             pass  # the server's retry or exhaustion notice speaks for it
         elif response:
+            send_metadata = await self._attach_outbox_files(
+                room_id, outbox_before, send_metadata
+            )
             await self._send_room_message(
                 room_id,
                 response,
@@ -762,6 +786,43 @@ class RoomHandlerSupervisor:
             error=error,
             **native_proof,
         )
+
+    async def _snapshot_outbox(self, room_id: str) -> dict[str, str]:
+        if self._outbox_dir is None:
+            return {}
+        try:
+            return await asyncio.to_thread(snapshot_outbox, self._outbox_dir, room_id)
+        except OSError:
+            logger.warning("reply_attachment_snapshot_failed", room_id=room_id)
+            return {}
+
+    async def _attach_outbox_files(
+        self,
+        room_id: str,
+        before: dict[str, str],
+        metadata: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        """Upload files written during the turn and reference them (#854)."""
+        if self._outbox_dir is None:
+            return metadata
+        try:
+            changed = await asyncio.to_thread(
+                changed_outbox_files, self._outbox_dir, room_id, before
+            )
+        except OSError:
+            logger.warning("reply_attachment_scan_failed", room_id=room_id)
+            return metadata
+        if not changed:
+            return metadata
+        references, undelivered = await upload_reply_attachments(
+            self._client, room_id, changed
+        )
+        metadata = dict(metadata or {})
+        if references:
+            metadata["references"] = [*metadata.get("references", []), *references]
+        if undelivered:
+            metadata["undelivered_attachments"] = undelivered
+        return metadata
 
     async def _lifecycle(self, room_id, request_id, context, **details) -> None:
         proof = {key: value for key, value in (context or {}).items()

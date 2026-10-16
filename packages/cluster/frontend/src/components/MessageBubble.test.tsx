@@ -266,6 +266,29 @@ describe('MessageBubble — plain regression', () => {
     expect(screen.getByText('$ spec.md')).toBeInTheDocument()
   })
 
+  it('renders agent reply attachments below the message (#854)', () => {
+    const msg = baseMsg({
+      content: 'here is the report',
+      metadata: {
+        references: [
+          {
+            type: 'artifact',
+            id: 'art-1',
+            room_id: 'room-b',
+            name: 'report.pdf',
+            mime: 'application/pdf',
+            size_bytes: 2048,
+            sha256: 's',
+          },
+        ],
+      },
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    expect(screen.getByTestId('message-attachment-file')).toHaveTextContent('report.pdf')
+  })
+
   it('highlights metadata-backed file references even without roomFiles', () => {
     const msg = baseMsg({
       content: 'please review $spec.md',

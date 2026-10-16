@@ -32,7 +32,7 @@ from anygarden.db.repository import replay_since_seq
 from anygarden.messages.metadata import REPLY_REQUEST_ID_KEY, strip_turn_proof
 from anygarden.messages.references import (
     InvalidSharedFileReference,
-    canonicalize_shared_file_references,
+    canonicalize_message_references,
 )
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import append_message
@@ -1342,11 +1342,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             continue
                 async with session_factory() as ref_db:
                     try:
-                        metadata = await canonicalize_shared_file_references(
+                        metadata = await canonicalize_message_references(
                             ref_db,
                             room_id=room_id,
                             metadata=metadata,
                             allow_shared_files=not is_guest,
+                            sender_agent_id=(
+                                identity.id
+                                if identity is not None and identity.kind == "agent"
+                                else None
+                            ),
                         )
                     except InvalidSharedFileReference:
                         await websocket.send_text(
