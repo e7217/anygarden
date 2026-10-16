@@ -116,7 +116,24 @@ def _codex_thread_cwd() -> Path:
 _CODEX_CLI_TIMEOUT = resolve_turn_timeout("codex")
 
 
-def _resolve_codex_cli_args(permission_level: str | None) -> list[str]:
+def _outbox_writable_root_args(sandbox: str, outbox_dir: Path | None) -> list[str]:
+    """Let a workspace-write sandbox write the agent's outbox (#858).
+
+    ``workspace/memory/outbox`` is a symlink to ``<agent_root>/memory/outbox``,
+    outside the codex workspace, so the sandbox resolves it to a path it may
+    not write. Listing the real directory as an extra writable root keeps
+    reply attachments (#854) working for standard agents. The ``-c`` form is
+    accepted by both ``codex exec`` and ``codex exec resume``; ``--add-dir``
+    is exec-only.
+    """
+    if sandbox != "workspace-write" or outbox_dir is None:
+        return []
+    return ["-c", f"sandbox_workspace_write.writable_roots={json.dumps([str(outbox_dir)])}"]
+
+
+def _resolve_codex_cli_args(
+    permission_level: str | None, *, outbox_dir: Path | None = None
+) -> list[str]:
     """Translate a permission tier into ``codex exec`` CLI flags.
 
     Reuses the SDK adapter's ``_CODEX_TIER_FLAGS`` table (via
@@ -138,6 +155,7 @@ def _resolve_codex_cli_args(permission_level: str | None) -> list[str]:
     return [
         "-c", f"sandbox_mode={sandbox}",
         "-c", f"approval_policy={approval_policy}",
+        *_outbox_writable_root_args(sandbox, outbox_dir),
     ]
 
 
@@ -390,7 +408,10 @@ class CodexCliAdapter(EngineAdapter):
             # #498). The subprocess ``cwd=agent_root`` below sets the working
             # dir for both the fresh-exec and resume paths.
             cmd += ["--json", "--skip-git-repo-check"]
-            cmd += _resolve_codex_cli_args(self._permission_level)
+            cmd += _resolve_codex_cli_args(
+                self._permission_level,
+                outbox_dir=Path.cwd() / "memory" / "outbox",
+            )
             if self._model:
                 cmd += ["-m", self._model]
             if self._reasoning_effort:

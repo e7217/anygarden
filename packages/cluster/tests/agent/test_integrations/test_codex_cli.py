@@ -62,6 +62,21 @@ class TestResolveCodexCliArgs:
         with pytest.raises(ValueError):
             _resolve_codex_cli_args("trustred")  # typo fails loud
 
+    # #858 — the outbox lives outside the codex workspace (reached via a
+    # symlink), so workspace-write must list it as an extra writable root.
+    def test_standard_adds_outbox_writable_root(self, tmp_path) -> None:
+        outbox = tmp_path / "memory" / "outbox"
+        args = _resolve_codex_cli_args("standard", outbox_dir=outbox)
+        assert args[-2:] == [
+            "-c",
+            f'sandbox_workspace_write.writable_roots=["{outbox}"]',
+        ]
+
+    @pytest.mark.parametrize("tier", ["restricted", "trusted"])
+    def test_other_tiers_ignore_outbox(self, tier, tmp_path) -> None:
+        args = _resolve_codex_cli_args(tier, outbox_dir=tmp_path / "outbox")
+        assert not any("writable_roots" in arg for arg in args)
+
 
 class TestParseCodexJsonl:
     """JSONL event parsing — the decoupling payoff (no SDK shim needed)."""

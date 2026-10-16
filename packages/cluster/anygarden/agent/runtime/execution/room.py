@@ -32,8 +32,14 @@ def room_environment(invocation: Invocation) -> dict[str, str]:
 
 
 class RoomCodexRuntime(CodexRuntime):
+    # #858 — ``<agent_root>/memory/outbox``; set by the room adapter.
+    outbox_dir: Path | None = None
+
     def command(self, invocation, session, output):
-        from anygarden.agent.integrations.codex_cli import _resolve_codex_flags
+        from anygarden.agent.integrations.codex_cli import (
+            _outbox_writable_root_args,
+            _resolve_codex_flags,
+        )
 
         cmd = super().command(invocation, session, output)
         cmd.remove("--ignore-user-config")
@@ -44,6 +50,8 @@ class RoomCodexRuntime(CodexRuntime):
                 cmd[index] = f"sandbox_mode={sandbox}"
             elif arg.startswith("approval_policy="):
                 cmd[index] = f"approval_policy={approval}"
+        output_at = cmd.index("-o")
+        cmd[output_at:output_at] = _outbox_writable_root_args(sandbox, self.outbox_dir)
         return cmd
 
     environment = staticmethod(room_environment)
