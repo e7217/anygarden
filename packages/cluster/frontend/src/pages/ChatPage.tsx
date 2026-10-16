@@ -588,7 +588,7 @@ function LocalChatPage() {
       />
       <SidebarExpandButton />
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="@container/chat flex min-w-0 flex-1 flex-col">
         {selectedRoom && currentRoom ? (
           <>
             <div ref={setRoomHeaderEl} className="relative">

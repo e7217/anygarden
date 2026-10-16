@@ -472,7 +472,7 @@ export default function MessageInput({
 
   return (
     <div data-testid="message-composer" className="min-h-[var(--footer-min-height)] border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
-      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
+      <div data-testid="composer-column" className="chat-column relative flex flex-col gap-2">
         {slashError && (
           <div
             data-testid="slash-error"

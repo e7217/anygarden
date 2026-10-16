@@ -312,6 +312,25 @@ code, pre, kbd, samp {
   background-color: var(--color-surface-alt);
 }
 
+/* Conversation column (#856). Message list, empty state and composer
+   share this width so their edges stay on one line. It steps with the
+   space ChatPage's ``<main>`` (``@container/chat``) actually has — not
+   with which panels are open — so collapsing a panel, resizing the
+   right slot, opening a thread or resizing the window all follow the
+   same rule. Agent replies fill the column, so the cap keeps a line of
+   Korean prose near 72 characters. */
+@utility chat-column {
+  width: 100%;
+  margin-inline: auto;
+  max-width: 48rem;
+  @container chat (min-width: 65rem) {
+    max-width: 52rem;
+  }
+  @container chat (min-width: 75rem) {
+    max-width: 56rem;
+  }
+}
+
 /* Type scale — 7 named steps (DESIGN.md §3). The earlier system ran two
    parallel scales (h1–h3 element styles + 9 size utilities) that
    overlapped and clustered; #435 collapses them to a single ladder:
