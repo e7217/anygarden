@@ -274,52 +274,49 @@ class TestMaterializeFresh:
         assert os.readlink(path) == "AGENTS.md"
         assert path.read_text().startswith("# instructions")
 
-    def test_agents_md_absent_when_no_agents_md(
+    # #857 — an agent created without instructions still needs the
+    # platform guidance (memory, shared files, outbox, skills), so
+    # AGENTS.md is always written; only the admin's body is optional.
+    def test_agents_md_carries_platform_guidance_without_agents_md(
         self, spawner: Spawner
     ) -> None:
         agent_root = spawner._materialize_agent_dir(_msg(agents_md=None))
-        link = agent_root / "AGENTS.md"
-        assert not link.exists()
-        assert not link.is_symlink()
+        text = (agent_root / "AGENTS.md").read_text()
+        assert text.startswith("## Memory")
+        assert "memory/outbox/<room_id>/" in text
+        assert "memory/shared/<room_id>/" in text
 
-    def test_claude_md_absent_when_no_agents_md(
+    def test_codex_workspace_links_agents_md_without_agents_md(
+        self, spawner: Spawner
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(
+            _msg(agents_md=None, engine="codex-cli")
+        )
+        link = agent_root / "workspace" / "AGENTS.md"
+        assert link.is_symlink()
+        assert "memory/outbox/<room_id>/" in link.read_text()
+
+    def test_claude_md_links_agents_md_without_agents_md(
         self, spawner: Spawner
     ) -> None:
         agent_root = spawner._materialize_agent_dir(_msg(agents_md=None))
         link = agent_root / "CLAUDE.md"
-        assert not link.exists()
-        assert not link.is_symlink()
+        assert link.is_symlink()
+        assert os.readlink(link) == "AGENTS.md"
 
-    def test_claude_md_removed_when_agents_md_cleared(
+    def test_agents_md_drops_body_when_agents_md_cleared(
         self, spawner: Spawner
     ) -> None:
-        spawner._materialize_agent_dir(_msg(agents_md="# first"))
-        agent_root = spawner._agent_dirs_root / "agent-x"
-        path = agent_root / "CLAUDE.md"
-        assert path.is_symlink()
-
-        spawner._materialize_agent_dir(_msg(agents_md=None))
-
-        assert not path.exists()
-        assert not path.is_symlink()
-
-    def test_agents_md_removed_when_agents_md_cleared(
-        self, spawner: Spawner
-    ) -> None:
-        # First spawn sets agents_md → copy created.
         spawner._materialize_agent_dir(_msg(agents_md="# first"))
         agent_root = spawner._agent_dirs_root / "agent-x"
         path = agent_root / "AGENTS.md"
-        assert path.is_file()
         assert path.read_text().startswith("# first")
 
-        # Second spawn clears agents_md → the slot must go empty.
         spawner._materialize_agent_dir(_msg(agents_md=None))
 
-        assert not path.exists()
-        assert not path.is_symlink()
-        # The managed AGENTS.md one level up is gone too (prune).
-        assert not (agent_root / "AGENTS.md").exists()
+        text = path.read_text()
+        assert "# first" not in text
+        assert text.startswith("## Memory")
 
     def test_engine_secrets_not_persisted_to_disk(self, spawner: Spawner) -> None:
         """#184: secrets flow into the subprocess environment, never the
@@ -532,14 +529,12 @@ class TestMaterializePrune:
         link = agent_root / "CLAUDE.md"
         assert link.is_symlink()
 
-        # Re-materialize with no agents_md → symlink target would be
-        # dead, so the materializer should remove the stale link and
-        # not recreate it until there's something to point at.
+        # Re-materialize with no agents_md → AGENTS.md keeps only the
+        # platform guidance (#857) and CLAUDE.md still points at it.
         spawner._materialize_agent_dir(_msg(agents_md=None))
-        # AGENTS.md should be gone; CLAUDE.md symlink should be gone.
-        assert not (agent_root / "AGENTS.md").exists()
-        assert not link.exists()
-        assert not link.is_symlink()
+        assert "# instructions" not in (agent_root / "AGENTS.md").read_text()
+        assert link.is_symlink()
+        assert link.read_text().startswith("## Memory")
 
 
 class TestMaterializeValidation:
