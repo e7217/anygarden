@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiFetch } from '@/lib/api'
 import type { ManagedWorkspaceResult, WorkspaceEntry } from '@/hooks/useManagedWorkspace'
 import ManagedWorkspacePanel from './ManagedWorkspacePanel'
@@ -87,4 +87,67 @@ it('skips a conflicting file when replacing is declined', async () => {
   fireEvent.drop(list, { dataTransfer: { types: ['Files'], files: [new File(['B'], 'b.txt')] } })
   expect(await screen.findByTestId('workspace-upload-results')).toHaveTextContent('b.txtSkipped')
   expect(posts.map(post => post.url.split('/').pop())).toEqual(['upload'])
+})
+
+describe('large transfers (#914)', () => {
+  const transferFolder = (entries: WorkspaceEntry[]) => ({
+    ...folder(entries), can_transfer: true, transfer_max_bytes: 20 * 1024 * 1024, archive_max_bytes: 200 * 1024 * 1024,
+  })
+
+  class FakeXhr {
+    static sent: Array<{ method: string; url: string; body: unknown; headers: Record<string, string> }> = []
+    status = 200
+    upload: { onprogress: ((event: { loaded: number; total: number; lengthComputable: boolean }) => void) | null } = { onprogress: null }
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+    private method = ''
+    private url = ''
+    private headers: Record<string, string> = {}
+    open(method: string, url: string) { this.method = method; this.url = url }
+    setRequestHeader(name: string, value: string) { this.headers[name] = value }
+    send(body: unknown) {
+      FakeXhr.sent.push({ method: this.method, url: this.url, body, headers: this.headers })
+      this.upload.onprogress?.({ loaded: 5, total: 10, lengthComputable: true })
+      setTimeout(() => this.onload?.(), 0)
+    }
+  }
+
+  it('streams a file larger than 1 MiB with progress [WS-07]', async () => {
+    FakeXhr.sent = []
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+    fetchMock.mockResolvedValue(json(transferFolder([])))
+    render(<ManagedWorkspacePanel agentId="agent" />)
+    const list = await screen.findByTestId('workspace-file-list')
+    const big = new File([new Uint8Array(2 * 1024 * 1024)], 'big.bin')
+    fireEvent.drop(list, { dataTransfer: { types: ['Files'], files: [big] } })
+    expect(await screen.findByTestId('workspace-upload-results')).toHaveTextContent('big.binUploaded')
+    expect(FakeXhr.sent).toHaveLength(1)
+    expect(FakeXhr.sent[0].method).toBe('PUT')
+    expect(FakeXhr.sent[0].url).toBe(`/api/v1/agents/agent/workspace/upload-stream?path=big.bin&edit_token=${TOKEN}`)
+    expect(FakeXhr.sent[0].body).toBe(big)
+    vi.unstubAllGlobals()
+  })
+
+  it('downloads a folder as zip [WS-07]', async () => {
+    const createObjectURL = vi.fn().mockReturnValue('blob:zip')
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() })
+    fetchMock.mockImplementation(async (path: string) => {
+      if (path.includes('/archive')) return { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/zip' }), body: null, blob: async () => new Blob(['zip']) } as unknown as Response
+      return json(transferFolder([entry('out', 'directory')]))
+    })
+    render(<ManagedWorkspacePanel agentId="agent" />)
+    fireEvent.click(await screen.findByTestId('workspace-zip-out'))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/v1/agents/agent/workspace/archive?path=out')).toBe(true))
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
+    fireEvent.click(screen.getByTestId('workspace-download-folder-zip'))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/v1/agents/agent/workspace/archive?path=')).toBe(true))
+  })
+
+  it('tells an older machine to update for large files', async () => {
+    fetchMock.mockResolvedValue(json(folder([entry('out', 'directory')])))
+    render(<ManagedWorkspacePanel agentId="agent" />)
+    expect(await screen.findByTestId('workspace-transfer-unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('workspace-zip-out')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('workspace-download-folder-zip')).not.toBeInTheDocument()
+  })
 })

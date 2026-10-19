@@ -1132,6 +1132,34 @@ class AgentFile(Base):
     agent: Mapped["Agent"] = relationship("Agent", back_populates="files")
 
 
+class MachineTransfer(Base):
+    """#914 — a one-time ticket for one work-file transfer over HTTP.
+
+    The server sends the ticket to the agent's machine over its WebSocket;
+    the machine then PUTs (``from_machine``) or GETs (``to_machine``) the
+    bytes at ``/api/v1/machine-transfers/{id}``. Only the token hash is
+    stored. A ticket is bound to its machine, agent, path and direction,
+    expires quickly and is used once.
+    """
+
+    __tablename__ = "machine_transfers"
+    __table_args__ = (Index("ix_machine_transfers_expires", "expires_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    machine_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    max_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="issued")
+    spool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
 class AgentInstructionRevision(Base):
     """#908 — one accepted version of an agent's instructions.
 

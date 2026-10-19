@@ -394,7 +394,44 @@ class ManagedWorkspaceResultFrame(BaseModel):
     snapshot: WorkspaceSnapshot
 
 
+class WorkspaceTransferRequestFrame(BaseModel):
+    """#914 — move one work file (or a folder zip) over HTTP.
+
+    ``send``/``archive``: the machine PUTs the bytes to
+    ``{server}/api/v1/machine-transfers/{ticket_id}``. ``receive``: it GETs
+    them from there and creates ``path`` if ``size`` and ``sha256`` match.
+    The ticket token goes back in ``Authorization: Ticket <token>``.
+    """
+
+    type: Literal["workspace_transfer_request"] = "workspace_transfer_request"
+    request_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    generation: int = Field(ge=0)
+    operation: Literal["send", "receive", "archive"]
+    path: str = Field(default="", max_length=1024)
+    ticket_id: str = Field(min_length=1, max_length=64)
+    ticket_token: str = Field(min_length=16, max_length=128)
+    max_bytes: int = Field(gt=0)
+    max_entries: int | None = Field(default=None, gt=0)
+    edit_token: str | None = Field(default=None, min_length=64, max_length=64)
+    size: int | None = Field(default=None, ge=0)
+    sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    exclude_memory: bool = False
+
+
+class WorkspaceTransferResultFrame(BaseModel):
+    """#914 — outcome of :class:`WorkspaceTransferRequestFrame`."""
+
+    type: Literal["workspace_transfer_result"] = "workspace_transfer_result"
+    request_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    status: str = Field(max_length=32)
+    size: int | None = Field(default=None, ge=0)
+    files: int | None = Field(default=None, ge=0)
+
+
 ServerFrame = Union[
+    WorkspaceTransferRequestFrame,
     AgentInstructionsAckFrame,
     AgentInstructionsRequestFrame,
     AgentMemoryUpdateAckFrame,
@@ -684,6 +721,7 @@ MachineFrame = Union[
     AgentMemoryUpdateFrame,
     AgentInstructionsUpdateFrame,
     AgentInstructionsResultFrame,
+    WorkspaceTransferResultFrame,
     RoomArtifactProducedFrame,
     SelfUpdateResultFrame,
     EngineCheckResultFrame,
@@ -697,6 +735,7 @@ MachineFrame = Union[
 # ── Frame parsing ─────────────────────────────────────────────────────
 
 _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
+    "workspace_transfer_request": WorkspaceTransferRequestFrame,
     "agent_instructions_ack": AgentInstructionsAckFrame,
     "agent_instructions_request": AgentInstructionsRequestFrame,
     "agent_memory_update_ack": AgentMemoryUpdateAckFrame,

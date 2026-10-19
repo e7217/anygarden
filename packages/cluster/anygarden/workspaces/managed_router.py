@@ -8,6 +8,8 @@ from typing import Annotated, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +26,9 @@ from anygarden.machine.managed_workspace import (
     WorkspaceSnapshot,
     path_parts,
 )
+from anygarden.machine.workspace_transfer import CAPABILITY as TRANSFER_CAPABILITY
 from anygarden.scheduler.machine_bus import MachineRequestError
+from anygarden.workspaces import transfers
 
 router = APIRouter()
 
@@ -41,6 +45,10 @@ class ManagedWorkspaceOut(BaseModel):
     can_edit: bool = False
     # #908 — download, delete and rename (``managed_workspace_files_v2``).
     can_manage_files: bool = False
+    # #914 — large files and folder zips over HTTP; limits in bytes.
+    can_transfer: bool = False
+    transfer_max_bytes: int | None = None
+    archive_max_bytes: int | None = None
 
 
 class FolderInput(BaseModel):
@@ -135,6 +143,11 @@ async def _query(
     capabilities = set(machine.control_capabilities or [])
     result.can_edit = EDIT_CAPABILITY in capabilities
     result.can_manage_files = FILES_CAPABILITY in capabilities
+    if TRANSFER_CAPABILITY in capabilities:
+        config = request.app.state.config
+        result.can_transfer = True
+        result.transfer_max_bytes = config.workspace_transfer_max_bytes
+        result.archive_max_bytes = config.workspace_archive_max_bytes
     if operation in EDIT_OPERATIONS and not result.can_edit:
         result.status = "unsupported"
         return result
@@ -329,3 +342,199 @@ async def rename_managed_entry(
         request, db, agent_id, "rename", body.path, None,
         edit_token=body.edit_token, new_name=body.new_name,
     )
+
+
+# ── #914 large transfers over HTTP ─────────────────────────────────
+
+# Seconds allowed per MiB on top of a fixed allowance; capped.
+_TRANSFER_BASE_SECONDS = 30.0
+_TRANSFER_SECONDS_PER_MIB = 10.0
+_TRANSFER_MAX_SECONDS = 600.0
+
+
+def _transfer_timeout(size: int) -> float:
+    return min(
+        _TRANSFER_MAX_SECONDS,
+        _TRANSFER_BASE_SECONDS + _TRANSFER_SECONDS_PER_MIB * size / (1024 * 1024),
+    )
+
+
+async def _transfer_placement(
+    request: Request, db: AsyncSession, agent_id: str, path: str, *, allow_root: bool = False
+) -> tuple[str, int]:
+    """Return ``(machine_id, generation)`` for a transfer, or raise."""
+    try:
+        parts = path_parts(path)
+    except ValueError as exc:
+        raise HTTPException(422, "Invalid workspace path") from exc
+    if not parts and not allow_root:
+        raise HTTPException(422, "Invalid workspace path")
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(404, "Agent not found")
+    if agent.placed_on_machine_id is None:
+        raise HTTPException(409, "The agent has no execution machine")
+    machine = await db.get(Machine, agent.placed_on_machine_id)
+    if machine is None or not request.app.state.machine_bus.is_connected(machine.id):
+        raise HTTPException(409, "The agent's machine is offline")
+    if TRANSFER_CAPABILITY not in (machine.control_capabilities or []):
+        raise HTTPException(409, "Update this machine to transfer large files")
+    return machine.id, int(agent.generation or 0)
+
+
+async def _run_transfer(
+    request: Request, machine_id: str, agent_id: str, ticket: transfers.Ticket,
+    frame: dict, timeout: float,
+) -> dict:
+    try:
+        return await request.app.state.machine_bus.request_transfer(
+            machine_id,
+            {
+                "type": "workspace_transfer_request",
+                "agent_id": agent_id,
+                "ticket_id": ticket.id,
+                "ticket_token": ticket.token,
+                **frame,
+            },
+            timeout=timeout,
+        )
+    except MachineRequestError as exc:
+        raise HTTPException(504 if exc.reason == "timeout" else 409,
+                            f"The machine did not finish the transfer ({exc.reason})") from None
+
+
+def _raise_for(status: str) -> None:
+    if status == "ready":
+        return
+    codes = {"not_found": 404, "too_large": 413, "conflict": 409, "stale": 409, "not_ready": 409}
+    raise HTTPException(codes.get(status, 422), f"Transfer refused ({status})")
+
+
+async def _stream_spooled(
+    request: Request, db: AsyncSession, ticket: transfers.Ticket, filename: str, media_type: str
+) -> FileResponse:
+    spool_dir = request.app.state.config.transfer_spool_dir
+    path = transfers.spool_path(spool_dir, ticket.spool_name)
+    if not path.is_file():
+        raise HTTPException(409, "The transfer did not arrive")
+    factory = request.app.state.session_factory
+
+    async def discard() -> None:
+        async with factory() as cleanup_db:
+            await transfers.discard(cleanup_db, spool_dir, ticket.id)
+
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+        background=BackgroundTask(discard),
+    )
+
+
+@router.get("/{agent_id}/workspace/download-stream")
+async def download_large_file(
+    agent_id: str,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    path: Annotated[str, Query(min_length=1, max_length=1024)],
+):
+    """Download a work file up to ``workspace_transfer_max_bytes``."""
+    machine_id, generation = await _transfer_placement(request, db, agent_id, path)
+    limit = request.app.state.config.workspace_transfer_max_bytes
+    ticket = await transfers.issue(
+        db, machine_id=machine_id, agent_id=agent_id, direction="from_machine",
+        path=path, max_bytes=limit,
+    )
+    result = await _run_transfer(
+        request, machine_id, agent_id, ticket,
+        {"generation": generation, "operation": "send", "path": path, "max_bytes": limit},
+        _transfer_timeout(limit),
+    )
+    if result.get("status") != "ready":
+        await transfers.discard(db, request.app.state.config.transfer_spool_dir, ticket.id)
+    _raise_for(result.get("status", "failed"))
+    name = path.rsplit("/", 1)[-1]
+    return await _stream_spooled(
+        request, db, ticket, name, mimetypes.guess_type(name)[0] or "application/octet-stream"
+    )
+
+
+@router.get("/{agent_id}/workspace/archive")
+async def download_folder_archive(
+    agent_id: str,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    path: Annotated[str, Query(max_length=1024)] = "",
+):
+    """Download a work folder ("" = the whole workspace) as a zip."""
+    machine_id, generation = await _transfer_placement(request, db, agent_id, path, allow_root=True)
+    config = request.app.state.config
+    ticket = await transfers.issue(
+        db, machine_id=machine_id, agent_id=agent_id, direction="from_machine",
+        path=path, max_bytes=config.workspace_archive_max_bytes,
+    )
+    result = await _run_transfer(
+        request, machine_id, agent_id, ticket,
+        {
+            "generation": generation, "operation": "archive", "path": path,
+            "max_bytes": config.workspace_archive_max_bytes,
+            "max_entries": config.workspace_archive_max_entries,
+        },
+        _transfer_timeout(config.workspace_archive_max_bytes),
+    )
+    if result.get("status") != "ready":
+        await transfers.discard(db, config.transfer_spool_dir, ticket.id)
+    _raise_for(result.get("status", "failed"))
+    agent = await db.get(Agent, agent_id)
+    base = path.rsplit("/", 1)[-1] if path else (agent.name if agent else "workspace")
+    return await _stream_spooled(request, db, ticket, f"{base}.zip", "application/zip")
+
+
+@router.put("/{agent_id}/workspace/upload-stream")
+async def upload_large_file(
+    agent_id: str,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    path: Annotated[str, Query(min_length=1, max_length=1024)],
+    edit_token: Annotated[str, Query(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")],
+):
+    """Upload a work file up to ``workspace_transfer_max_bytes`` (raw body)."""
+    machine_id, generation = await _transfer_placement(request, db, agent_id, path)
+    agent = await db.get(Agent, agent_id)
+    machine = await db.get(Machine, machine_id)
+    if EDIT_CAPABILITY not in (machine.control_capabilities or []):
+        raise HTTPException(409, "This machine does not accept file changes")
+    config = request.app.state.config
+    ticket = await transfers.issue(
+        db, machine_id=machine_id, agent_id=agent_id, direction="to_machine",
+        path=path, max_bytes=config.workspace_transfer_max_bytes,
+    )
+    try:
+        size, sha256 = await transfers.write_spool(
+            config.transfer_spool_dir, ticket.spool_name, request.stream(),
+            config.workspace_transfer_max_bytes,
+        )
+    except transfers.SpoolTooLarge:
+        await transfers.discard(db, config.transfer_spool_dir, ticket.id)
+        raise HTTPException(413, "File is larger than allowed") from None
+    try:
+        result = await _run_transfer(
+            request, machine_id, agent_id, ticket,
+            {
+                "generation": generation, "operation": "receive", "path": path,
+                "max_bytes": config.workspace_transfer_max_bytes,
+                "edit_token": edit_token, "size": size, "sha256": sha256,
+            },
+            _transfer_timeout(size),
+        )
+    finally:
+        await transfers.discard(db, config.transfer_spool_dir, ticket.id)
+    _raise_for(result.get("status", "failed"))
+    return {"status": "ready", "size": size, "agent_state": agent.actual_state if agent else None}

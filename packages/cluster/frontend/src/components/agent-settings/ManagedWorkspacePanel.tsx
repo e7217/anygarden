@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
-import { ArrowUp, Download, FileText, Folder, FolderOpen, Link2, Loader2, Pencil, RefreshCw, Trash2, Upload } from 'lucide-react'
+import { ArrowUp, Download, FileArchive, FileText, Folder, FolderOpen, Link2, Loader2, Pencil, RefreshCw, Trash2, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
@@ -8,13 +8,21 @@ import { useLocale } from '@/i18n/LocaleProvider'
 import ManagedWorkspaceEditor from './ManagedWorkspaceEditor'
 import {
   changeWorkspace,
+  downloadWorkspaceArchive,
   downloadWorkspaceFile,
   fetchWorkspaceFile,
   isImagePath,
   uploadWorkspaceFiles,
   validEntryName,
+  type TransferLimits,
   type UploadOutcome,
 } from './workspaceFiles'
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MiB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`
+  return `${bytes} B`
+}
 
 export default function ManagedWorkspacePanel({ agentId }: { agentId: string | null }) {
   const { t, formatDate } = useLocale()
@@ -30,11 +38,17 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
   const [dragging, setDragging] = useState(false)
   const [uploads, setUploads] = useState<UploadOutcome[]>([])
   const [imageUrl, setImageUrl] = useState<string | null>(null)
+  const [progress, setProgress] = useState<{ name: string; loaded: number; total: number | null } | null>(null)
   const dragDepth = useRef(0)
 
   const token = folder?.status === 'ready' ? folder.snapshot?.edit_token ?? null : null
   const canEdit = Boolean(folder?.can_edit && token)
   const canManage = Boolean(folder?.can_manage_files && token)
+  // #914 — large files and folder zips over HTTP on machines that support it.
+  const limits: TransferLimits | null = folder?.can_transfer && folder.transfer_max_bytes && folder.archive_max_bytes
+    ? { transferMax: folder.transfer_max_bytes, archiveMax: folder.archive_max_bytes }
+    : null
+  const trackProgress = (name: string) => (loaded: number, total: number | null) => setProgress({ name, loaded, total })
   const canPreviewImage = Boolean(
     agentId && workspace.filePath && file?.can_manage_files && file.status === 'ready'
       && file.snapshot?.preview_status !== 'text' && isImagePath(workspace.filePath),
@@ -60,7 +74,8 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
       stale: t('workspace.managed.stale'), blocked: t('workspace.managed.blocked'),
       not_found: t('workspace.managed.notFound'), too_many_entries: t('workspace.managed.tooMany'),
       timeout: t('workspace.managed.timeout'), busy: t('workspace.managed.busy'),
-      conflict: t('workspace.managed.conflict'), too_large: t('workspace.managed.uploadTooLarge'),
+      conflict: t('workspace.managed.conflict'),
+      too_large: limits ? t('workspace.managed.tooLargeLimit', { limit: formatBytes(limits.transferMax) }) : t('workspace.managed.uploadTooLarge'),
     }
     return messages[status] ?? t('workspace.managed.writeFailed')
   }
@@ -90,13 +105,34 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
   }
 
   async function download(path: string) {
-    if (!agentId) return
+    if (!agentId || busy) return
     setActionError(null)
+    setBusy(true)
     try {
-      await downloadWorkspaceFile(agentId, path)
+      await downloadWorkspaceFile(agentId, path, { limits, onProgress: trackProgress(path.split('/').pop() ?? path) })
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : 'failed'
+      setActionError(reason === 'too_large'
+        ? (limits ? t('workspace.managed.tooLargeLimit', { limit: formatBytes(limits.transferMax) }) : t('workspace.managed.downloadTooLarge'))
+        : t('workspace.managed.downloadFailed'))
+    } finally {
+      setBusy(false); setProgress(null)
+    }
+  }
+
+  async function downloadZip(path: string) {
+    if (!agentId || !limits || busy) return
+    setActionError(null)
+    setBusy(true)
+    const name = path ? path.split('/').pop()! : t('agentSetup.managedWorkspace')
+    try {
+      await downloadWorkspaceArchive(agentId, path, 'workspace', trackProgress(`${name}.zip`))
     } catch (cause) {
       setActionError(cause instanceof Error && cause.message === 'too_large'
-        ? t('workspace.managed.downloadTooLarge') : t('workspace.managed.downloadFailed'))
+        ? t('workspace.managed.archiveTooLarge', { limit: formatBytes(limits.archiveMax) })
+        : t('workspace.managed.downloadFailed'))
+    } finally {
+      setBusy(false); setProgress(null)
     }
   }
 
@@ -124,6 +160,8 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
     setBusy(true); setActionError(null); setUploads([])
     try {
       const outcomes = await uploadWorkspaceFiles(agentId, workspace.folder, files, token, {
+        limits,
+        onProgress: (name, loaded, total) => setProgress({ name, loaded, total }),
         canReplace: canManage,
         confirmReplace: name => confirm({
           title: t('workspace.managed.replaceTitle', { name }),
@@ -135,7 +173,7 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
       setUploads(outcomes)
       await workspace.openFolder(workspace.folder)
     } finally {
-      setBusy(false)
+      setBusy(false); setProgress(null)
     }
   }
 
@@ -182,7 +220,16 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
     <div className="flex flex-wrap items-center gap-2">
       {(workspace.folder || workspace.filePath) && <Button variant="outline" size="sm" onClick={() => void workspace.openFolder(workspace.filePath ? workspace.folder : workspace.folder.split('/').slice(0, -1).join('/'))}><ArrowUp />{t('workspace.managed.back')}</Button>}
       {folder?.status === 'ready' && <p className="min-w-0 break-all font-mono text-xs text-[var(--color-foreground-muted)]">/{workspace.folder}</p>}
+      {limits && workspace.filePath === null && folder?.status === 'ready' && <Button variant="outline" size="sm" className="ml-auto" disabled={busy} onClick={() => void downloadZip(workspace.folder)} data-testid="workspace-download-folder-zip"><FileArchive />{t('workspace.managed.downloadFolderZip')}</Button>}
     </div>
+    {folder?.status === 'ready' && folder.can_manage_files && !folder.can_transfer && <p className="text-xs text-[var(--color-foreground-muted)]" data-testid="workspace-transfer-unavailable">{t('workspace.managed.transferUnavailable', { limit: '20 MiB' })}</p>}
+    {progress && <div role="status" className="space-y-1 text-sm" data-testid="workspace-transfer-progress">
+      <p className="break-all">{t('workspace.managed.transferring', { name: progress.name })}</p>
+      <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-alt)]" role="progressbar" aria-label={progress.name} aria-valuemin={0} aria-valuemax={progress.total ?? undefined} aria-valuenow={progress.loaded}>
+        <div className="h-full bg-[var(--color-brand)] motion-safe:transition-[width]" style={{ width: progress.total ? `${Math.min(100, (progress.loaded / progress.total) * 100)}%` : '100%' }} />
+      </div>
+      <p className="text-caption text-[var(--color-foreground-muted)]">{progress.total ? t('workspace.managed.progress', { loaded: formatBytes(progress.loaded), total: formatBytes(progress.total) }) : formatBytes(progress.loaded)}</p>
+    </div>}
     {agentId && workspace.filePath === null && folder?.status === 'ready' && folder.can_edit && folder.snapshot?.edit_token && <ManagedWorkspaceEditor
       key={`${agentId}:${workspace.folder}:directory`}
       agentId={agentId} folder={workspace.folder} filePath={null}
@@ -226,6 +273,7 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
             </button>
             {canManage && (entry.kind === 'file' || entry.kind === 'directory') && <div className="flex shrink-0 items-center">
               {entry.kind === 'file' && <Button variant="ghost" size="icon" disabled={busy} aria-label={t('workspace.managed.downloadName', { name: entry.name })} title={t('workspace.managed.download')} onClick={() => void download(childPath(entry.name))} data-testid={`workspace-download-${entry.name}`}><Download /></Button>}
+              {entry.kind === 'directory' && limits && <Button variant="ghost" size="icon" disabled={busy} aria-label={t('workspace.managed.downloadZipName', { name: entry.name })} title={t('workspace.managed.downloadZip')} onClick={() => void downloadZip(childPath(entry.name))} data-testid={`workspace-zip-${entry.name}`}><FileArchive /></Button>}
               <Button variant="ghost" size="icon" disabled={busy} aria-label={t('workspace.managed.renameName', { name: entry.name })} title={t('workspace.managed.rename')} onClick={() => setRenaming({ name: entry.name, value: entry.name })} data-testid={`workspace-rename-${entry.name}`}><Pencil /></Button>
               <Button variant="ghost" size="icon" disabled={busy} aria-label={t('workspace.managed.deleteName', { name: entry.name })} title={t('workspace.managed.delete')} onClick={() => void remove(entry)} data-testid={`workspace-delete-${entry.name}`}><Trash2 /></Button>
             </div>}

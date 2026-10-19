@@ -16,6 +16,7 @@ from websockets.asyncio.client import connect
 
 from anygarden.machine import __version__, managed_workspace
 from anygarden.machine import instructions as disk_instructions
+from anygarden.machine import workspace_transfer
 from anygarden.machine.config import save_token
 from anygarden.machine.crash_budget import CrashBudget
 from anygarden.machine.detector import detect_engines
@@ -46,6 +47,8 @@ from anygarden.machine.protocol.frames import (
     TokenRequestFrame,
     WorkspaceAttachReceiptFrame,
     WorkspaceRevokeReceiptFrame,
+    WorkspaceTransferRequestFrame,
+    WorkspaceTransferResultFrame,
     parse_server_frame,
 )
 from anygarden.machine.safefs import safe_write_text, secure_chmod
@@ -247,6 +250,9 @@ class MachineDaemon:
         # yet: agent_id -> (digest, monotonic send time).
         self._instructions_pending: dict[str, tuple[str, float]] = {}
         self._instructions_too_large: set[str] = set()
+        # #914 — in-flight HTTP work-file transfers.
+        self._transfer_tasks: set[asyncio.Task] = set()
+        self._transfer_client_factory = _transfer_client
 
         # Issue #290 — per-(agent_id, filename) sha256 cache for the
         # ``memory/outbox/`` watcher. Same idea as the notes hash but
@@ -376,6 +382,7 @@ class MachineDaemon:
                         managed_workspace.CAPABILITY,
                         managed_workspace.EDIT_CAPABILITY,
                         managed_workspace.FILES_CAPABILITY,
+                        workspace_transfer.CAPABILITY,
                     ]
                     if managed_workspace.supported() else []
                 ),
@@ -477,6 +484,11 @@ class MachineDaemon:
         match frame.type:
             case "managed_workspace_request":
                 await self._handle_managed_workspace(frame)
+            case "workspace_transfer_request":
+                # A transfer can take minutes; keep serving other frames.
+                task = asyncio.create_task(self._handle_workspace_transfer(frame))
+                self._transfer_tasks.add(task)
+                task.add_done_callback(self._transfer_tasks.discard)
             case "sync_desired_state":
                 await self._handle_sync_desired_state(frame)
             case "sync_batch":
@@ -516,6 +528,34 @@ class MachineDaemon:
                 await self._handle_workspace_attach_request(frame)
             case "workspace_revoke":
                 await self._handle_workspace_revoke(frame)
+
+    def _transfer_url(self, ticket_id: str) -> str:
+        base = _base_url_from_machine_url(self.server_url)
+        if base.startswith("ws://"):
+            base = "http://" + base[len("ws://"):]
+        elif base.startswith("wss://"):
+            base = "https://" + base[len("wss://"):]
+        return f"{base}/api/v1/machine-transfers/{ticket_id}"
+
+    async def _handle_workspace_transfer(self, frame: WorkspaceTransferRequestFrame) -> None:
+        running = self._spawner.get_running(frame.agent_id)
+        kwargs = {
+            "running_generation": self._running_generations.get(frame.agent_id),
+            "running_pid": running.pid if running else None,
+            "running_started_at": running.started_at if running else None,
+        }
+        status, size, files = await asyncio.to_thread(
+            run_workspace_transfer,
+            self._manifest_store.agents_root,
+            frame,
+            self._transfer_url(frame.ticket_id),
+            kwargs,
+            self._transfer_client_factory,
+        )
+        await self._send(WorkspaceTransferResultFrame(
+            request_id=frame.request_id, agent_id=frame.agent_id,
+            status=status, size=size, files=files,
+        ).model_dump())
 
     async def _handle_managed_workspace(self, frame: ManagedWorkspaceRequestFrame) -> None:
         lock = self._agent_locks.setdefault(frame.agent_id, asyncio.Lock())
@@ -1339,9 +1379,11 @@ class MachineDaemon:
                 if digest == receipt.digest:
                     self._instructions_pending.pop(agent_id, None)
                     continue
+                # One update in flight at a time: a second one on the same
+                # base would be rejected and the older copy installed over
+                # the newer edit. The next tick sends it once acknowledged.
                 pending = self._instructions_pending.get(agent_id)
-                if (pending is not None and pending[0] == digest
-                        and now - pending[1] < self.INSTRUCTIONS_RESEND_AFTER):
+                if pending is not None and now - pending[1] < self.INSTRUCTIONS_RESEND_AFTER:
                     continue
                 self._instructions_pending[agent_id] = (digest, now)
                 frame = AgentInstructionsUpdateFrame(
@@ -1374,6 +1416,18 @@ class MachineDaemon:
             snapshot = disk_instructions.InstructionSnapshot.of(
                 frame.snapshot.agents_md, frame.snapshot.skills
             )
+            try:
+                current = await asyncio.to_thread(disk_instructions.collect, root)
+            except (disk_instructions.SnapshotTooLarge, UnicodeDecodeError, OSError):
+                current = None
+            if current is not None and current.digest() == snapshot.digest():
+                # The server already holds what is on disk (e.g. a resent
+                # update it had accepted); only the receipt was behind.
+                disk_instructions.write_receipt(
+                    root, disk_instructions.Receipt(frame.revision, snapshot.digest())
+                )
+                self._instructions_pending.pop(frame.agent_id, None)
+                return
             try:
                 await asyncio.to_thread(disk_instructions.archive, root, "conflict")
                 await asyncio.to_thread(disk_instructions.write_skills, root, snapshot.skills)
@@ -1956,3 +2010,77 @@ class MachineDaemon:
             await self._ws.send(json.dumps(data))
         except Exception as exc:
             log.error("send_error", error=str(exc), frame_type=data.get("type"))
+
+
+def _transfer_client():
+    import httpx
+
+    return httpx.Client(timeout=httpx.Timeout(30.0, read=300.0, write=300.0))
+
+
+def run_workspace_transfer(
+    agents_root: Path,
+    frame: WorkspaceTransferRequestFrame,
+    url: str,
+    running: dict,
+    client_factory=_transfer_client,
+) -> tuple[str, int | None, int | None]:
+    """#914 — perform one HTTP work-file transfer; return (status, size, files)."""
+    import tempfile
+
+    import httpx
+
+    headers = {"Authorization": f"Ticket {frame.ticket_token}"}
+    chunk = workspace_transfer.CHUNK_BYTES
+    client = client_factory()
+
+    def upload(stream, length: int) -> None:
+        response = client.put(
+            url,
+            content=iter(lambda: stream.read(chunk), b""),
+            headers={**headers, "Content-Length": str(length)},
+        )
+        if response.status_code == 413:
+            raise workspace_transfer.TransferError("too_large")
+        response.raise_for_status()
+
+    try:
+        with workspace_transfer.open_workspace(
+            agents_root, frame.agent_id, frame.generation,
+            edit_token=frame.edit_token if frame.operation == "receive" else None,
+            **running,
+        ) as workspace_fd:
+            if frame.operation == "send":
+                with workspace_transfer.open_for_send(
+                    workspace_fd, frame.path, max_bytes=frame.max_bytes
+                ) as (stream, size):
+                    upload(stream, size)
+                return "ready", size, 1
+            if frame.operation == "archive":
+                with tempfile.TemporaryFile() as archive:
+                    summary = workspace_transfer.build_archive(
+                        workspace_fd, frame.path, archive,
+                        max_entries=frame.max_entries or 10_000,
+                        max_bytes=frame.max_bytes,
+                        exclude_memory=frame.exclude_memory,
+                    )
+                    length = archive.tell()
+                    archive.seek(0)
+                    upload(archive, length)
+                return "ready", length, summary.files
+            if frame.size is None or frame.sha256 is None:
+                return "blocked", None, None
+            with client.stream("GET", url, headers=headers) as response:
+                response.raise_for_status()
+                workspace_transfer.receive_into(
+                    workspace_fd, frame.path, response.iter_bytes(chunk),
+                    size=frame.size, sha256=frame.sha256,
+                )
+            return "ready", frame.size, 1
+    except workspace_transfer.TransferError as exc:
+        return exc.status, None, None
+    except httpx.HTTPError as exc:
+        log.warning("workspace_transfer_http_failed", agent_id=frame.agent_id, error=str(exc))
+        return "failed", None, None
+    finally:
+        client.close()

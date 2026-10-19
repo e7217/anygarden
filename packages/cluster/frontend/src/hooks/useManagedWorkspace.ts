@@ -14,6 +14,10 @@ export interface ManagedWorkspaceResult {
   can_edit?: boolean
   /** #908 — download, delete and rename are available. */
   can_manage_files?: boolean
+  /** #914 — large files and folder zips over HTTP, with limits in bytes. */
+  can_transfer?: boolean
+  transfer_max_bytes?: number | null
+  archive_max_bytes?: number | null
   snapshot: null | {
     status: string
     cwd: string | null

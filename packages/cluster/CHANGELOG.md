@@ -1,9 +1,17 @@
 # CHANGELOG
 
-
 ## Unreleased
 
 ### Added
+
+- Work files up to 20 MiB can be uploaded and downloaded, and a folder (or
+  the whole workspace) downloads as a zip up to 200 MiB, with progress
+  (#914). The bytes go over HTTP instead of one machine WebSocket frame: the
+  server sends the machine a one-time ticket and the machine PUTs or GETs
+  `/api/v1/machine-transfers/{id}`. Tickets are hashed, bound to machine,
+  agent, path and direction, expire in two minutes and work once.
+  Behind nginx, raise `client_max_body_size` (see `docs/deployment.md`).
+  Older machines keep the 768 KiB / 1 MiB limits.
 
 - Agent settings → **Workspace** is now the one place for an agent's files
   (#908). Instructions and skills moved there from Settings, above the work
@@ -29,6 +37,12 @@
   previous behaviour until updated.
 
 ### Fixed
+
+- An agent that edited its instructions twice within one sync tick could
+  lose the newer edit: the machine sent a second update on the same base,
+  the server rejected it and the machine installed the older copy (#914).
+  Only one update is in flight now, and a rejection that matches the disk
+  only updates the receipt.
 
 - The server no longer moves an agent to another machine on its own (#907).
   A crash loop stops the agent on its machine (`crash_loop`), a full machine

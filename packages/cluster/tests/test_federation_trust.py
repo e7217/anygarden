@@ -937,7 +937,7 @@ def test_peer_migration_schema_matches_product_models(tmp_path):
     )
     cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{path}")
     assert ScriptDirectory.from_config(cfg).get_heads() == [
-        "095_agent_instruction_revisions"
+        "096_machine_transfers"
     ]
     command.upgrade(cfg, "063")
     command.upgrade(cfg, "head")

@@ -217,6 +217,10 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
             lifecycle=lifecycle,
         )
 
+    elif frame_type == "workspace_transfer_result":
+        # #914 — a large work-file transfer finished on the machine.
+        machine_bus.resolve_transfer(machine_id, data)
+
     elif frame_type == "agent_instructions_result":
         # #908 — reply to a server-initiated instructions write.
         machine_bus.resolve_instructions(machine_id, data)

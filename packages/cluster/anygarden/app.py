@@ -67,6 +67,7 @@ from anygarden.routing.router import router as routing_router
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.workspaces.router import router as workspaces_router
+from anygarden.workspaces.transfer_router import router as machine_transfers_router
 from anygarden.ws.handler import router as ws_router
 from anygarden.ws.machine_handler import router as machine_ws_router
 from anygarden.ws.manager import ConnectionManager
@@ -1740,6 +1741,11 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
                 await notify_and_redispatch_orphans(factory, manager, orphaned)
             # #427 — refresh the fleet-health gauge (previously dead).
             await _reconcile_agents_by_state(app)
+            # #914 — drop expired transfer tickets and stray spool files.
+            from anygarden.workspaces.transfers import cleanup as cleanup_transfers
+
+            async with factory() as db:
+                await cleanup_transfers(db, app.state.config.transfer_spool_dir)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -1809,6 +1815,7 @@ def create_app(
     app.include_router(rooms_router)
     app.include_router(messages_router)
     app.include_router(machines_api_router)
+    app.include_router(machine_transfers_router)
     app.include_router(machine_links_router)
     app.include_router(agents_api_router)
     app.include_router(room_memory_router)
