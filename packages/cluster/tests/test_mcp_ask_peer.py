@@ -171,6 +171,34 @@ async def _targets(sf) -> dict[str, PeerAskTarget]:
     return {r.target_participant_id: r for r in rows}
 
 
+START_TIMEOUT = 900
+
+
+async def _age_turn(sf, participant_id: str, age: timedelta) -> None:
+    """Pretend the participant's open turn was created ``age`` ago."""
+    turn = await _open_turn(sf, participant_id)
+    async with sf() as db:
+        row = await db.get(AgentTurn, turn.request_id)
+        row.created_at = datetime.now(timezone.utc) - age
+        await db.commit()
+
+
+async def _lease_turn(sf, participant_id: str) -> None:
+    """Mark the participant's open turn as picked up by its agent."""
+    turn = await _open_turn(sf, participant_id)
+    now = datetime.now(timezone.utc)
+    async with sf() as db:
+        row = await db.get(AgentTurn, turn.request_id)
+        row.state = "leased"
+        attempt = (await db.scalars(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == turn.request_id)
+        )).one()
+        attempt.state = "leased"
+        attempt.leased_at = now
+        attempt.lease_expires_at = now + timedelta(hours=1)
+        await db.commit()
+
+
 class TestAskPeerPostsAtOnce:
     @pytest.mark.asyncio
     async def test_questions_are_posted_in_the_trigger_thread_before_the_reply(
@@ -356,7 +384,11 @@ class TestFanIn:
 
     @pytest.mark.asyncio
     @pytest.mark.req("COL-06")
-    async def test_deadline_times_out_silent_peers_and_still_wakes(self, ws_env) -> None:
+    async def test_peer_that_never_starts_times_out_as_unavailable_and_still_wakes(
+        self, ws_env
+    ) -> None:
+        """#900 — a peer whose turn never starts (agent not connected) is
+        settled after the start timeout, not held until the group cap."""
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
 
@@ -364,7 +396,94 @@ class TestFanIn:
             _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
             _ask_peer(client, sender_token, room.id, [(peer_pid, "오래 걸리는 일")])
             _agent_send(client, room.id, sender_token, "기다립니다.", await _proof(sf, sender_pid))
+            # Not started yet, but still inside the start timeout: keep waiting.
             assert await dispatch_peer_ask_groups(sf, None) == 0
+            assert (await _targets(sf))[peer_pid].state == "pending"
+            await _age_turn(sf, peer_pid, timedelta(seconds=START_TIMEOUT + 1))
+            assert await dispatch_peer_ask_groups(sf, None) == 1
+
+        row = (await _targets(sf))[peer_pid]
+        assert (row.state, row.reason) == ("timeout", "peer_unavailable")
+        async with sf() as db:
+            group = (await db.scalars(select(PeerAskGroup))).one()
+            wake = await db.get(Message, (await db.get(AgentTurn, group.wake_request_id)).trigger_message_id)
+            peer_turn = await db.get(AgentTurn, row.request_id)
+        assert "timeout (peer_unavailable)" in wake.content
+        # The peer's turn is left alone; only the question is settled.
+        assert peer_turn.state == "pending"
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
+    async def test_a_working_peer_is_waited_for_past_the_old_30_minutes(
+        self, ws_env
+    ) -> None:
+        """#900 — a peer whose turn is running is not cut off by elapsed time."""
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+            _ask_peer(client, sender_token, room.id, [(peer_pid, "오래 걸리는 일")])
+            _agent_send(client, room.id, sender_token, "기다립니다.", await _proof(sf, sender_pid))
+            await _lease_turn(sf, peer_pid)
+            await _age_turn(sf, peer_pid, timedelta(hours=2))
+            async with sf() as db:
+                group = (await db.scalars(select(PeerAskGroup))).one()
+                group.created_at = datetime.now(timezone.utc) - timedelta(hours=2)
+                await db.commit()
+            assert await dispatch_peer_ask_groups(sf, None) == 0
+
+        assert (await _targets(sf))[peer_pid].state == "pending"
+        assert (await _group(sf)).state == "collecting"
+
+    @pytest.mark.asyncio
+    async def test_a_retrying_peer_is_timed_from_its_last_attempt(self, ws_env) -> None:
+        """A peer whose lease lapsed and is waiting to retry ran recently; the
+        start timeout counts from that run, not from when it was asked."""
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+            _ask_peer(client, sender_token, room.id, [(peer_pid, "오래 걸리는 일")])
+            _agent_send(client, room.id, sender_token, "기다립니다.", await _proof(sf, sender_pid))
+            turn = await _open_turn(sf, peer_pid)
+            now = datetime.now(timezone.utc)
+
+            async def ended(ago: timedelta) -> None:
+                async with sf() as db:
+                    row = await db.get(AgentTurn, turn.request_id)
+                    row.state = "retrying"
+                    row.created_at = now - timedelta(hours=2)
+                    attempt = (await db.scalars(select(AgentTurnAttempt).where(
+                        AgentTurnAttempt.turn_id == turn.request_id
+                    ))).one()
+                    attempt.state = "interrupted"
+                    attempt.leased_at = now - timedelta(hours=1)
+                    attempt.ended_at = now - ago
+                    await db.commit()
+
+            await ended(timedelta(minutes=1))
+            assert await dispatch_peer_ask_groups(sf, None) == 0
+            assert (await _targets(sf))[peer_pid].state == "pending"
+
+            await ended(timedelta(seconds=START_TIMEOUT + 1))
+            assert await dispatch_peer_ask_groups(sf, None) == 1
+
+        row = (await _targets(sf))[peer_pid]
+        assert (row.state, row.reason) == ("timeout", "peer_unavailable")
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("COL-06")
+    async def test_group_cap_times_out_even_a_working_peer(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+            _ask_peer(client, sender_token, room.id, [(peer_pid, "오래 걸리는 일")])
+            _agent_send(client, room.id, sender_token, "기다립니다.", await _proof(sf, sender_pid))
+            await _lease_turn(sf, peer_pid)
             async with sf() as db:
                 group = (await db.scalars(select(PeerAskGroup))).one()
                 group.deadline_at = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -372,11 +491,59 @@ class TestFanIn:
             assert await dispatch_peer_ask_groups(sf, None) == 1
 
         row = (await _targets(sf))[peer_pid]
-        assert row.state == "timeout"
+        assert (row.state, row.reason) == ("timeout", "deadline")
         async with sf() as db:
             group = (await db.scalars(select(PeerAskGroup))).one()
             wake = await db.get(Message, (await db.get(AgentTurn, group.wake_request_id)).trigger_message_id)
+            peer_turn = await db.get(AgentTurn, row.request_id)
         assert "timeout (deadline)" in wake.content
+        assert peer_turn.state == "leased"
+
+    @pytest.mark.asyncio
+    async def test_a_terminal_peer_turn_whose_question_stayed_pending_is_repaired(
+        self, ws_env
+    ) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+            _ask_peer(client, sender_token, room.id, [(peer_pid, "q")])
+            _agent_send(client, room.id, sender_token, "초안", await _proof(sf, sender_pid))
+            # The terminal hook was missed: the turn ended, the row did not.
+            async with sf() as db:
+                row = (await db.scalars(select(PeerAskTarget))).one()
+                turn = await db.get(AgentTurn, row.request_id)
+                turn.state = "failed"
+                turn.terminal_reason = "retry_exhausted"
+                await db.commit()
+            assert await dispatch_peer_ask_groups(sf, None) == 1
+
+        row = (await _targets(sf))[peer_pid]
+        assert (row.state, row.reason) == ("failed", "retry_exhausted")
+        assert row.finished_at is not None
+
+    @pytest.mark.asyncio
+    async def test_a_question_whose_peer_turn_is_gone_fails(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+            _ask_peer(client, sender_token, room.id, [(peer_pid, "q")])
+            _agent_send(client, room.id, sender_token, "초안", await _proof(sf, sender_pid))
+            async with sf() as db:
+                row = (await db.scalars(select(PeerAskTarget))).one()
+                for attempt in (await db.scalars(select(AgentTurnAttempt).where(
+                    AgentTurnAttempt.turn_id == row.request_id
+                ))).all():
+                    await db.delete(attempt)
+                await db.delete(await db.get(AgentTurn, row.request_id))
+                await db.commit()
+            assert await dispatch_peer_ask_groups(sf, None) == 1
+
+        row = (await _targets(sf))[peer_pid]
+        assert (row.state, row.reason) == ("failed", "turn_missing")
 
     @pytest.mark.asyncio
     async def test_peer_that_cannot_run_settles_at_once(self, ws_env) -> None:
@@ -666,6 +833,19 @@ class TestTargetStates:
         assert (row.state, row.reason) == ("timeout", "deadline")
 
 
+def test_settle_limits_default_and_env_override(monkeypatch) -> None:
+    from anygarden.orchestration import peer_fanin
+
+    monkeypatch.delenv("ANYGARDEN_PEER_ASK_DEADLINE_SEC", raising=False)
+    monkeypatch.delenv("ANYGARDEN_PEER_ASK_START_TIMEOUT_SEC", raising=False)
+    assert peer_fanin.deadline_seconds() == 86400
+    assert peer_fanin.start_timeout_seconds() == START_TIMEOUT
+    monkeypatch.setenv("ANYGARDEN_PEER_ASK_START_TIMEOUT_SEC", "60")
+    assert peer_fanin.start_timeout_seconds() == 60
+    monkeypatch.setenv("ANYGARDEN_PEER_ASK_START_TIMEOUT_SEC", "nope")
+    assert peer_fanin.start_timeout_seconds() == START_TIMEOUT
+
+
 def test_render_results_lists_every_peer_with_its_outcome() -> None:
     from anygarden.orchestration.peer_fanin import render_results
 
@@ -681,6 +861,8 @@ def test_render_results_lists_every_peer_with_its_outcome() -> None:
              "forwarded": [{"name": "PM2", "question": "네트워크?"}]},
             {"name": "agent02", "state": "completed", "reason": "declined",
              "question": "로그?", "answer": None, "forwarded": []},
+            {"name": "agent03", "state": "timeout", "reason": "peer_unavailable",
+             "question": "CPU?", "answer": None, "forwarded": []},
         ],
     )
 
@@ -691,6 +873,7 @@ def test_render_results_lists_every_peer_with_its_outcome() -> None:
     assert "2. agent01 — failed (retry_exhausted)" in text
     assert "It asked you to ask PM2: 네트워크?" in text
     assert "3. agent02 — completed (declined)\nQuestion: 로그?\nAnswer: (no reply was posted)" in text
+    assert "4. agent03 — timeout (peer_unavailable)\nThis agent never started" in text
 
 
 class TestReviewFixes:
@@ -835,10 +1018,8 @@ async def test_three_peer_ask_wakes_the_caller_once_with_every_outcome(ws_env) -
                     await _proof(sf, second_pid), thread_root_id=trigger["id"])
         # The third peer is still silent: no wake yet.
         assert await dispatch_peer_ask_groups(sf, None) == 0
-        async with sf() as db:
-            group = (await db.scalars(select(PeerAskGroup))).one()
-            group.deadline_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-            await db.commit()
+        # Its turn never starts (agent not connected).
+        await _age_turn(sf, third_pid, timedelta(seconds=START_TIMEOUT + 1))
         assert await dispatch_peer_ask_groups(sf, None) == 1
         assert await dispatch_peer_ask_groups(sf, None) == 0
 
@@ -852,5 +1033,5 @@ async def test_three_peer_ask_wakes_the_caller_once_with_every_outcome(ws_env) -
         wake = await db.get(Message, (await db.get(AgentTurn, group.wake_request_id)).trigger_message_id)
     assert group.state == "woken"
     assert len(wakes) == 2  # the original turn and exactly one wake
-    for needle in ("디스크 OK", "메모리 OK", "timeout (deadline)"):
+    for needle in ("디스크 OK", "메모리 OK", "timeout (peer_unavailable)"):
         assert needle in wake.content

@@ -12,10 +12,12 @@ now:
 3. Every terminal turn transition calls :func:`on_turn_terminal`, which
    settles the matching target row or marks the caller closed. When both
    sides are done the group becomes ``ready``.
-4. The turn-recovery worker (:func:`dispatch_peer_ask_groups`) expires
-   overdue targets, wakes the caller of every ``ready`` group with a hidden
-   result message in the caller's original conversation, and keeps the
-   caller's "waiting for peers" indicator alive meanwhile.
+4. The turn-recovery worker (:func:`dispatch_peer_ask_groups`) settles
+   targets whose peer turn will not settle them itself (never started,
+   missing, or past the group's last-resort cap), wakes the caller of
+   every ``ready`` group with a hidden result message in the caller's
+   original conversation, and keeps the caller's "waiting for peers"
+   indicator alive meanwhile.
 
 The state lives in the database because peer work often takes minutes and
 must survive a restart. Only :func:`dispatch_peer_ask_groups` broadcasts;
@@ -32,12 +34,13 @@ from typing import Any
 from uuid import uuid4
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import (
     AgentTurn,
+    AgentTurnAttempt,
     Message,
     Participant,
     PeerAskGroup,
@@ -46,7 +49,14 @@ from anygarden.db.models import (
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_DEADLINE_SECONDS = 1800
+# Last-resort cap on a whole group (#900). A peer that is working is
+# waited for; the turn system ends stalled turns, so this only guards
+# against a turn that keeps renewing its lease forever.
+DEFAULT_DEADLINE_SECONDS = 86400
+# How long a peer turn may sit unstarted (agent not connected, machine
+# down) before its question is settled as ``peer_unavailable``. Generous,
+# because a peer may be queued behind its own earlier turn.
+DEFAULT_START_TIMEOUT_SECONDS = 900
 WAITING_HEARTBEAT_SECONDS = 3.0
 MAX_ORIGIN_CHARS = 1000
 RESULTS_SYSTEM_ORIGIN = "peer_ask_results"
@@ -56,13 +66,23 @@ TERMINAL_TARGET_STATES = frozenset({"completed", "failed", "cancelled", "timeout
 _last_heartbeat: dict[str, float] = {}
 
 
-def deadline_seconds() -> int:
-    raw = os.environ.get("ANYGARDEN_PEER_ASK_DEADLINE_SEC")
+def _env_seconds(name: str, default: int) -> int:
+    raw = os.environ.get(name)
     try:
-        value = int(raw) if raw else DEFAULT_DEADLINE_SECONDS
+        value = int(raw) if raw else default
     except ValueError:
-        value = DEFAULT_DEADLINE_SECONDS
+        value = default
     return max(1, value)
+
+
+def deadline_seconds() -> int:
+    return _env_seconds("ANYGARDEN_PEER_ASK_DEADLINE_SEC", DEFAULT_DEADLINE_SECONDS)
+
+
+def start_timeout_seconds() -> int:
+    return _env_seconds(
+        "ANYGARDEN_PEER_ASK_START_TIMEOUT_SEC", DEFAULT_START_TIMEOUT_SECONDS
+    )
 
 
 def _now() -> datetime:
@@ -288,6 +308,18 @@ async def _origin_message(db: AsyncSession, group: PeerAskGroup) -> Message | No
     return msg
 
 
+# Plain-language notes for reasons the fan-in itself assigns, so the
+# caller can tell the user why a peer has no answer.
+_REASON_NOTES = {
+    "peer_unavailable": (
+        "This agent never started working on the question "
+        "(it is probably not connected)."
+    ),
+    "deadline": "This agent was still working when the waiting limit ran out.",
+    "turn_missing": "This agent's turn no longer exists.",
+}
+
+
 def render_results(
     *,
     caller_pid: str,
@@ -312,7 +344,10 @@ def render_results(
         lines += ["", "Your draft from before you asked (not posted):", draft]
     for i, e in enumerate(entries, 1):
         status = e["state"] + (f" ({e['reason']})" if e.get("reason") else "")
-        lines += ["", f"{i}. {e['name']} — {status}", f"Question: {e['question']}"]
+        lines += ["", f"{i}. {e['name']} — {status}"]
+        if e["state"] != "completed" and e.get("reason") in _REASON_NOTES:
+            lines.append(_REASON_NOTES[e["reason"]])
+        lines.append(f"Question: {e['question']}")
         if e.get("answer"):
             lines += ["Answer:", e["answer"]]
         elif e["state"] == "completed":
@@ -422,29 +457,108 @@ async def _wake(db: AsyncSession, group: PeerAskGroup) -> Message | None:
     return msg
 
 
+async def _last_attempt_times(
+    db: AsyncSession, request_ids: list[str]
+) -> dict[str, datetime]:
+    """Latest time each turn's attempts were leased or ended."""
+    if not request_ids:
+        return {}
+    ran = func.max(func.coalesce(AgentTurnAttempt.ended_at, AgentTurnAttempt.leased_at))
+    rows = (
+        await db.execute(
+            select(AgentTurnAttempt.turn_id, ran)
+            .where(AgentTurnAttempt.turn_id.in_(request_ids))
+            .group_by(AgentTurnAttempt.turn_id)
+        )
+    ).all()
+    return {rid: at for rid, at in rows if at is not None}
+
+
+def _settle(target: PeerAskTarget, state: str, reason: str | None, now: datetime) -> None:
+    target.state = state
+    target.reason = reason
+    target.finished_at = now
+
+
 async def _advance_collecting(db: AsyncSession, now: datetime) -> None:
-    """Time out overdue targets and re-check readiness of waiting groups.
+    """Settle targets by their peer turn's state; re-check group readiness.
+
+    A peer turn that has started is left to the turn system: every terminal
+    transition settles its target through :func:`on_turn_terminal`. What
+    the turn system cannot settle is handled here (#900):
+
+    - the turn is gone → ``failed (turn_missing)``
+    - the turn is terminal but the hook missed the row → its real outcome
+    - the turn never started within :func:`start_timeout_seconds` →
+      ``timeout (peer_unavailable)``; the turn itself is left alone
+    - the group passed ``deadline_at`` (last-resort cap) → ``timeout
+      (deadline)``
 
     The terminal hook decides readiness from its own transaction, so a peer
     and the caller closing at the same moment can each miss the other's
     write; re-checking every closed-caller group here repairs that.
     """
-    groups = (
+    from anygarden.turns.service import ACTIVE_ATTEMPT_STATES, TERMINAL_TURN_STATES
+
+    start_cutoff = now - timedelta(seconds=start_timeout_seconds())
+    rows = (
+        await db.execute(
+            select(PeerAskTarget, PeerAskGroup, AgentTurn, AgentTurnAttempt.id)
+            .join(PeerAskGroup, PeerAskGroup.id == PeerAskTarget.group_id)
+            .outerjoin(AgentTurn, AgentTurn.request_id == PeerAskTarget.request_id)
+            .outerjoin(
+                AgentTurnAttempt,
+                (AgentTurnAttempt.turn_id == PeerAskTarget.request_id)
+                & AgentTurnAttempt.state.in_(ACTIVE_ATTEMPT_STATES),
+            )
+            .where(
+                PeerAskGroup.state == "collecting",
+                PeerAskTarget.state.notin_(TERMINAL_TARGET_STATES),
+            )
+        )
+    ).all()
+    touched: dict[str, PeerAskGroup] = {}
+    unstarted: list[tuple[PeerAskTarget, PeerAskGroup]] = []
+    for target, group, turn, active_attempt_id in rows:
+        if turn is None:
+            _settle(target, "failed", "turn_missing", now)
+        elif turn.state in TERMINAL_TURN_STATES:
+            _settle(target, *_target_outcome(turn), now)
+            target.reply_message_id = turn.accepted_message_id
+        elif _aware(group.deadline_at) <= now:
+            _settle(target, "timeout", "deadline", now)
+        elif (
+            active_attempt_id is None
+            and turn.state in {"pending", "retrying"}
+            and _aware(turn.created_at) <= start_cutoff
+        ):
+            unstarted.append((target, group))
+            continue
+        else:
+            continue
+        touched[group.id] = group
+
+    # A retrying turn already ran once: count its wait from when the last
+    # attempt ended, not from when the question was asked.
+    last_run = await _last_attempt_times(db, [t.request_id for t, _ in unstarted])
+    for target, group in unstarted:
+        ran = last_run.get(target.request_id)
+        if ran is not None and _aware(ran) > start_cutoff:
+            continue
+        _settle(target, "timeout", "peer_unavailable", now)
+        touched[group.id] = group
+
+    closed = (
         await db.execute(
             select(PeerAskGroup).where(
                 PeerAskGroup.state == "collecting",
-                (PeerAskGroup.deadline_at <= now)
-                | PeerAskGroup.caller_closed_at.isnot(None),
+                PeerAskGroup.caller_closed_at.isnot(None),
             )
         )
     ).scalars().all()
-    for group in groups:
-        if _aware(group.deadline_at) <= now:
-            for t in await _targets(db, group.id):
-                if t.state not in TERMINAL_TARGET_STATES:
-                    t.state = "timeout"
-                    t.reason = "deadline"
-                    t.finished_at = now
+    for group in closed:
+        touched[group.id] = group
+    for group in touched.values():
         await _mark_ready_if_done(db, group)
 
 
