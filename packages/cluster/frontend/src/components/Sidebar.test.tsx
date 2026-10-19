@@ -233,7 +233,7 @@ describe('Sidebar — footer admin menu (#699)', () => {
     // #593 — federation admin entry joins the experimental group while the
     // live wiring is landing (task #33/#34).
     expect(screen.getByRole('button', {
-      name: 'Federation, experimental feature',
+      name: 'Partner nodes, experimental feature',
     })).toBeInTheDocument()
     expect(screen.getByRole('button', {
       name: 'Topology, experimental feature',

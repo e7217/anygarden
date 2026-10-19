@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { useMachines } from '@/hooks/useMachines'
 import { useAgents } from '@/hooks/useAgents'
 import { useRooms } from '@/hooks/useRooms'
@@ -356,7 +357,12 @@ export default function AdminMachines() {
             <span>{t('admin.machines.registerMachine')}</span>
           </Button>
         </div>
-        <p className="px-4 pt-3 text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('admin.machines.purpose')}</p>
+        <p className="px-4 pt-3 text-xs leading-relaxed text-[var(--color-foreground-muted)]">
+          {t('admin.machines.purpose')}{' '}
+          {t('admin.machines.partnerHintBefore')}
+          <Link to="/admin/federation" className="font-medium text-[var(--color-brand-text)] underline underline-offset-2">{t('navigation.federation')}</Link>
+          {t('admin.machines.partnerHintAfter')}
+        </p>
         {machinesStatus === 'error' && <div className="px-4 pt-3 text-xs text-[var(--color-destructive)]" role="alert">
           <p>{t('admin.machines.loadFailed')}</p>
           <Button variant="ghost" size="sm" onClick={() => { void fetchMachines().catch(() => {}) }}><RefreshCw />{t('common.refresh')}</Button>
@@ -366,7 +372,7 @@ export default function AdminMachines() {
             type="button"
             onClick={() => setSelectedId(SERVER)}
             aria-current={isServerView ? 'true' : undefined}
-            className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-[background-color,border-color,box-shadow] lg:w-full ${
+            className={`w-48 shrink-0 self-start text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-[background-color,border-color,box-shadow] lg:w-full ${
               isServerView
                 ? 'bg-[var(--color-brand-tint-bg)] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
                 : 'bg-[var(--color-surface-alt)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'

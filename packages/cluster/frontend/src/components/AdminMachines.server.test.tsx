@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import { MemoryRouter } from 'react-router-dom'
 import type { PackageUpdate } from '@/hooks/useSystemVersion'
 
 const state = vi.hoisted(() => ({ updates: [] as PackageUpdate[], machines: [] as unknown[] }))
@@ -31,7 +32,7 @@ const serverRow = (update_available: boolean): PackageUpdate => ({
 
 it('[#888] lists this server above the machines even when no machine is registered', () => {
   state.updates = [serverRow(false)]
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   const entry = screen.getByRole('button', { name: /This server/ })
   expect(entry).toHaveTextContent('v0.21.0')
   expect(screen.getByText('No machines registered')).toBeInTheDocument()
@@ -39,7 +40,7 @@ it('[#888] lists this server above the machines even when no machine is register
 
 it('[#888] shows the server version and update command when the server entry is selected', () => {
   state.updates = [serverRow(true)]
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   const entry = screen.getByRole('button', { name: /This server/ })
   expect(entry).toHaveTextContent('update available')
   fireEvent.click(entry)
@@ -47,4 +48,9 @@ it('[#888] shows the server version and update command when the server entry is 
   const panel = screen.getByRole('region', { name: 'This server' })
   expect(within(panel).getByText('pip install -U anygarden')).toBeInTheDocument()
   expect(within(panel).getByRole('button', { name: 'Check for updates' })).toBeInTheDocument()
+})
+
+it('[#889] points people who want to work with someone else\'s server to Partner nodes', () => {
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
+  expect(screen.getByRole('link', { name: 'Partner nodes' })).toHaveAttribute('href', '/admin/federation')
 })

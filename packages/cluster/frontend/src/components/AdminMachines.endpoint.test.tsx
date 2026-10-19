@@ -3,6 +3,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import { MemoryRouter } from 'react-router-dom'
 
 const mocks = vi.hoisted(() => ({
   createAgent: vi.fn().mockResolvedValue({ id: 'new-agent' }),
@@ -41,7 +42,7 @@ import AdminMachines from './AdminMachines'
 afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.calls.length = 0 })
 
 async function openPiDialog() {
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   const newAgent = await screen.findByRole('button', { name: 'New Agent' })
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
@@ -115,7 +116,7 @@ it('blocks creation for an invalid base URL', async () => {
 })
 
 it('keeps direct server fields out of the Codex creation path', async () => {
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   const newAgent = await screen.findByRole('button', { name: 'New Agent' })
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
