@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
@@ -41,6 +42,10 @@ export interface PresenceDotProps {
   ring?: boolean
   /** Halo thickness in px when ``ring`` is set. Default 2. */
   ringWidth?: number
+  /** MSG-09 — the agent is answering somewhere (#912). Adds a pulse
+   *  ring around the dot (static under reduced motion) and says so in
+   *  the accessible name. */
+  working?: boolean
   'data-testid'?: string
 }
 
@@ -78,19 +83,21 @@ export default function PresenceDot({
   agentState,
   ring = false,
   ringWidth = 2,
+  working = false,
   'data-testid': testId,
 }: PresenceDotProps) {
   const { locale, t } = useLocale()
   const offline = t('common.offline')
   const stateKey = agentState && agentStateKeys[agentState as keyof typeof agentStateKeys]
   const stateLabel = stateKey ? t(stateKey) : agentState
-  const title = online
+  const baseTitle = online
     ? t('common.online')
     : variant === 'agent'
       ? stateLabel ? `${offline} · ${stateLabel}` : offline
       : `${offline} · ${t('common.lastSeen', {
         time: formatAgo(lastSeenAt, locale, t('common.unknown'), t('common.justNow')),
       })}`
+  const title = working ? `${baseTitle} · ${t('common.responding')}` : baseTitle
 
   // Semantic colors follow the active light or dark theme.
   const onlineBg = 'var(--color-status-online, #5b9e6d)'
@@ -110,8 +117,9 @@ export default function PresenceDot({
       role="status"
       aria-label={title}
       title={title}
-      className={`inline-block rounded-full ${className}`}
+      className={`inline-block rounded-full ${working ? 'presence-working' : ''} ${className}`}
       data-presence={online ? 'online' : 'offline'}
+      data-working={working ? 'true' : undefined}
       data-testid={testId}
       style={{
         width: size,
@@ -119,6 +127,11 @@ export default function PresenceDot({
         background: bg,
         boxShadow,
         flexShrink: 0,
+        ...(working ? {
+          '--presence-halo': boxShadow,
+          '--presence-halo-width': `${ring ? ringWidth : 0}px`,
+          '--presence-working-color': online ? onlineBg : offlineBg,
+        } as CSSProperties : {}),
       }}
     />
   )

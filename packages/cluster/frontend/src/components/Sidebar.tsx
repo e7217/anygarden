@@ -18,6 +18,8 @@ import {
 import PresenceDot from '@/components/PresenceDot'
 import MachineBadge from '@/components/MachineBadge'
 import UpdateDot from '@/components/UpdateDot'
+import RespondingIndicator from '@/components/RespondingIndicator'
+import { ActiveTurnsContext, useActiveTurns, useActiveTurnsContext } from '@/hooks/useActiveTurns'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
@@ -192,6 +194,8 @@ export default function Sidebar({
   const navigate = useNavigate()
   const location = useLocation()
   const isAdmin = !!user?.is_admin
+  // MSG-09 — guests can't reach the endpoint; their sidebar has no rooms to mark.
+  const activeTurns = useActiveTurns(localStorage.getItem('anygarden_is_guest') !== '1')
 
   // #546 — server version (all users) + admin-only cached update status.
   const serverVersion = useSystemVersion()
@@ -407,7 +411,7 @@ export default function Sidebar({
   }
 
   return (
-    <>
+    <ActiveTurnsContext.Provider value={activeTurns}>
       {/* Mobile backdrop */}
       {open && (
         <button
@@ -671,7 +675,7 @@ export default function Sidebar({
                           size="xs"
                         />
                         <span className="min-w-0 truncate">{label}</span>
-                        {dm.has_updates && <UpdateDot className="ml-auto" />}
+                        <RoomStatus roomId={dm.id} hasUpdates={dm.has_updates} />
                       </button>
                     )
                   })}
@@ -824,8 +828,16 @@ export default function Sidebar({
         </div>
       </div>
       </aside>
-    </>
+    </ActiveTurnsContext.Provider>
   )
+}
+
+/** MSG-09 — a room row's trailing status: answering wins over unread,
+ *  which comes back once the answer lands. */
+function RoomStatus({ roomId, hasUpdates }: { roomId: string; hasUpdates?: boolean }) {
+  const { roomIds } = useActiveTurnsContext()
+  if (roomIds.has(roomId)) return <RespondingIndicator className="ml-auto" />
+  return hasUpdates ? <UpdateDot className="ml-auto" /> : null
 }
 
 /**
@@ -903,7 +915,7 @@ function RoomTreeNodeView({
             ? <Link2 aria-label={t('federation.sharedChannel')} className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
             : <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />}
           <span className="min-w-0 truncate">{node.room.name}</span>
-          {node.room.has_updates && <UpdateDot className="ml-auto" />}
+          <RoomStatus roomId={node.room.id} hasUpdates={node.room.has_updates} />
         </button>
         {canPin && (
           <button
@@ -1002,6 +1014,7 @@ function AgentDMListAdmin({
   onCreateAgentOpenChange: (open: boolean) => void
 }) {
   const { t } = useLocale()
+  const { agentIds: activeAgentIds } = useActiveTurnsContext()
   const { confirm, notify } = useFeedback()
   const {
     agents,
@@ -1272,13 +1285,13 @@ function AgentDMListAdmin({
                     (agent.avatar_kind as AvatarKind | null | undefined) ?? null
                   }
                   avatarValue={agent.avatar_value ?? null}
-                  presence={{ variant: 'agent', online, agentState: displayState }}
+                  presence={{ variant: 'agent', online, agentState: displayState, working: activeAgentIds.has(agent.id) }}
                 />
                 <span className="min-w-0 truncate" title={agent.name}>
                   {agent.name}
                 </span>
                 <MachineBadge placement={agent.placement} online={!machineOffline} />
-                {soloDM?.has_updates && <UpdateDot className="ml-auto" />}
+                {soloDM && <RoomStatus roomId={soloDM.id} hasUpdates={soloDM.has_updates} />}
                 {hasMultipleDMs && (
                   // #243 — hide the DM count on hover so the space is
                   // handed back to the name while the action buttons
@@ -1358,7 +1371,7 @@ function AgentDMListAdmin({
                             {t('chat.temporaryShort')}
                           </span>
                         )}
-                        {dm.has_updates && <UpdateDot className="ml-auto" />}
+                        <RoomStatus roomId={dm.id} hasUpdates={dm.has_updates} />
                       </button>
                       <SidebarRoomMenu
                         roomId={dm.id}
@@ -1394,7 +1407,7 @@ function AgentDMListAdmin({
               size="xs"
             />
             <span className="min-w-0 truncate">{label}</span>
-            {dm.has_updates && <UpdateDot className="ml-auto" />}
+            <RoomStatus roomId={dm.id} hasUpdates={dm.has_updates} />
           </button>
         )
       })}
@@ -1539,7 +1552,7 @@ function PinnedRoomItem({
       >
         <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
         <span className="min-w-0 truncate">{room.name}</span>
-        {room.has_updates && <UpdateDot className="ml-auto" />}
+        <RoomStatus roomId={room.id} hasUpdates={room.has_updates} />
       </button>
       <button
         type="button"

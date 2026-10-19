@@ -17,6 +17,7 @@ import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
 import ThreadPanel, { type ThreadWorker } from '@/components/ThreadPanel'
 import { useOpenTurns } from '@/hooks/useOpenTurns'
+import { ACTIVE_TURNS_INVALIDATE_EVENT } from '@/hooks/useActiveTurns'
 import { activeTurnByParticipant, threadTurnIds } from '@/lib/openTurns'
 import { workLabel } from '@/lib/typingStage'
 import { indexThreads, canHostThread } from '@/lib/threads'
@@ -91,6 +92,12 @@ function LocalChatPage() {
   // panel can never disagree about which messages are replies.
   const threadIndex = useMemo(() => indexThreads(messages), [messages])
   const { turns: openTurns, cancel: cancelTurns } = useOpenTurns(selectedRoom, typingUsers)
+  // MSG-09 — the open room knows at once when an agent starts or stops;
+  // nudge the sidebar so it doesn't wait for its next poll.
+  const typingKey = Array.from(typingUsers).sort().join(',')
+  useEffect(() => {
+    window.dispatchEvent(new Event(ACTIVE_TURNS_INVALIDATE_EVENT))
+  }, [selectedRoom, typingKey])
   const [threadRootId, setThreadRootId] = useState<string | null>(null)
   // An orphaned reply is in ``roots`` so it stays visible, but it can
   // never host a thread — the server rejects a thread rooted at a reply.
