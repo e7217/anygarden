@@ -1167,8 +1167,8 @@ export default function ManifestPanel({
           <div className="flex-1 overflow-y-auto py-2 space-y-5">
             {/* Files tree + editor ----------------------------------- */}
             <section className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>{t('admin.manifest.files')}</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label className="shrink-0">{t('admin.manifest.files')}</Label>
                 <div className="flex flex-wrap items-center justify-end gap-1">
                   <Button
                     variant="ghost"

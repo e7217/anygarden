@@ -93,7 +93,8 @@ describe('AgentSettingsDialog', () => {
     expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true')
     const panelOf = (id: string) => screen.getByTestId(`agent-settings-section-${id}`).closest('[role="tabpanel"]')
     expect(panelOf('overview')).toHaveAttribute('data-state', 'active')
-    expect(panelOf('manifest')).toBe(panelOf('overview'))
+    // #908 — instructions sit with the agent's files on its machine.
+    expect(panelOf('manifest')).toBe(panelOf('workspace'))
     expect(panelOf('rooms')).toHaveAttribute('data-state', 'inactive')
     expect(panelOf('goals')).toBe(panelOf('rooms'))
     expect(panelOf('tasks')).toBe(panelOf('rooms'))
@@ -115,11 +116,13 @@ describe('AgentSettingsDialog', () => {
     expect(await screen.findByTestId('manifest-panel')).toBeInTheDocument()
   })
 
-  it('offers in-page links that scroll within Settings instead of tabs', () => {
+  it('offers in-page links; Instructions opens the Workspace tab (#908)', () => {
     setup()
     const sections = screen.getByRole('navigation', { name: 'Sections on this page' })
-    fireEvent.click(within(sections).getByRole('button', { name: 'Instructions' }))
+    fireEvent.click(within(sections).getByRole('button', { name: 'Overview' }))
     expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(within(sections).getByRole('button', { name: 'Instructions' }))
+    expect(screen.getByRole('tab', { name: 'Workspace' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('does not render any panel content when closed', () => {

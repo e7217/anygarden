@@ -372,7 +372,11 @@ class MachineDaemon:
             # every write activation from this daemon version.
             control_capabilities=[
                 *(
-                    [managed_workspace.CAPABILITY, managed_workspace.EDIT_CAPABILITY]
+                    [
+                        managed_workspace.CAPABILITY,
+                        managed_workspace.EDIT_CAPABILITY,
+                        managed_workspace.FILES_CAPABILITY,
+                    ]
                     if managed_workspace.supported() else []
                 ),
                 "agent_generation_reports_v1",
@@ -524,7 +528,7 @@ class MachineDaemon:
                 "running_pid": running.pid if running else None,
                 "running_started_at": running.started_at if running else None,
             }
-            if frame.operation in {"list", "read"}:
+            if frame.operation in {"list", "read", "fetch"}:
                 snapshot = await asyncio.to_thread(
                     managed_workspace.browse,
                     self._manifest_store.agents_root, frame.agent_id, frame.generation,
@@ -538,6 +542,7 @@ class MachineDaemon:
                     content_base64=frame.content_base64,
                     text=frame.text,
                     expected_sha256=frame.expected_sha256,
+                    new_name=frame.new_name,
                     **kwargs,
                 )
         await self._send(ManagedWorkspaceResultFrame(

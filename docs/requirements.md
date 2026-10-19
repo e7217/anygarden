@@ -229,6 +229,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | ID | 요구 | 검증 |
 |---|---|---|
 | WS-01 | 관리형 워크스페이스 탐색·편집은 admin 전용이고 머신 capability가 필요하다 | pytest |
+| WS-02 | admin은 에이전트 작업 파일을 내려받고, 여러 파일을 끌어다 놓아 올리고, 지우고, 이름을 바꿀 수 있다. 지침 파일(AGENTS.md·skills)은 작업 파일에서 숨겨지고 지침 영역에서만 관리된다 | pytest, vitest, e2e |
 | WS-02 | 유효한 `edit_token` 없는 쓰기는 거부된다 | pytest |
 | WS-03 | 영수증은 허용된 두 디렉터리에만 쓰이고 비밀값을 담지 않는다 | pytest |
 | WS-04 | 워크스페이스 연결은 룸 또는 전역 승인과 검증을 거쳐야 쓰인다 | pytest |

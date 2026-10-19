@@ -12,6 +12,8 @@ export interface ManagedWorkspaceResult {
   machine_name: string | null
   agent_state: string
   can_edit?: boolean
+  /** #908 — download, delete and rename are available. */
+  can_manage_files?: boolean
   snapshot: null | {
     status: string
     cwd: string | null

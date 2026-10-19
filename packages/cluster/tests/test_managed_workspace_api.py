@@ -429,3 +429,79 @@ async def test_broker_bounds_backlog_and_send_time():
             timeout=0.001,
         )
     assert not bus._pending
+
+
+@pytest.mark.req("WS-02")
+async def test_download_delete_and_rename_over_the_integrated_node(workspace_env, tmp_path):
+    """#908 — work files can be downloaded, removed and renamed."""
+    from anygarden.machine.managed_workspace import FILES_CAPABILITY
+
+    env = workspace_env
+    machine_id, root = await seed(env, tmp_path)
+    async with env["factory"]() as db:
+        machine = await db.get(Machine, machine_id)
+        machine.control_capabilities = [CAPABILITY, EDIT_CAPABILITY, FILES_CAPABILITY]
+        await db.commit()
+    (root / "chart.png").write_bytes(b"\x89PNG\x00bytes")
+    (root / "AGENTS.md").write_text("rules")
+    bus = env["bus"]
+    await bus.unregister(machine_id)
+    owner = SimpleNamespace(identity={"machine_id": machine_id}, data_dir=tmp_path)
+    backend = LocalExecutionBackend(env["app"], owner)
+    await bus.register_local(machine_id, backend)
+    receiver = asyncio.create_task(backend._consume())
+    headers = {"Authorization": f"Bearer {env['token']}"}
+    base = "/api/v1/agents/workspace-agent/workspace"
+    try:
+        listing = (await env["client"].get(base, headers=headers)).json()
+        assert listing["can_manage_files"] is True
+        assert "AGENTS.md" not in [entry["name"] for entry in listing["snapshot"]["entries"]]
+        token = listing["snapshot"]["edit_token"]
+
+        download = await env["client"].get(base + "/download", params={"path": "chart.png"}, headers=headers)
+        assert download.status_code == 200
+        assert download.content == b"\x89PNG\x00bytes"
+        assert download.headers["content-type"] == "image/png"
+        assert "attachment" in download.headers["content-disposition"]
+        hidden = await env["client"].get(base + "/download", params={"path": "AGENTS.md"}, headers=headers)
+        assert hidden.status_code == 422
+
+        renamed = await env["client"].post(base + "/rename", json={
+            "path": "chart.png", "new_name": "result.png", "edit_token": token}, headers=headers)
+        assert renamed.status_code == 200 and renamed.json()["status"] == "ready"
+        assert (root / "result.png").exists()
+
+        deleted = await env["client"].post(base + "/delete", json={
+            "path": "folder", "edit_token": token}, headers=headers)
+        assert deleted.status_code == 200 and deleted.json()["status"] == "ready"
+        assert not (root / "folder").exists()
+
+        bad = await env["client"].post(base + "/rename", json={
+            "path": "result.png", "new_name": "../x", "edit_token": token}, headers=headers)
+        assert bad.status_code == 422
+        forbidden = await env["client"].get(base + "/download", params={"path": "result.png"},
+                                            headers={"Authorization": f"Bearer {env['regular_token']}"})
+        assert forbidden.status_code == 403
+    finally:
+        await backend.queue.put(None)
+        await receiver
+        await bus.unregister_local(machine_id, backend)
+
+
+async def test_file_management_needs_the_machine_capability(workspace_env, tmp_path):
+    env = workspace_env
+    machine_id, _root = await seed(env, tmp_path)
+
+    class Receiver:
+        async def send(self, frame):
+            raise AssertionError("an unsupported machine must not be asked")
+
+    await env["bus"].unregister(machine_id)
+    await env["bus"].register_local(machine_id, Receiver())
+    headers = {"Authorization": f"Bearer {env['token']}"}
+    base = "/api/v1/agents/workspace-agent/workspace"
+    response = await env["client"].post(base + "/delete", json={"path": "folder", "edit_token": "a" * 64},
+                                        headers=headers)
+    assert response.json()["status"] == "unsupported"
+    download = await env["client"].get(base + "/download", params={"path": "folder/result.md"}, headers=headers)
+    assert download.status_code == 409

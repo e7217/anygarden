@@ -3,6 +3,17 @@
 
 ## Unreleased
 
+### Added
+
+- Agent settings → **Workspace** is now the one place for an agent's files
+  (#908). Instructions and skills moved there from Settings, above the work
+  files. Work files can be downloaded (up to 768 KiB), renamed and deleted
+  (folders up to 1,000 items), several files can be dragged in at once with
+  a prompt before replacing one, and images are previewed. `AGENTS.md`,
+  `CLAUDE.md` and `skills/` no longer appear among the work files.
+  New `GET /agents/{id}/workspace/download`, `POST …/workspace/delete`,
+  `POST …/workspace/rename` (machine capability `managed_workspace_files_v2`).
+
 ### Changed
 
 - An agent's instructions now live on its machine's disk (#908). The user

@@ -374,8 +374,11 @@ class ManagedWorkspaceRequestFrame(BaseModel):
     request_id: str = Field(min_length=1, max_length=64)
     agent_id: str = Field(min_length=1, max_length=64)
     generation: int = Field(ge=0)
-    operation: Literal["list", "read", "mkdir", "upload", "write"] = "list"
+    operation: Literal[
+        "list", "read", "fetch", "mkdir", "upload", "write", "delete", "rename"
+    ] = "list"
     path: str = Field(default="", max_length=1024)
+    new_name: str | None = Field(default=None, max_length=255)
     cursor: str | None = Field(default=None, max_length=255)
     edit_token: str | None = Field(default=None, min_length=64, max_length=64)
     content_base64: str | None = Field(default=None, max_length=1398104)

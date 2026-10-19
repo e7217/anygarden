@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
 from typing import Annotated, Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +18,7 @@ from anygarden.dependencies import get_admin_identity, get_db
 from anygarden.machine.managed_workspace import (
     CAPABILITY,
     EDIT_CAPABILITY,
+    FILES_CAPABILITY,
     MAX_UPLOAD_ENCODED,
     PREVIEW_BYTES,
     WorkspaceSnapshot,
@@ -24,6 +28,9 @@ from anygarden.scheduler.machine_bus import MachineRequestError
 
 router = APIRouter()
 
+EDIT_OPERATIONS = frozenset({"mkdir", "upload", "write", "delete", "rename"})
+FILE_OPERATIONS = frozenset({"fetch", "delete", "rename"})
+
 
 class ManagedWorkspaceOut(BaseModel):
     status: str
@@ -32,6 +39,8 @@ class ManagedWorkspaceOut(BaseModel):
     agent_state: str
     snapshot: WorkspaceSnapshot | None = None
     can_edit: bool = False
+    # #908 — download, delete and rename (``managed_workspace_files_v2``).
+    can_manage_files: bool = False
 
 
 class FolderInput(BaseModel):
@@ -43,6 +52,10 @@ class UploadInput(FolderInput):
     content_base64: str = Field(max_length=MAX_UPLOAD_ENCODED)
 
 
+class RenameInput(FolderInput):
+    new_name: str = Field(min_length=1, max_length=255)
+
+
 class TextInput(FolderInput):
     text: str = Field(max_length=PREVIEW_BYTES)
     expected_sha256: str = Field(min_length=6, max_length=64)
@@ -52,7 +65,9 @@ async def _query(
     request: Request,
     db: AsyncSession,
     agent_id: str,
-    operation: Literal["list", "read", "mkdir", "upload", "write"],
+    operation: Literal[
+        "list", "read", "fetch", "mkdir", "upload", "write", "delete", "rename"
+    ],
     path: str,
     cursor: str | None,
     *,
@@ -60,12 +75,16 @@ async def _query(
     content_base64: str | None = None,
     text: str | None = None,
     expected_sha256: str | None = None,
+    new_name: str | None = None,
 ) -> ManagedWorkspaceOut:
     try:
         parts = path_parts(path)
         if operation != "list" and not parts:
             raise ValueError("file required")
-        if operation in {"mkdir", "upload", "write"} and (
+        if operation == "rename":
+            if new_name is None or "/" in new_name or len(path_parts(new_name)) != 1:
+                raise ValueError("invalid name")
+        if operation in EDIT_OPERATIONS and (
             edit_token is None
             or len(edit_token) != 64
             or any(c not in "0123456789abcdef" for c in edit_token)
@@ -113,8 +132,13 @@ async def _query(
     if CAPABILITY not in (machine.control_capabilities or []):
         result.status = "unsupported"
         return result
-    result.can_edit = EDIT_CAPABILITY in (machine.control_capabilities or [])
-    if operation in {"mkdir", "upload", "write"} and not result.can_edit:
+    capabilities = set(machine.control_capabilities or [])
+    result.can_edit = EDIT_CAPABILITY in capabilities
+    result.can_manage_files = FILES_CAPABILITY in capabilities
+    if operation in EDIT_OPERATIONS and not result.can_edit:
+        result.status = "unsupported"
+        return result
+    if operation in FILE_OPERATIONS and not result.can_manage_files:
         result.status = "unsupported"
         return result
     # Release the read transaction while waiting on another machine. A fresh
@@ -132,6 +156,7 @@ async def _query(
             content_base64=content_base64,
             text=text,
             expected_sha256=expected_sha256,
+            new_name=new_name,
         )
     except MachineRequestError as exc:
         result.status = exc.reason
@@ -153,7 +178,7 @@ async def _query(
     result.agent_state = current.actual_state
     result.snapshot = WorkspaceSnapshot.model_validate(raw)
     result.status = result.snapshot.status
-    if operation in {"mkdir", "upload", "write"} and result.status == "conflict":
+    if operation in EDIT_OPERATIONS and result.status == "conflict":
         raise HTTPException(409, "File or folder changed. Refresh before saving.")
     return result
 
@@ -238,4 +263,69 @@ async def write_managed_file(
         edit_token=body.edit_token,
         text=body.text,
         expected_sha256=body.expected_sha256,
+    )
+
+
+# ── #908 file management ───────────────────────────────────────────
+
+
+@router.get("/{agent_id}/workspace/download")
+async def download_managed_file(
+    agent_id: str,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    path: Annotated[str, Query(min_length=1, max_length=1024)],
+):
+    """Send one work file from the agent's machine as an attachment."""
+    result = await _query(request, db, agent_id, "fetch", path, None)
+    snapshot = result.snapshot
+    if result.status != "ready" or snapshot is None:
+        raise HTTPException(409 if result.status in {"offline", "unsupported", "stale"} else 404,
+                            f"File unavailable ({result.status})")
+    if snapshot.content_base64 is None:
+        raise HTTPException(413, "File is larger than the download limit")
+    name = path.rsplit("/", 1)[-1]
+    media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return Response(
+        content=base64.b64decode(snapshot.content_base64),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+class DeleteInput(FolderInput):
+    pass
+
+
+@router.post("/{agent_id}/workspace/delete", response_model=ManagedWorkspaceOut)
+async def delete_managed_entry(
+    agent_id: str,
+    body: DeleteInput,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Delete a work file or folder (folders up to 1000 entries)."""
+    return await _query(
+        request, db, agent_id, "delete", body.path, None, edit_token=body.edit_token
+    )
+
+
+@router.post("/{agent_id}/workspace/rename", response_model=ManagedWorkspaceOut)
+async def rename_managed_entry(
+    agent_id: str,
+    body: RenameInput,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Rename a work file or folder within its folder."""
+    return await _query(
+        request, db, agent_id, "rename", body.path, None,
+        edit_token=body.edit_token, new_name=body.new_name,
     )

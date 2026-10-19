@@ -146,7 +146,8 @@ type SettingsTab = 'settings' | 'work' | 'workspace' | 'activity'
 const SECTION_TAB: Record<string, SettingsTab> = {
   overview: 'settings',
   'model-connection': 'settings',
-  manifest: 'settings',
+  // #908 — instructions live with the agent's files on its machine.
+  manifest: 'workspace',
   rooms: 'work',
   memory: 'work',
   goals: 'work',
@@ -351,20 +352,6 @@ export default function AgentSettingsDialog({
                 </Section>
               )}
 
-              <Section id="manifest" title={t('agentSetup.filesInstructions')}>
-                <ManifestPanel
-                  agent={agent}
-                  fetchAgentFiles={fetchAgentFiles}
-                  updateAgent={updateAgent}
-                  upsertAgentFile={upsertAgentFile}
-                  deleteAgentFile={deleteAgentFile}
-                  fetchAttachedSkills={fetchAttachedSkills}
-                  fetchSkillPreview={fetchSkillPreview}
-                  fetchInstructionRevisions={fetchInstructionRevisions}
-                  restoreInstructionRevision={restoreInstructionRevision}
-                  onNavigateAway={() => onOpenChange(false)}
-                />
-              </Section>
             </TabsContent>
 
             <TabsContent value="work" forceMount className={TAB_PANEL_CLASS}>
@@ -394,6 +381,20 @@ export default function AgentSettingsDialog({
             </TabsContent>
 
             <TabsContent value="workspace" forceMount className={TAB_PANEL_CLASS}>
+              <Section id="manifest" title={t('agentSetup.filesInstructions')}>
+                <ManifestPanel
+                  agent={agent}
+                  fetchAgentFiles={fetchAgentFiles}
+                  updateAgent={updateAgent}
+                  upsertAgentFile={upsertAgentFile}
+                  deleteAgentFile={deleteAgentFile}
+                  fetchAttachedSkills={fetchAttachedSkills}
+                  fetchSkillPreview={fetchSkillPreview}
+                  fetchInstructionRevisions={fetchInstructionRevisions}
+                  restoreInstructionRevision={restoreInstructionRevision}
+                  onNavigateAway={() => onOpenChange(false)}
+                />
+              </Section>
               <Section id="workspace" title={t('agentSetup.workspace')}>
                 <WorkspacePanel agentId={agent?.id ?? null} onNavigateAway={() => onOpenChange(false)} />
               </Section>
