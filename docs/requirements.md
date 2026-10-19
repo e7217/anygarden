@@ -87,6 +87,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | ENG-10 | 응답 대기 표시는 에이전트가 보낸 작업 종류·순번과 최근 서술을 보여준다. 명령·인자·경로·출력·추론 원문은 WS로 전달되지 않는다 | pytest, vitest |
 | ENG-11 | 도구를 쓴 턴의 답변 본문은 마지막 도구 작업 뒤의 최종 답변만 담고, 서술과 작업 집계는 순서대로 `execution_trace`에 저장되어 접힌 "작업 과정"으로 보인다 | pytest, vitest |
 | ENG-12 | 에이전트가 아닌 발신자는 `execution_trace`와 typing 작업 필드를 위조할 수 없고, 다른 에이전트가 읽는 대화에는 trace가 포함되지 않는다 | pytest |
+| ENG-13 | 응답 대기 표시는 서버가 센 에이전트의 작업 경과 시간을 보여주고 새로고침해도 이어서 센다. 도구를 쓴 답변의 "작업 과정" 머리글은 총 소요 시간을 보여준다 | pytest, vitest, e2e |
 
 ## 에이전트 협업 (COL)
 

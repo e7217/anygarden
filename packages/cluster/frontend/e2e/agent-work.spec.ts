@@ -26,12 +26,18 @@ const TRACE = {
   truncated: 0,
 }
 
+const TIMED_TRACE = { ...TRACE, steps: [TRACE.steps[1]], totals: { commands: 4 }, duration_ms: 754_000 }
+
 const HISTORY = [
   { id: 'msg-me', room_id: ROOM_ID, participant_id: ME, content: '@planner update both nodes',
     parent_message_id: null, root_message_id: null, seq: 1, created_at: '2026-10-19T00:00:01Z', metadata: null },
   { id: 'msg-reply', room_id: ROOM_ID, participant_id: AGENT, content: 'Both nodes are on 7e54fa7 and the link is active.',
     parent_message_id: null, root_message_id: null, seq: 2, created_at: '2026-10-19T00:00:02Z',
     metadata: { execution_trace: TRACE } },
+  // #893 — a newer agent's reply also says how long the work took.
+  { id: 'msg-timed', room_id: ROOM_ID, participant_id: AGENT, content: 'Restarted both nodes.',
+    parent_message_id: null, root_message_id: null, seq: 3, created_at: '2026-10-19T00:00:03Z',
+    metadata: { execution_trace: TIMED_TRACE } },
 ]
 
 async function fulfillJson(route: Route, status: number, body: unknown) {
@@ -144,3 +150,80 @@ for (const theme of ['light', 'dark'] as const) {
     }
   })
 }
+
+test.describe('agent working time (#893)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('anygarden_locale', 'en')
+      localStorage.setItem('anygarden-theme', 'light')
+    })
+    await stubWebSocket(page)
+    await stubApi(page)
+  })
+
+  const typing = (extra: Record<string, unknown>) => ({
+    type: 'typing', room_id: ROOM_ID, participant_id: AGENT, is_typing: true, stage: 'using_tool',
+    activity: 'command', ...extra,
+  })
+
+  test('counts up from the server\'s working time and survives a reload', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await openRoom(page)
+    const elapsed = page.getByTestId('typing-name').getByTestId('work-elapsed')
+
+    await serverFrame(page, typing({ elapsed_ms: 151_000 }))
+    await expect(page.getByTestId('typing-name')).toContainText('planner · running a shell command… · 2m 31s')
+    // The timer runs between heartbeats.
+    await expect(elapsed).toHaveText('2m 33s', { timeout: 5_000 })
+
+    // A reload starts from the server's count, not from zero.
+    await page.reload()
+    await expect(page.locator('[data-message-id="msg-reply"]')).toContainText('Both nodes are on', { timeout: 15_000 })
+    await serverFrame(page, typing({ elapsed_ms: 3_725_000 }))
+    await expect(elapsed).toHaveText('1h 2m')
+
+    // Stopping clears the indicator, and a frame without the field shows no time.
+    await serverFrame(page, { type: 'typing', room_id: ROOM_ID, participant_id: AGENT, is_typing: false })
+    await expect(page.getByTestId('typing-name')).toHaveCount(0)
+    await serverFrame(page, typing({}))
+    await expect(page.getByTestId('typing-name')).toHaveText('planner · running a shell command…')
+    await expect(elapsed).toHaveCount(0)
+  })
+
+  test('keeps the time whole at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 })
+    await openRoom(page)
+    await serverFrame(page, typing({
+      elapsed_ms: 12_000,
+      activity: 'anygarden_tool', narration: 'Checking the federation link on both nodes before restarting.',
+    }))
+    const elapsed = page.getByTestId('typing-name').getByTestId('work-elapsed')
+    await expect(elapsed).toHaveText(/^1[2-4]s$/)
+    const box = await elapsed.boundingBox()
+    expect(box!.x + box!.width).toBeLessThanOrEqual(375)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375)
+  })
+
+  test('shows a reply\'s total time in its work header, and nothing for older replies', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await openRoom(page)
+    await expect(page.locator('[data-message-id="msg-timed"]').getByRole('button', { name: 'Work · 12m 34s · 4 shell commands', exact: true }))
+      .toBeVisible()
+    await expect(page.locator('[data-message-id="msg-reply"]').getByRole('button', { name: 'Work · 5 shell commands · 2 files changed', exact: true }))
+      .toBeVisible()
+  })
+
+  test('uses Korean units in Korean', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('anygarden_locale', 'ko'))
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/login')
+    await page.locator('#login-email').fill(user.email)
+    await page.locator('#login-password').fill('correct-password')
+    await page.locator('form button[type="submit"]').first().click()
+    await expect(page).toHaveURL(/\/$/)
+    await page.goto(`/rooms/${ROOM_ID}`)
+    await expect(page.locator('[data-message-id="msg-timed"]')).toContainText('작업 과정 · 12분 34초 · ', { timeout: 15_000 })
+    await serverFrame(page, typing({ elapsed_ms: 151_000 }))
+    await expect(page.getByTestId('typing-name').getByTestId('work-elapsed')).toHaveText(/^2분 3[1-3]초$/)
+  })
+})

@@ -2346,6 +2346,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     activity=frame_in.activity if agent_detail else None,
                     activity_seq=frame_in.activity_seq if agent_detail else None,
                     narration=frame_in.narration if agent_detail else None,
+                    elapsed_ms=typing_tracker.elapsed_ms(room_id, participant.id)
+                    if agent_detail
+                    else None,
                 )
                 await manager.broadcast(room_id, out_typing)
 

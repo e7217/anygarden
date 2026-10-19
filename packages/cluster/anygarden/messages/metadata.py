@@ -56,6 +56,7 @@ TRACE_TALLY_KEYS = frozenset(
 _MAX_TRACE_STEPS = 50
 _MAX_TRACE_NARRATION = 2_000
 _MAX_TRACE_COUNT = 10_000
+_MAX_TRACE_DURATION_MS = 7 * 24 * 60 * 60 * 1000
 
 
 def _tally(value: Any) -> dict[str, int]:
@@ -105,10 +106,15 @@ def sanitize_execution_trace(
     dropped = max(0, len(steps) - _MAX_TRACE_STEPS)
     truncated = trace.get("truncated")
     truncated = truncated if type(truncated) is int and truncated >= 0 else 0
-    cleaned[EXECUTION_TRACE_KEY] = {
+    normalized: dict[str, Any] = {
         "v": 1,
         "steps": steps[dropped:],
         "totals": totals,
         "truncated": truncated + dropped,
     }
+    # #893 — the turn's total working time; a bad value drops only itself.
+    duration_ms = trace.get("duration_ms")
+    if type(duration_ms) is int and 0 <= duration_ms <= _MAX_TRACE_DURATION_MS:
+        normalized["duration_ms"] = duration_ms
+    cleaned[EXECUTION_TRACE_KEY] = normalized
     return cleaned

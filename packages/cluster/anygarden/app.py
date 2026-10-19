@@ -1553,7 +1553,11 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
                 factory, manager, app=app, is_alive=is_alive
             )
             # #762 — wake ask_peer callers whose peers have all answered.
-            await dispatch_peer_ask_groups(factory, manager)
+            await dispatch_peer_ask_groups(
+                factory,
+                manager,
+                typing_tracker=getattr(app.state, "typing_tracker", None),
+            )
             async with factory() as db:
                 await begin_write_transaction(db)
                 from anygarden.db.models import ExecutionStop

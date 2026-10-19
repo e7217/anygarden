@@ -342,6 +342,7 @@ class TypingOut(BaseModel):
     activity: Optional[AgentActivity] = None
     activity_seq: Optional[int] = None
     narration: Optional[str] = None
+    elapsed_ms: Optional[int] = None  # #893
 
 
 class WelcomeOut(BaseModel):

@@ -379,6 +379,8 @@ class TestWSEndpoint:
                 resp = json.loads(ws.receive_text())
                 assert resp["type"] == "typing"
                 assert resp["is_typing"] is True
+                # #893 — working time is an agent's; a human's typing carries none.
+                assert resp["elapsed_ms"] is None
 
                 # A human cannot advertise an agent execution stage.
                 ws.send_text(json.dumps({"type": "typing", "is_typing": True, "stage": "using_tool"}))
@@ -933,6 +935,7 @@ class TestWelcomeAgentId:
 
     @pytest.mark.req("ENG-10")
     @pytest.mark.req("ENG-12")
+    @pytest.mark.req("ENG-13")
     @pytest.mark.asyncio
     async def test_agent_activity_and_trace_are_relayed_and_normalized(self, ws_env) -> None:
         """#880 — an agent's activity detail is broadcast; its trace is kept
@@ -971,6 +974,18 @@ class TestWelcomeAgentId:
                 assert (typing["stage"], typing["activity"], typing["activity_seq"], typing["narration"]) == (
                     "using_tool", "command", 2, "Deploying now.",
                 )
+                # #893 — the server says how long the agent has been working.
+                assert type(typing["elapsed_ms"]) is int and 0 <= typing["elapsed_ms"] < 5_000
+                ws.send_text(json.dumps({"type": "typing", "is_typing": True, "stage": "writing"}))
+                again = json.loads(ws.receive_text())
+                while again["type"] != "typing":
+                    again = json.loads(ws.receive_text())
+                assert again["elapsed_ms"] >= typing["elapsed_ms"]
+                ws.send_text(json.dumps({"type": "typing", "is_typing": False}))
+                stopped = json.loads(ws.receive_text())
+                while stopped["type"] != "typing":
+                    stopped = json.loads(ws.receive_text())
+                assert (stopped["is_typing"], stopped["elapsed_ms"]) == (False, None)
                 ws.send_text(json.dumps({
                     "type": "send", "content": "done",
                     "metadata": {"execution_trace": {

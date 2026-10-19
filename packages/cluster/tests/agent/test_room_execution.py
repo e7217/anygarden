@@ -227,6 +227,8 @@ async def test_room_typing_and_reply_carry_activity_narration_and_trace(setup_ro
         assert {"activity": "command", "activity_seq": 1, "narration": "Checking the repo."} in details
         assert {"narration": "Checking the repo."} in details
         metadata = client.send.call_args.kwargs["metadata"]
+        duration_ms = metadata["execution_trace"].pop("duration_ms")
+        assert type(duration_ms) is int and duration_ms >= 0
         assert metadata["execution_trace"] == {
             "v": 1,
             "steps": [{"narration": "Checking the repo.", "activities": {"commands": 1}}],

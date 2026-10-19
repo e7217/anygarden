@@ -32,6 +32,13 @@
 
 ### Added
 
+- The working indicator shows how long each agent has been working, e.g.
+  `planner · running a shell command… · 2m 31s` (#893). The server counts from
+  the agent's first typing heartbeat and sends `elapsed_ms` on agent typing
+  frames, so the time survives a reload and ignores clock skew; an `ask_peer`
+  caller keeps counting while it waits. A reply's "Work" header also shows the
+  turn's total time (`execution_trace.duration_ms`); older replies are unchanged.
+
 - While an agent works, the room now shows what kind of work runs and the
   last sentence the agent wrote, e.g. `dev · running a shell command (#3)…`
   next to "There are 4 new commits. Same procedure as before." (#880). Pi

@@ -15,6 +15,8 @@ export interface ExecutionTrace {
   totals: TraceTally
   /** Earlier steps dropped to stay within the size budget. */
   truncated: number
+  /** #893 — the turn's total working time; absent from older agents. */
+  durationMs?: number
 }
 
 const TRACE_KINDS = ['commands', 'file_changes', 'file_reads', 'anygarden_tools', 'tools', 'web_searches'] as const
@@ -33,7 +35,7 @@ function tallyFrom(raw: unknown): TraceTally {
 export function executionTraceFrom(metadata?: Record<string, unknown> | null): ExecutionTrace | null {
   const raw = metadata?.execution_trace
   if (!raw || typeof raw !== 'object') return null
-  const { v, steps, totals, truncated } = raw as Record<string, unknown>
+  const { v, steps, totals, truncated, duration_ms: duration } = raw as Record<string, unknown>
   const tally = tallyFrom(totals)
   if (v !== 1 || !Object.keys(tally).length) return null
   const parsed: TraceStep[] = []
@@ -50,6 +52,7 @@ export function executionTraceFrom(metadata?: Record<string, unknown> | null): E
     steps: parsed,
     totals: tally,
     truncated: typeof truncated === 'number' && Number.isInteger(truncated) && truncated > 0 ? truncated : 0,
+    ...(typeof duration === 'number' && Number.isInteger(duration) && duration >= 0 ? { durationMs: duration } : {}),
   }
 }
 

@@ -448,7 +448,9 @@ async def _advance_collecting(db: AsyncSession, now: datetime) -> None:
         await _mark_ready_if_done(db, group)
 
 
-async def _heartbeat(db: AsyncSession, manager: Any) -> None:
+async def _heartbeat(
+    db: AsyncSession, manager: Any, typing_tracker: Any | None = None
+) -> None:
     from anygarden.ws.protocol import TypingOut
 
     waiting = (
@@ -478,6 +480,14 @@ async def _heartbeat(db: AsyncSession, manager: Any) -> None:
                 for b in await build_participants_brief(db, room_id=group.room_id)
             }
         targets = await _targets(db, group.id)
+        # #893 — waiting is still working time: keep the caller's typing
+        # run alive in the tracker so its elapsed time carries on.
+        elapsed_ms = None
+        if typing_tracker is not None:
+            typing_tracker.set_typing(group.room_id, group.caller_participant_id, True)
+            elapsed_ms = typing_tracker.elapsed_ms(
+                group.room_id, group.caller_participant_id
+            )
         await manager.broadcast(
             group.room_id,
             TypingOut(
@@ -491,11 +501,14 @@ async def _heartbeat(db: AsyncSession, manager: Any) -> None:
                     names[group.room_id].get(t.target_participant_id, "")
                     for t in targets
                 ],
+                elapsed_ms=elapsed_ms,
             ),
         )
 
 
-async def dispatch_peer_ask_groups(session_factory: Any, manager: Any | None) -> int:
+async def dispatch_peer_ask_groups(
+    session_factory: Any, manager: Any | None, *, typing_tracker: Any | None = None
+) -> int:
     """Expire, wake and keep alive fan-in groups; return how many woke."""
     now = _now()
     async with session_factory() as db:
@@ -508,18 +521,20 @@ async def dispatch_peer_ask_groups(session_factory: Any, manager: Any | None) ->
     woken = 0
     for gid in ready_ids:
         try:
-            woken += await _wake_one(session_factory, manager, gid)
+            woken += await _wake_one(session_factory, manager, gid, typing_tracker)
         # One bad group must not stall the others or the rest of the tick.
         except Exception:
             logger.exception("peer_ask.wake_failed", group_id=gid)
 
     if manager is not None:
         async with session_factory() as db:
-            await _heartbeat(db, manager)
+            await _heartbeat(db, manager, typing_tracker)
     return woken
 
 
-async def _wake_one(session_factory: Any, manager: Any | None, gid: str) -> int:
+async def _wake_one(
+    session_factory: Any, manager: Any | None, gid: str, typing_tracker: Any | None = None
+) -> int:
     """Claim and wake one ready group; return 1 when the caller was woken."""
     from anygarden.messages.serialization import message_to_frame
     from anygarden.ws.protocol import TypingOut
@@ -543,6 +558,8 @@ async def _wake_one(session_factory: Any, manager: Any | None, gid: str) -> int:
         caller_pid = group.caller_participant_id
         durable = group.state == "woken"
     _last_heartbeat.pop(gid, None)
+    if typing_tracker is not None:
+        typing_tracker.set_typing(room_id, caller_pid, False)
     if manager is not None:
         await manager.broadcast(
             room_id,

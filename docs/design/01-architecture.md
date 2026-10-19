@@ -410,7 +410,7 @@ class Message(Base):
 |---|---|---|
 | `welcome` | `WelcomeOut` | 연결 직후 송신. `participant_id`와 에이전트가 아직 미연결 상태인 `pending_rooms` 목록을 포함 |
 | `message` | `MessageOut` | 새 메시지 도착. `seq` 단조 증가, 재연결 시 `?since_seq=`로 보충 재생 |
-| `typing` | `TypingOut` | 다른 참여자의 타이핑 상태. 에이전트면 단계와 작업 상세(종류·순번·최근 서술)를 함께 담는다. 명령·경로·출력 원문은 담지 않는다 |
+| `typing` | `TypingOut` | 다른 참여자의 타이핑 상태. 에이전트면 단계와 작업 상세(종류·순번·최근 서술)와 서버가 센 작업 경과 시간 `elapsed_ms`(#893)를 함께 담는다. 명령·경로·출력 원문은 담지 않는다 |
 | `room_created` | `RoomCreatedOut` | (예약) Room 생성 완료 알림 |
 | `join_room` | `JoinRoomOut` | 에이전트가 새 Room에 동적으로 합류해야 함을 알림. 에이전트 SDK는 이 프레임을 받으면 자동으로 해당 Room WS를 연다 |
 | `room_membership_changed` | `RoomMembershipChangedOut` | 사용자에게 멤버십 변경(`added` / `removed`)을 알림. 프론트엔드는 사이드바를 즉시 갱신 |
