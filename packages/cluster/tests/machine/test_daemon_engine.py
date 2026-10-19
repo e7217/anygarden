@@ -164,3 +164,71 @@ class TestManagedPiProvisioning:
             daemon._spawner, "drain", AsyncMock()
         ):
             await daemon.run()
+
+
+class TestEngineRescanHandler:
+    """#902 — an engine installed after start is found without a restart."""
+
+    async def test_provisions_managed_pi_then_reports_detected_engines(
+        self, daemon: MachineDaemon
+    ):
+        sent = _capture_ws(daemon)
+        calls: list[str] = []
+        det = DetectionResult(
+            engines=[
+                EngineInfo(engine="codex-cli", version="codex 0.1.0", path="/x", auth="none"),
+                EngineInfo(engine="pi-cli", version="0.85.1", path="/y"),
+            ]
+        )
+
+        async def provision():
+            calls.append("provision")
+
+        async def detect():
+            calls.append("detect")
+            return det
+
+        with (
+            patch("anygarden.machine.daemon.ensure_managed_pi", provision),
+            patch("anygarden.machine.daemon.detect_engines", detect),
+        ):
+            await daemon._handle_engine_rescan()
+
+        assert calls == ["provision", "detect"]
+        assert sent == [
+            {
+                "type": "engines_report",
+                "capabilities": [
+                    {"engine": "codex-cli", "version": "codex 0.1.0", "path": "/x", "auth": "none"},
+                    {"engine": "pi-cli", "version": "0.85.1", "path": "/y"},
+                ],
+            }
+        ]
+
+    async def test_repeated_requests_share_one_running_rescan(
+        self, daemon: MachineDaemon
+    ):
+        import asyncio
+
+        sent = _capture_ws(daemon)
+        release = asyncio.Event()
+        detections = 0
+
+        async def detect():
+            nonlocal detections
+            detections += 1
+            await release.wait()
+            return DetectionResult(engines=[])
+
+        with (
+            patch("anygarden.machine.daemon.ensure_managed_pi", AsyncMock()),
+            patch("anygarden.machine.daemon.detect_engines", detect),
+        ):
+            await daemon._handle({"type": "engine_rescan"})
+            await daemon._handle({"type": "engine_rescan"})
+            await asyncio.sleep(0)
+            release.set()
+            await daemon._rescan_task
+
+        assert detections == 1
+        assert [frame["type"] for frame in sent] == ["engines_report"]

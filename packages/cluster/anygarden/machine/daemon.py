@@ -29,6 +29,7 @@ from anygarden.machine.protocol.frames import (
     AgentMemoryUpdateAckFrame,
     AgentRoomMemorySnapshotFrame,
     EngineCheckResultFrame,
+    EnginesReportFrame,
     EngineUpdateResultFrame,
     ManagedWorkspaceRequestFrame,
     ManagedWorkspaceResultFrame,
@@ -100,6 +101,20 @@ ARTIFACT_ALLOWED_MIMES: frozenset[str] = frozenset(
 )
 
 
+def _engine_capabilities(detection: Any) -> list[dict]:
+    """Detected engines as the ``capabilities`` list register/report send."""
+    return [
+        {
+            "engine": e.engine,
+            "version": e.version,
+            "path": e.path,
+            # #715 — only engines that report a login status carry it.
+            **({"auth": e.auth} if isinstance(e.auth, str) else {}),
+        }
+        for e in detection.engines
+    ]
+
+
 def _base_url_from_machine_url(machine_ws_url: str) -> str:
     """Trim the ``/ws/machines/<id>`` endpoint suffix off the daemon URL.
 
@@ -167,6 +182,7 @@ class MachineDaemon:
         self._token_path = token_path
         self._draining = False
         self._spawn_tasks: set[asyncio.Task] = set()
+        self._rescan_task: asyncio.Task | None = None
         self._spawn_failed_unconfirmed = False
         self._ws: Any = None
         # #550 — set when a self-update succeeds; the run loop returns
@@ -333,17 +349,7 @@ class MachineDaemon:
 
     async def _register(self) -> None:
         """Send register frame with detected capabilities + system info."""
-        detection = await detect_engines()
-        capabilities = [
-            {
-                "engine": e.engine,
-                "version": e.version,
-                "path": e.path,
-                # #715 — only engines that report a login status carry it.
-                **({"auth": e.auth} if isinstance(e.auth, str) else {}),
-            }
-            for e in detection.engines
-        ]
+        capabilities = _engine_capabilities(await detect_engines())
         # Static system info (issue #523) — best-effort, never blocks register.
         system_info = collect_system_info()
         frame = RegisterFrame(
@@ -481,6 +487,11 @@ class MachineDaemon:
                 await self._handle_self_update(frame)
             case "engine_check":
                 await self._handle_engine_check(frame)
+            case "engine_rescan":
+                # A first managed Pi install can take minutes; keep serving
+                # frames meanwhile, and fold repeated clicks into one run.
+                if self._rescan_task is None or self._rescan_task.done():
+                    self._rescan_task = asyncio.create_task(self._handle_engine_rescan())
             case "engine_update":
                 await self._handle_engine_update(frame)
             case "workspace_attach_request":
@@ -1578,6 +1589,16 @@ class MachineDaemon:
                 auth=detected.auth if detected else None,
             ).model_dump()
         )
+
+    async def _handle_engine_rescan(self) -> None:
+        """Detect engines again and report the list (#902).
+
+        Provisioning runs first so a Pi installed globally after start gets
+        its managed copy, which is what detection looks for (#688).
+        """
+        await ensure_managed_pi()
+        capabilities = _engine_capabilities(await detect_engines())
+        await self._send(EnginesReportFrame(capabilities=capabilities).model_dump())
 
     async def _handle_engine_update(self, frame: Any) -> None:
         """Update an engine CLI, reporting updating→success/failed (#553).
