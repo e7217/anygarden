@@ -36,7 +36,7 @@ interface EntityAvatarProps {
   avatarValue?: string | null
   /** Issue #869 — liveness shown as a dot on the top-right corner
    *  (the engine glyph owns bottom-right). Omit to render no dot. */
-  presence?: Pick<PresenceDotProps, 'online' | 'lastSeenAt' | 'variant' | 'agentState'>
+  presence?: Pick<PresenceDotProps, 'online' | 'lastSeenAt' | 'variant' | 'agentState' | 'working'>
   className?: string
   'data-testid'?: string
 }

@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import AgentTurn, AgentTurnAttempt, Task
 from anygarden.dependencies import get_admin_identity, get_current_identity, get_db
-from anygarden.rooms.authorization import Capability, require_capability
+from anygarden.rooms.authorization import (
+    Capability,
+    accessible_room_ids,
+    require_capability,
+)
 
 router = APIRouter(prefix="/api/v1/turns", tags=["turns"])
 
@@ -164,6 +168,56 @@ async def list_open_room_turns(
             created_at=turn.created_at.isoformat(),
         )
         for turn in rows
+    ]
+
+
+# MSG-09 — states where an engine has taken the turn. ``pending`` is left
+# out: it lingers while an agent is offline, which would read as working.
+ACTIVE_TURN_STATES = ("leased", "retrying", "completing")
+
+
+class ActiveTurnOut(BaseModel):
+    room_id: str
+    agent_ids: list[str]
+
+
+@router.get("/active", response_model=list[ActiveTurnOut])
+async def list_active_turns(
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> list[ActiveTurnOut]:
+    """MSG-09 — rooms the caller can see where an agent is answering.
+
+    Polled by the sidebar, so it covers the same rooms as
+    ``GET /api/v1/rooms`` and includes execution-bound turns (this asks
+    "is someone working", not "what may I cancel" like ``/open``).
+    """
+    room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="rooms.collection",
+        channel_service=getattr(request.app.state, "channel_service", None),
+        include_shared=True,
+    )
+    if not room_ids:
+        return []
+    rows = (await db.execute(
+        select(AgentTurn.room_id, AgentTurn.agent_id)
+        .where(
+            AgentTurn.room_id.in_(room_ids),
+            AgentTurn.state.in_(ACTIVE_TURN_STATES),
+        )
+        .distinct()
+    )).all()
+    by_room: dict[str, set[str]] = {}
+    for room_id, agent_id in rows:
+        agents = by_room.setdefault(room_id, set())
+        if agent_id is not None:
+            agents.add(agent_id)
+    return [
+        ActiveTurnOut(room_id=room_id, agent_ids=sorted(agents))
+        for room_id, agents in sorted(by_room.items())
     ]
 
 

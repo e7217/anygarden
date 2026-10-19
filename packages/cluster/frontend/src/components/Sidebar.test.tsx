@@ -121,6 +121,17 @@ vi.mock('@/hooks/useRooms', () => ({
   }),
 }))
 
+// MSG-09 — rooms/agents answering right now; the context stays real so
+// the Sidebar's own provider wiring is what the tests exercise.
+const activeTurnsMockState = vi.hoisted(() => ({
+  roomIds: new Set<string>(),
+  agentIds: new Set<string>(),
+}))
+vi.mock('@/hooks/useActiveTurns', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/hooks/useActiveTurns')>(),
+  useActiveTurns: () => activeTurnsMockState,
+}))
+
 // #115 — Sidebar now reads collapse state from useSidebarLayout.
 // Mock the module the same way useRooms/useAuth are mocked; each
 // test controls the returned collapsed/toggleCollapsed via the
@@ -141,12 +152,13 @@ vi.mock('@/hooks/useSidebarLayout', () => ({
 vi.mock('@/components/EntityAvatar', () => ({
   // Surface only the presence wiring (#869); the avatar body is
   // covered by EntityAvatar.test.tsx.
-  EntityAvatar: ({ presence }: { presence?: { online: boolean; agentState?: string } }) =>
+  EntityAvatar: ({ presence }: { presence?: { online: boolean; agentState?: string; working?: boolean } }) =>
     presence ? (
       <span
         data-testid="avatar-presence"
         data-online={String(presence.online)}
         data-state={presence.agentState}
+        data-working={String(Boolean(presence.working))}
       />
     ) : null,
 }))
@@ -169,6 +181,8 @@ beforeEach(() => {
   roomsMockState.setRoomEphemeral.mockReset()
   roomsMockState.markRoomRead.mockReset()
   agentsMockState.agents = []
+  activeTurnsMockState.roomIds = new Set()
+  activeTurnsMockState.agentIds = new Set()
   agentsMockState.deleteAgent.mockReset()
   agentsMockState.updateAgent.mockReset()
   agentsMockState.fetchAgentFiles.mockReset()
@@ -519,6 +533,82 @@ describe('Sidebar — update indicators (#385)', () => {
     expect(badges).toHaveLength(1)
     expect(badges[0]).toHaveTextContent('anygarden-svc')
     expect(screen.getByTestId('sidebar-dm-dm-remote')).toContainElement(badges[0])
+  })
+})
+
+describe('Sidebar — responding indicators (#912)', () => {
+  const agent = {
+    id: 'a1',
+    name: 'agent01',
+    engine: 'codex-cli',
+    desired_state: 'running',
+    actual_state: 'running',
+    restart_policy: 'never',
+    machine_online: true,
+  }
+
+  it('[MSG-09] shows responding instead of unread on a project room an agent is answering in', () => {
+    localStorage.setItem('anygarden_expanded_projects', JSON.stringify(['p1']))
+    roomsMockState.projects = [{ id: 'p1', name: 'Project One' }]
+    roomsMockState.rooms = {
+      p1: [
+        { id: 'r1', name: 'General', project_id: 'p1', is_dm: false, has_updates: true },
+        { id: 'r2', name: 'Quiet', project_id: 'p1', is_dm: false, has_updates: true },
+      ],
+    }
+    activeTurnsMockState.roomIds = new Set(['r1'])
+
+    renderSidebar()
+
+    const busy = screen.getByTestId('sidebar-room-r1')
+    expect(within(busy).getByRole('status', { name: 'Responding' })).toBeInTheDocument()
+    expect(within(busy).queryByLabelText('Unread updates')).not.toBeInTheDocument()
+    const quiet = screen.getByTestId('sidebar-room-r2')
+    expect(within(quiet).queryByRole('status', { name: 'Responding' })).not.toBeInTheDocument()
+    expect(within(quiet).getByLabelText('Unread updates')).toBeInTheDocument()
+  })
+
+  it('[MSG-09] rings a working agent and marks its answering DM', () => {
+    authMockState.isAdmin = true
+    agentsMockState.agents = [agent]
+    roomsMockState.agentDMs = [
+      { id: 'dm-a1', name: 'DM: agent01', project_id: null, is_dm: true, representative_agent_id: 'a1' },
+    ]
+    activeTurnsMockState.roomIds = new Set(['dm-a1'])
+    activeTurnsMockState.agentIds = new Set(['a1'])
+
+    renderSidebar()
+
+    const row = screen.getByTestId('sidebar-dm-dm-a1')
+    expect(within(row).getByTestId('avatar-presence')).toHaveAttribute('data-working', 'true')
+    expect(within(row).getByRole('status', { name: 'Responding' })).toBeInTheDocument()
+  })
+
+  it('[MSG-09] rings a collapsed multi-DM agent working in a room outside its DMs', () => {
+    authMockState.isAdmin = true
+    agentsMockState.agents = [agent]
+    roomsMockState.agentDMs = [
+      { id: 'dm1', name: 'DM: agent01', project_id: null, is_dm: true, representative_agent_id: 'a1' },
+      { id: 'dm2', name: 'Follow up', project_id: null, is_dm: true, representative_agent_id: 'a1' },
+    ]
+    activeTurnsMockState.agentIds = new Set(['a1'])
+
+    renderSidebar()
+
+    const row = screen.getByTestId('sidebar-agent-a1')
+    expect(within(row).getByTestId('avatar-presence')).toHaveAttribute('data-working', 'true')
+  })
+
+  it('[MSG-09] marks an answering DM for non-admins too', () => {
+    roomsMockState.agentDMs = [
+      { id: 'dm-x', name: 'DM: helper', project_id: null, is_dm: true, representative_agent_id: 'a9' },
+    ]
+    activeTurnsMockState.roomIds = new Set(['dm-x'])
+
+    renderSidebar()
+
+    const row = screen.getByTestId('sidebar-dm-dm-x')
+    expect(within(row).getByRole('status', { name: 'Responding' })).toBeInTheDocument()
   })
 })
 

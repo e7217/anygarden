@@ -58,6 +58,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | MSG-06 | 검색은 호출자(게스트 포함)가 접근할 수 없는 룸의 메시지를 반환하지 않는다 | pytest |
 | MSG-07 | 같은 인터랙션에 두 번째 응답은 거부된다 | pytest |
 | MSG-08 | 사용자는 자신이 보낸 메시지를 수정·삭제할 수 있다 | pytest, vitest |
+| MSG-09 | 사이드바는 접근 가능한 룸 중 에이전트가 응답 중인 룸과 그 에이전트를 표시하고, 접근할 수 없는 룸의 턴은 알리지 않는다 | pytest, vitest |
 
 ## 에이전트 관리 (AGT)
 
