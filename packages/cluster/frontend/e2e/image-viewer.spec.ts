@@ -193,6 +193,9 @@ test.describe('image viewer zoom (#882)', () => {
     await page.keyboard.press('+')
     const frame = await box(viewport)
     await expect.poll(async () => (await box(image)).width).toBeGreaterThan(frame.width)
+    // Key steps glide; a drag cuts the glide short and jumps to its end, so
+    // measure only once the zoom has settled.
+    await expect.poll(() => image.evaluate(el => el.getAnimations().length)).toBe(0)
     const before = await box(image)
 
     const start = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }
