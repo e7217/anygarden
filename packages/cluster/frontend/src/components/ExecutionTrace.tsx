@@ -2,6 +2,7 @@ import { useId, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { executionTraceFrom, traceTotalsLabels } from '@/lib/executionTrace'
+import { formatElapsed } from '@/lib/elapsed'
 
 /**
  * #880 — the work behind an agent reply: the sentences it wrote between
@@ -14,7 +15,12 @@ export default function ExecutionTrace({ metadata }: { metadata?: Record<string,
   const [open, setOpen] = useState(false)
   const stepsId = useId()
   if (!trace) return null
-  const totals = traceTotalsLabels(t, trace.totals).join(' · ')
+  // #893 — "Work · 12m 34s · 5 shell commands"; older replies have no time.
+  const header = [
+    t('chat.traceToggle'),
+    ...(trace.durationMs !== undefined ? [formatElapsed(t, trace.durationMs)] : []),
+    ...traceTotalsLabels(t, trace.totals),
+  ].join(' · ')
   return (
     <div className="mt-2" data-testid="execution-trace">
       <button
@@ -28,7 +34,7 @@ export default function ExecutionTrace({ metadata }: { metadata?: Record<string,
         {open
           ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
           : <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
-        <span className="min-w-0">{`${t('chat.traceToggle')} · ${totals}`}</span>
+        <span className="min-w-0 tabular-nums">{header}</span>
       </button>
       {open && (
         <ol id={stepsId} className="mt-1 ml-2 space-y-2 border-l border-[var(--color-border)] pl-3">

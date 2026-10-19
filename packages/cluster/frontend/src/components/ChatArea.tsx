@@ -4,6 +4,7 @@ import MessageBubble from '@/components/MessageBubble'
 import RoomQueryBanner from '@/components/RoomQueryBanner'
 import BrailleSpinner from '@/components/BrailleSpinner'
 import TurnCancelControl from '@/components/TurnCancelControl'
+import Elapsed from '@/components/Elapsed'
 import { MessageSquare } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
@@ -30,6 +31,8 @@ interface ChatAreaProps {
   typingStages?: Record<string, AgentStage>
   typingProgress?: Record<string, PeerProgress>
   typingWork?: Record<string, AgentWorkDetail>
+  /** #893 — when each agent started working (browser clock, ms). */
+  typingSince?: Record<string, number>
   /** Grouped view of ``messages`` — replies are rendered in the
    *  thread panel, not inline in this timeline. Computed once by
    *  ``ChatPage`` so the panel and the timeline agree.
@@ -61,6 +64,7 @@ export default function ChatArea({
   typingStages = {},
   typingProgress = {},
   typingWork = {},
+  typingSince = {},
   threadIndex,
   activeThreadRootId,
   onOpenThread,
@@ -229,8 +233,15 @@ export default function ChatArea({
   )
   const typingNames = mainTypingIds.map(pid => {
     const label = workLabel(t, typingStages[pid], typingWork[pid], typingProgress[pid])
-    return label ? `${nameOf(pid)} · ${label}` : nameOf(pid)
+    return { pid, text: label ? `${nameOf(pid)} · ${label}` : nameOf(pid), since: typingSince[pid] }
   })
+  // #893 — a thread's row shows how long its longest-running worker has gone.
+  const threadSince = (rootId: string) => {
+    const starts = (threadTypingIds.get(rootId) ?? [])
+      .map(pid => typingSince[pid])
+      .filter((value): value is number => value !== undefined)
+    return starts.length ? Math.min(...starts) : undefined
+  }
   // #880 — the latest sentence each working agent wrote, beside the spinner.
   const narrated = mainTypingIds.filter(pid => typingWork[pid]?.narration)
   const narration = narrated
@@ -298,6 +309,7 @@ export default function ChatArea({
                     active={activeThreadRootId === msg.id}
                     onOpen={onOpenThread}
                     workingNames={threadTypingIds.get(msg.id)?.map(nameOf)}
+                    workingSince={threadSince(msg.id)}
                     stopTurnIds={cancellable ? threadTurnIds(openTurns, msg.id) : undefined}
                     onStop={onCancelTurns}
                   />
@@ -307,8 +319,19 @@ export default function ChatArea({
           })}
           {typingNames.length > 0 && (
             <div className="flex flex-col items-start">
-              <span className="text-badge text-[var(--color-foreground-muted)] mb-1 pl-1">
-                {typingNames.join(', ')}
+              <span className="mb-1 flex max-w-full flex-wrap gap-x-1 pl-1 text-badge text-[var(--color-foreground-muted)]">
+                {typingNames.map((entry, index) => (
+                  <span key={entry.pid} className="flex min-w-0 max-w-full" data-testid="typing-name">
+                    <span className="truncate">{entry.text}</span>
+                    {/* #893 — kept whole; the name truncates first on a narrow screen. */}
+                    {entry.since !== undefined && (
+                      <span className="shrink-0 whitespace-pre">
+                        {' · '}<Elapsed since={entry.since} />
+                      </span>
+                    )}
+                    {index < typingNames.length - 1 && <span className="shrink-0">,</span>}
+                  </span>
+                ))}
               </span>
               <div className="flex max-w-full items-center gap-2">
                 {/* #856 — unboxed like the agent reply it stands in for, so

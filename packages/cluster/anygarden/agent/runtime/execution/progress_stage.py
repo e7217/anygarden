@@ -12,7 +12,9 @@ of the turn for the reply:
 """
 
 import json
+import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, get_args
 
@@ -97,9 +99,14 @@ class TraceBuilder:
     A step is a narration followed by the work done after it. Work before the
     first narration forms a step without one; consecutive narrations with no
     work between them share a step.
+
+    #893 — the trace also records the turn's total working time
+    (``duration_ms``), measured from construction to ``finish()``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._t0 = clock()
         self._steps: list[dict] = []
         self._totals: Counter[str] = Counter()
         self._started: Counter[str] = Counter()
@@ -150,7 +157,13 @@ class TraceBuilder:
                 steps.pop()
         truncated = max(0, len(steps) - MAX_TRACE_STEPS)
         steps = steps[truncated:]
-        trace = {"v": 1, "steps": steps, "totals": dict(self._totals), "truncated": truncated}
+        trace = {
+            "v": 1,
+            "steps": steps,
+            "totals": dict(self._totals),
+            "truncated": truncated,
+            "duration_ms": max(0, int((self._clock() - self._t0) * 1000)),
+        }
         while steps and len(json.dumps(trace, ensure_ascii=False).encode()) > MAX_TRACE_BYTES:
             steps.pop(0)
             trace["truncated"] += 1

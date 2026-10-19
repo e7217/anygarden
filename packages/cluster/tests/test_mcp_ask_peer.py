@@ -587,6 +587,7 @@ class TestWaitingIndicator:
             assert frame.stage == "waiting_peers"
             assert (frame.waiting_done, frame.waiting_total) == (0, 1)
             assert frame.waiting_names == ["peer"]
+            assert frame.elapsed_ms is None  # no tracker given
 
             # Rate-limited: an immediate second pass sends nothing new.
             await dispatch_peer_ask_groups(sf, manager)
@@ -599,6 +600,44 @@ class TestWaitingIndicator:
         stop, wake = manager.frames[1:]
         assert (stop.participant_id, stop.is_typing) == (sender_pid, False)
         assert wake.metadata["system_origin"] == "peer_ask_results"
+
+
+class TestWaitingElapsed:
+    @pytest.mark.req("ENG-13")
+    @pytest.mark.asyncio
+    async def test_waiting_caller_keeps_counting_its_working_time(self, ws_env) -> None:
+        """#893 — while an ``ask_peer`` caller waits, its working time runs on."""
+        from anygarden.orchestration import peer_fanin
+        from anygarden.orchestration.rules import TypingTracker
+
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        peer_token = await _add_token(sf, peer_pid)
+        peer_fanin._last_heartbeat.clear()
+        manager = _FakeManager()
+        now = [1000.0]
+        tracker = TypingTracker(ttl_seconds=5.0, clock=lambda: now[0])
+
+        with TestClient(app) as client:
+            trigger = _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
+            _ask_peer(client, sender_token, room.id, [(peer_pid, "q")])
+            _agent_send(client, room.id, sender_token, "초안", await _proof(sf, sender_pid))
+            await dispatch_peer_ask_groups(sf, manager, typing_tracker=tracker)
+            assert manager.frames[-1].elapsed_ms == 0
+
+            now[0] += 3.0
+            peer_fanin._last_heartbeat.clear()
+            await dispatch_peer_ask_groups(sf, manager, typing_tracker=tracker)
+            assert manager.frames[-1].stage == "waiting_peers"
+            assert manager.frames[-1].elapsed_ms == 3000
+
+            _agent_send(client, room.id, peer_token, "답",
+                        await _proof(sf, peer_pid), thread_root_id=trigger["id"])
+            await dispatch_peer_ask_groups(sf, manager, typing_tracker=tracker)
+
+        stop = next(f for f in manager.frames if getattr(f, "is_typing", None) is False)
+        assert stop.elapsed_ms is None
+        assert tracker.elapsed(room.id, sender_pid) is None
 
 
 class TestTargetStates:

@@ -83,6 +83,68 @@ class TestTypingTracker:
         assert "p1" not in active
 
 
+class _FakeClock:
+    def __init__(self, now: float = 100.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class TestTypingTrackerElapsed:
+    """#893 — the server remembers when an agent started working."""
+
+    @pytest.mark.req("ENG-13")
+    def test_refresh_keeps_the_start(self) -> None:
+        clock = _FakeClock()
+        tracker = TypingTracker(ttl_seconds=5.0, clock=clock)
+        assert tracker.elapsed("room1", "p1") is None
+        tracker.set_typing("room1", "p1", True)
+        assert tracker.elapsed("room1", "p1") == 0.0
+        for _ in range(10):
+            clock.now += 2.0
+            tracker.set_typing("room1", "p1", True)
+        assert tracker.elapsed("room1", "p1") == 20.0
+        clock.now += 1.5
+        assert tracker.elapsed("room1", "p1") == 21.5
+
+    @pytest.mark.req("ENG-13")
+    def test_stop_resets_the_start(self) -> None:
+        clock = _FakeClock()
+        tracker = TypingTracker(ttl_seconds=5.0, clock=clock)
+        tracker.set_typing("room1", "p1", True)
+        clock.now += 30.0
+        tracker.set_typing("room1", "p1", True)
+        tracker.set_typing("room1", "p1", False)
+        assert tracker.elapsed("room1", "p1") is None
+        clock.now += 1.0
+        tracker.set_typing("room1", "p1", True)
+        assert tracker.elapsed("room1", "p1") == 0.0
+
+    @pytest.mark.req("ENG-13")
+    def test_expiry_resets_the_start(self) -> None:
+        clock = _FakeClock()
+        tracker = TypingTracker(ttl_seconds=5.0, clock=clock)
+        tracker.set_typing("room1", "p1", True)
+        clock.now += 4.0
+        tracker.set_typing("room1", "p1", True)
+        clock.now += 6.0
+        assert tracker.elapsed("room1", "p1") is None
+        tracker.set_typing("room1", "p1", True)
+        assert tracker.elapsed("room1", "p1") == 0.0
+
+    def test_participants_and_rooms_are_independent(self) -> None:
+        clock = _FakeClock()
+        tracker = TypingTracker(ttl_seconds=5.0, clock=clock)
+        tracker.set_typing("room1", "p1", True)
+        clock.now += 3.0
+        tracker.set_typing("room1", "p2", True)
+        tracker.set_typing("room2", "p1", True)
+        assert tracker.elapsed("room1", "p1") == 3.0
+        assert tracker.elapsed("room1", "p2") == 0.0
+        assert tracker.elapsed("room2", "p1") == 0.0
+
+
 class TestPeerMentionSafetyNet:
     """Issue #279 — depth, kind, and budget helpers for the
     collaborative agent peer-mention pipeline."""

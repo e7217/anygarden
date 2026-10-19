@@ -4,6 +4,7 @@ import {
   isAgentStage, peerProgressFrom, workDetailFrom, type AgentStage, type AgentWorkDetail, type PeerProgress,
 } from '@/lib/typingStage';
 import { applyMessageUpdate, MESSAGE_UPDATED_EVENT } from '@/lib/messageEdits';
+import { calibrateSince, elapsedMsFrom } from '@/lib/elapsed';
 
 export interface ChatMessage {
   type: string; id: string; room_id: string;
@@ -26,10 +27,12 @@ interface RoomState {
   typingProgress: Record<string, PeerProgress>;
   /** #880 — the activity and latest narration each agent reports. */
   typingWork: Record<string, AgentWorkDetail>;
+  /** #893 — when each agent started working, on the browser's clock (ms). */
+  typingSince: Record<string, number>;
   messageContextError: string | null;
 }
 const emptyRoomState = (scope: RoomScope): RoomState => ({
-  scope, messages: [], connected: false, typingUsers: new Set(), typingStages: {}, typingProgress: {}, typingWork: {}, messageContextError: null,
+  scope, messages: [], connected: false, typingUsers: new Set(), typingStages: {}, typingProgress: {}, typingWork: {}, typingSince: {}, messageContextError: null,
 });
 
 export function useWebSocket(roomId: string | null, focusMessageId: string | null = null) {
@@ -40,7 +43,7 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
   currentScope.current = scope;
   const isCurrent = useCallback(() => scope.active && currentScope.current === scope, [scope]);
   const [snapshot, setSnapshot] = useState<RoomState>(() => emptyRoomState(scope));
-  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, messageContextError } = snapshot.scope === scope
+  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, messageContextError } = snapshot.scope === scope
     ? snapshot : emptyRoomState(scope);
   const updateState = useCallback((patch: (previous: RoomState) => Partial<RoomState>) => {
     if (!isCurrent()) return;
@@ -67,7 +70,7 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
   const clearTyping = useCallback(() => {
     Object.values(typingTimers.current).forEach(clearTimeout);
     typingTimers.current = {};
-    updateState(() => ({ typingUsers: new Set(), typingStages: {}, typingProgress: {}, typingWork: {} }));
+    updateState(() => ({ typingUsers: new Set(), typingStages: {}, typingProgress: {}, typingWork: {}, typingSince: {} }));
   }, [updateState]);
 
   const connect = useCallback(() => {
@@ -226,12 +229,14 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
             const typingStages = { ...previous.typingStages }; delete typingStages[pid];
             const typingProgress = { ...previous.typingProgress }; delete typingProgress[pid];
             const typingWork = { ...previous.typingWork }; delete typingWork[pid];
-            return { typingUsers, typingStages, typingProgress, typingWork };
+            const typingSince = { ...previous.typingSince }; delete typingSince[pid];
+            return { typingUsers, typingStages, typingProgress, typingWork, typingSince };
           });
         };
         if (data.is_typing) {
           const progress = data.stage === 'waiting_peers' ? peerProgressFrom(data) : null;
           const work = workDetailFrom(data);
+          const elapsedMs = elapsedMsFrom(data);
           updateState(previous => {
             const typingStages = { ...previous.typingStages };
             if (isAgentStage(data.stage)) typingStages[pid] = data.stage;
@@ -242,7 +247,13 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
             const typingWork = { ...previous.typingWork };
             if (work) typingWork[pid] = work;
             else delete typingWork[pid];
-            return { typingUsers: new Set(previous.typingUsers).add(pid), typingStages, typingProgress, typingWork };
+            // #893 — re-calibrated on every frame from the server's count.
+            const typingSince = { ...previous.typingSince };
+            if (elapsedMs !== null) typingSince[pid] = calibrateSince(previous.typingSince[pid], elapsedMs, Date.now());
+            else delete typingSince[pid];
+            return {
+              typingUsers: new Set(previous.typingUsers).add(pid), typingStages, typingProgress, typingWork, typingSince,
+            };
           });
           // Reset the expire timer — don't stack multiple timeouts
           if (typingTimers.current[pid]) clearTimeout(typingTimers.current[pid]);
@@ -405,5 +416,5 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
     return () => controller.abort();
   }, [roomId, focusMessageId, isCurrent, updateState]);
 
-  return { messages, connected, typingUsers, typingStages, typingProgress, typingWork, send, sendTyping, messageContextError };
+  return { messages, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, send, sendTyping, messageContextError };
 }

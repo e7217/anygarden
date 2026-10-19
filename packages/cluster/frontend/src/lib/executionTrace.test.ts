@@ -35,3 +35,20 @@ describe('[ENG-11] executionTraceFrom', () => {
     ])
   })
 })
+
+describe('[ENG-13] executionTraceFrom duration', () => {
+  const base = { v: 1, steps: [], totals: { commands: 1 } }
+
+  it('reads the total working time when present', () => {
+    expect(executionTraceFrom({ execution_trace: { ...base, duration_ms: 754_000 } })?.durationMs).toBe(754_000)
+    expect(executionTraceFrom({ execution_trace: { ...base, duration_ms: 0 } })?.durationMs).toBe(0)
+  })
+
+  it('leaves it out when missing or malformed, keeping the trace', () => {
+    for (const duration_ms of [undefined, -1, 1.5, '12', null]) {
+      const trace = executionTraceFrom({ execution_trace: { ...base, duration_ms } })
+      expect(trace).not.toBeNull()
+      expect(trace).not.toHaveProperty('durationMs')
+    }
+  })
+})

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -421,25 +421,61 @@ class TypingTracker:
     """Tracks who is currently typing in each room.
 
     Each typing event has a TTL — if not refreshed, it expires.
+
+    #893 — it also remembers when each participant *started* typing, so the
+    server can tell viewers how long an agent has been working. The start is
+    set by the first ``is_typing=True`` (or the first one after the previous
+    run expired) and cleared by ``is_typing=False``.
     """
 
-    def __init__(self, ttl_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        ttl_seconds: float = 5.0,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._ttl = ttl_seconds
+        self._clock = clock
         # room_id -> { participant_id -> last_typing_timestamp }
         self._state: dict[str, dict[str, float]] = {}
+        # room_id -> { participant_id -> typing_started_timestamp }
+        self._since: dict[str, dict[str, float]] = {}
 
     def set_typing(self, room_id: str, participant_id: str, is_typing: bool) -> None:
         """Record typing state for a participant."""
         room_state = self._state.setdefault(room_id, {})
+        room_since = self._since.setdefault(room_id, {})
         if is_typing:
-            room_state[participant_id] = time.monotonic()
+            now = self._clock()
+            last = room_state.get(participant_id)
+            if last is None or now - last > self._ttl or participant_id not in room_since:
+                room_since[participant_id] = now
+            room_state[participant_id] = now
         else:
             room_state.pop(participant_id, None)
+            room_since.pop(participant_id, None)
+
+    def elapsed(self, room_id: str, participant_id: str) -> float | None:
+        """Seconds since *participant_id* started typing, or ``None`` if idle."""
+        last = self._state.get(room_id, {}).get(participant_id)
+        since = self._since.get(room_id, {}).get(participant_id)
+        if last is None or since is None:
+            return None
+        now = self._clock()
+        if now - last > self._ttl:
+            return None
+        return max(0.0, now - since)
+
+    def elapsed_ms(self, room_id: str, participant_id: str) -> int | None:
+        """``elapsed`` in whole milliseconds, for the ``typing`` frame."""
+        seconds = self.elapsed(room_id, participant_id)
+        return None if seconds is None else int(seconds * 1000)
 
     def get_typing(self, room_id: str) -> list[str]:
         """Return list of participant IDs currently typing in *room_id*."""
         room_state = self._state.get(room_id, {})
-        now = time.monotonic()
+        room_since = self._since.get(room_id, {})
+        now = self._clock()
         active: list[str] = []
         expired: list[str] = []
         for pid, ts in room_state.items():
@@ -450,4 +486,5 @@ class TypingTracker:
         # Clean up expired entries
         for pid in expired:
             room_state.pop(pid, None)
+            room_since.pop(pid, None)
         return active

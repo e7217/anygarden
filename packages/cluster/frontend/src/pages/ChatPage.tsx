@@ -84,7 +84,7 @@ function LocalChatPage() {
     markRoomRead,
   } = useRooms()
   const { user } = useAuth()
-  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
+  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
   const { participants, refresh: refreshRoomParticipants } = useRoomParticipants(selectedRoom)
   const myParticipantId = user ? Object.values(participants).find(p => p.user_id === user.id)?.id ?? null : null
   // Thread grouping is derived once here so the timeline and the side
@@ -566,6 +566,7 @@ function LocalChatPage() {
           name: participants[pid]?.display_name ?? pid.slice(0, 8),
           stage: workLabel(t, typingStages[pid], typingWork[pid], typingProgress[pid]),
           narration: typingWork[pid]?.narration,
+          since: typingSince[pid],
           requestIds: threadTurnIds(openTurns, threadRoot.id, pid),
         }
       })
@@ -730,6 +731,7 @@ function LocalChatPage() {
               typingStages={typingStages}
               typingProgress={typingProgress}
               typingWork={typingWork}
+              typingSince={typingSince}
               openTurns={openTurns}
               onCancelTurns={cancelTurns}
               threadIndex={threadIndex}

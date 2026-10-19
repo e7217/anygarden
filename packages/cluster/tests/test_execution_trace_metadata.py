@@ -86,3 +86,27 @@ def test_too_many_steps_keep_the_latest():
     assert len(result["steps"]) == MAX_TRACE_STEPS
     assert result["steps"][0] == {"narration": "step 3"}
     assert result["truncated"] == 4
+
+
+@pytest.mark.req("ENG-13")
+@pytest.mark.parametrize("duration_ms", [0, 1, 754_000, 7 * 24 * 3600 * 1000])
+def test_duration_within_bounds_is_kept(duration_ms):
+    # #893 — the reply's total working time.
+    trace = {**GOOD, "duration_ms": duration_ms}
+    clean = sanitize_execution_trace({EXECUTION_TRACE_KEY: trace}, sender_is_agent=True)
+    assert clean[EXECUTION_TRACE_KEY]["duration_ms"] == duration_ms
+
+
+@pytest.mark.parametrize("duration_ms", [
+    -1, 1.5, 7 * 24 * 3600 * 1000 + 1, True, "12", None, [1],
+])
+@pytest.mark.req("ENG-13")
+def test_bad_duration_drops_only_the_duration(duration_ms):
+    trace = {**GOOD, "duration_ms": duration_ms}
+    clean = sanitize_execution_trace({EXECUTION_TRACE_KEY: trace}, sender_is_agent=True)
+    assert clean[EXECUTION_TRACE_KEY] == GOOD
+
+
+def test_duration_never_survives_a_human_sender():
+    trace = {**GOOD, "duration_ms": 1000}
+    assert sanitize_execution_trace({EXECUTION_TRACE_KEY: trace}, sender_is_agent=False) == {}

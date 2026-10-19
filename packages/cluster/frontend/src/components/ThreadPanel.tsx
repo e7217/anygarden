@@ -13,6 +13,7 @@ import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
 import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
 import BrailleSpinner from '@/components/BrailleSpinner'
 import TurnCancelControl from '@/components/TurnCancelControl'
+import Elapsed from '@/components/Elapsed'
 
 /** ENG-09 — an agent answering inside this thread. */
 export interface ThreadWorker {
@@ -22,6 +23,8 @@ export interface ThreadWorker {
   stage?: string
   /** #880 — the latest sentence the agent wrote before more work. */
   narration?: string
+  /** #893 — when it started working (browser clock, ms). */
+  since?: number
   /** This agent's open turns in the thread. */
   requestIds: string[]
 }
@@ -195,6 +198,9 @@ export default function ThreadPanel({
                       {worker.stage ? `${worker.name} · ${worker.stage}` : worker.name}
                       {worker.narration && ` — ${worker.narration}`}
                     </span>
+                    {worker.since !== undefined && (
+                      <Elapsed since={worker.since} className="shrink-0 text-caption text-[var(--color-foreground-muted)]" />
+                    )}
                     {onCancelTurns && (
                       <TurnCancelControl
                         requestIds={worker.requestIds}

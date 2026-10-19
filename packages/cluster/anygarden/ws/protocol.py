@@ -399,6 +399,9 @@ class TypingOut(BaseModel):
     waiting_done: Optional[int] = None
     waiting_total: Optional[int] = None
     waiting_names: Optional[list[str]] = None
+    # #893 — agent senders only: how long the agent has been working, by
+    # the server's clock. Relative, so browser clock skew does not matter.
+    elapsed_ms: Optional[int] = None
 
 
 class PresenceUpdateOut(BaseModel):

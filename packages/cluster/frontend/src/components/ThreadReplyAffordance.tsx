@@ -1,6 +1,7 @@
 import { MessageSquareReply } from 'lucide-react'
 import BrailleSpinner from '@/components/BrailleSpinner'
 import TurnCancelControl from '@/components/TurnCancelControl'
+import Elapsed from '@/components/Elapsed'
 import { EntityAvatar, type EntityKind } from '@/components/EntityAvatar'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
@@ -22,6 +23,8 @@ interface ThreadReplyAffordanceProps {
   onOpen: (rootMessageId: string) => void
   /** ENG-09 — agents answering inside this thread right now. */
   workingNames?: string[]
+  /** #893 — when the longest-running of them started (browser clock, ms). */
+  workingSince?: number
   /** Open turns in this thread; one stop control cancels them all. */
   stopTurnIds?: string[]
   onStop?: (requestIds: string[]) => Promise<boolean>
@@ -44,6 +47,7 @@ export default function ThreadReplyAffordance({
   active,
   onOpen,
   workingNames = [],
+  workingSince,
   stopTurnIds = [],
   onStop,
 }: ThreadReplyAffordanceProps) {
@@ -128,6 +132,11 @@ export default function ThreadReplyAffordance({
           <span className="flex min-w-0 items-center gap-1.5 text-[var(--color-foreground-muted)]">
             <BrailleSpinner />
             <span className="truncate">{t('chat.threadWorking', { names: workingNames.join(', ') })}</span>
+            {workingSince !== undefined && (
+              <span className="shrink-0 whitespace-pre">
+                {'· '}<Elapsed since={workingSince} />
+              </span>
+            )}
           </span>
         ) : last && (
           <span className="truncate text-[var(--color-foreground-subtle)]">

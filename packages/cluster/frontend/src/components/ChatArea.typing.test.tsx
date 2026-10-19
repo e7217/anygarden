@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -56,12 +56,33 @@ describe('[ENG-10] ChatArea working indicator', () => {
       typingStages: { dev: 'writing', pm: 'preparing' },
       typingWork: { dev: { narration: 'Checking.' }, pm: { narration: 'Planning.' } },
     })
-    expect(screen.getByText('dev · writing a response…, PM · preparing a response…')).toBeInTheDocument()
+    expect(screen.getAllByTestId('typing-name').map(el => el.textContent)).toEqual([
+      'dev · writing a response…,', 'PM · preparing a response…',
+    ])
     expect(screen.getByTestId('typing-narration')).toHaveTextContent('dev: Checking. · PM: Planning.')
   })
 
   it('shows no narration line for an agent that sent none', () => {
     renderArea({ typingUsers: new Set(['dev']), typingStages: { dev: 'preparing' } })
     expect(screen.queryByTestId('typing-narration')).toBeNull()
+  })
+})
+
+describe('[ENG-13] ChatArea working time', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('counts each agent\'s working time up beside its name, and shows none without a start', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    renderArea({
+      typingUsers: new Set(['dev', 'pm']),
+      typingStages: { dev: 'writing', pm: 'preparing' },
+      typingSince: { dev: 1_000_000 - 151_000 },
+    })
+    const [dev, pm] = screen.getAllByTestId('typing-name')
+    expect(dev).toHaveTextContent('dev · writing a response… · 2m 31s')
+    expect(pm.querySelector('[data-testid="work-elapsed"]')).toBeNull()
+    act(() => { vi.advanceTimersByTime(2_000) })
+    expect(screen.getByTestId('work-elapsed')).toHaveTextContent('2m 33s')
   })
 })

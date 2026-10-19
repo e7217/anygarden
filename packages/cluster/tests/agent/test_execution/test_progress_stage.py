@@ -93,7 +93,7 @@ def test_narration_for_progress_accepts_only_bounded_text():
 
 @pytest.mark.req("ENG-11")
 def test_trace_groups_activities_under_the_narration_before_them():
-    trace = TraceBuilder()
+    trace = TraceBuilder(clock=lambda: 0.0)
     assert trace.started("command") == 1
     trace.completed("command")
     trace.narration("There are 4 new commits. Same procedure as before.")
@@ -116,6 +116,7 @@ def test_trace_groups_activities_under_the_narration_before_them():
         ],
         "totals": {"commands": 3, "file_changes": 2},
         "truncated": 0,
+        "duration_ms": 0,
     }
 
 
@@ -128,7 +129,7 @@ def test_trace_counts_only_completed_work_and_never_counts_thinking():
 
 
 def test_trace_drops_the_narration_that_became_the_final_answer():
-    trace = TraceBuilder()
+    trace = TraceBuilder(clock=lambda: 0.0)
     trace.narration("Checking the repo.")
     trace.started("command")
     trace.completed("command")
@@ -138,6 +139,7 @@ def test_trace_drops_the_narration_that_became_the_final_answer():
         "steps": [{"narration": "Checking the repo.", "activities": {"commands": 1}}],
         "totals": {"commands": 1},
         "truncated": 0,
+        "duration_ms": 0,
     }
 
 
@@ -171,3 +173,17 @@ def test_trace_stays_under_the_byte_budget():
     result = trace.finish("done")
     assert len(json.dumps(result, ensure_ascii=False).encode()) <= 16_384
     assert result["truncated"] > 0
+
+
+@pytest.mark.req("ENG-13")
+def test_trace_records_the_turn_duration():
+    # #893 — the reply's total working time, measured from the trace's start.
+    now = [50.0]
+    trace = TraceBuilder(clock=lambda: now[0])
+    trace.started("command")
+    now[0] += 61.2345
+    trace.completed("command")
+    now[0] += 13.0
+    result = trace.finish("done")
+    assert result["duration_ms"] == 74234
+    assert type(result["duration_ms"]) is int
