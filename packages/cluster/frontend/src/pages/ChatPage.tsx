@@ -334,19 +334,8 @@ function LocalChatPage() {
   const showMentionHint =
     Object.values(participants).filter(p => p.kind === 'agent').length >= 2
 
-  const agentParticipants = useMemo(
-    () => Object.values(participants)
-      .filter(p => p.kind === 'agent' && p.agent_id)
-      .map(p => ({
-        id: p.id,
-        agent_id: p.agent_id!,
-        display_name: p.display_name,
-        online: presence[p.id]?.online ?? Boolean(p.online),
-      })),
-    [participants, presence],
-  )
-
-  // Aggregate "agents N online / M total" for the header badge (#54).
+  // Agents online / total — the header marks the participants button
+  // only while some are offline (#54, #897).
   const { agentsOnline, agentsTotal } = useMemo(() => {
     let total = 0
     let on = 0
@@ -596,8 +585,8 @@ function LocalChatPage() {
               <RoomHeader
                 roomName={currentRoom.name}
                 connected={connected}
-                // #116 — hide participant toggle, agents liveness, and
-                // representative select in agent DMs (fixed 1:1, no
+                // #116 — hide participant toggle and agents liveness
+                // in agent DMs (fixed 1:1, no
                 // meaningful variance in any of those values).
                 participantCount={
                   isDm ? undefined : Object.keys(participants).length
@@ -605,23 +594,8 @@ function LocalChatPage() {
                 agentsOnline={isDm ? undefined : agentsOnline}
                 agentsTotal={isDm ? undefined : agentsTotal}
                 parentBreadcrumb={parentBreadcrumb}
-                representativeAgentId={currentRoom.representative_agent_id}
-                agentParticipants={
-                  isDm
-                    ? undefined
-                    : user?.is_admin
-                      ? agentParticipants
-                      : undefined
-                }
                 isDm={currentRoom.is_dm}
                 dmAgent={currentRoom.is_dm ? dmAgent : undefined}
-                onSetRepresentative={
-                  isDm
-                    ? undefined
-                    : user?.is_admin
-                      ? handleSetRepresentative
-                      : undefined
-                }
                 // #116 — Sub-room / Edit room / Invite links / Manage
                 // agents are structurally meaningless (sub-rooms of a
                 // DM, inviting a third party) or redundant (managing
@@ -715,6 +689,10 @@ function LocalChatPage() {
                   onClose={() => setParticipantsOpen(false)}
                   myParticipantId={myParticipantId}
                   onRemove={canRemoveParticipants ? handleRemoveParticipant : undefined}
+                  // #897 — the representative moved here from the header;
+                  // everyone sees who it is, admins may change it.
+                  representativeAgentId={currentRoom.representative_agent_id}
+                  onSetRepresentative={user?.is_admin ? handleSetRepresentative : undefined}
                 />
               )}
             </div>
