@@ -35,7 +35,7 @@ def _client_with_supervisor():
     client = ChatClient("ws://test", token="t")
     client._agent_id = "agent-1"
     client._generation = 3
-    supervisor = RoomHandlerSupervisor(client, "echo", 30)
+    supervisor = RoomHandlerSupervisor(client, "echo")
     client._turn_supervisor = supervisor
     client.sendLifecycle = AsyncMock()
     return client, supervisor

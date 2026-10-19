@@ -256,8 +256,9 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
   }
 
   // #493 — commit the turn timeout on blur. Empty input clears the
-  // override (null + _set). The API enforces the numeric range (30 .. below
-  // the orphan threshold) and returns 422, surfaced via ``turnTimeoutError``.
+  // override (null + _set). #892 — it is an idle limit (no activity for this
+  // long stops the turn; active work runs on). The API enforces the numeric
+  // range (30 .. 86400) and returns 422, surfaced via ``turnTimeoutError``.
   const handleTurnTimeoutCommit = async () => {
     const trimmed = turnTimeoutDraft.trim()
     const nextVal = trimmed === '' ? null : Number(trimmed)
@@ -510,7 +511,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           </>
         )}
 
-        {/* #493 — Per-agent turn timeout (seconds). Blank = global default.
+        {/* #493 — Per-agent idle limit (seconds, #892). Blank = global default.
             Engine-agnostic, so it renders for every agent (outside the
             catalog-gated Model/Reasoning block). Blur-commits; the range is
             validated server-side and a 422 surfaces in ``turnTimeoutError``. */}

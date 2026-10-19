@@ -10,9 +10,11 @@ tokens or replacement placement as needed.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1901,11 +1903,12 @@ class AgentLifecycle:
 
 
 #: Default age at which a ``handler_started`` without a matching
-#: ``handler_finished`` is promoted to ``handler_orphaned``. Sized
-#: as the agent-side engine timeout (15 min) plus 5 min of slack
-#: for reconnects/cluster hops. Overridable per call for tests, and
-#: at the call site via the ``ANYGARDEN_REQUEST_LIVENESS_SEC`` env var
-#: (#481 — the server-side liveness watchdog).
+#: ``handler_finished`` is promoted to ``handler_orphaned``. Overridable
+#: per call for tests, and at the call site via the
+#: ``ANYGARDEN_REQUEST_LIVENESS_SEC`` env var (#481 — the server-side
+#: liveness watchdog). #892 — agents no longer cap a turn's total length,
+#: so a candidate whose agent is still typing in the room (``is_alive``)
+#: is skipped; the threshold only bites once that signal stops.
 ORPHAN_THRESHOLD_SEC_DEFAULT = 1200
 
 
@@ -1929,6 +1932,7 @@ async def sweep_orphaned_requests(
     session_factory,
     *,
     threshold_sec: int = ORPHAN_THRESHOLD_SEC_DEFAULT,
+    is_alive: Callable[[str, str], Awaitable[bool] | bool] | None = None,
 ) -> list[OrphanedRequest]:
     """Mark stalled handlers as ``handler_orphaned``.
 
@@ -1944,6 +1948,12 @@ async def sweep_orphaned_requests(
       report). The threshold is ignored: the process is known dead, so
       its in-flight turn can never deliver and is orphaned immediately
       (~minutes instead of ~20).
+
+    #892 — a slow-path candidate whose ``is_alive(agent_id, room_id)`` is
+    true (the agent is still sending its turn keepalive in that room) is
+    a long but live turn and is skipped this cycle. The fast path ignores
+    ``is_alive``: a crashed agent's turn is orphaned regardless. A failing
+    ``is_alive`` counts as not alive, i.e. the pre-#892 behaviour.
 
     Idempotent by construction: the ``HAVING`` clause excludes
     already-orphaned requests. Returns the newly-orphaned requests as
@@ -1977,6 +1987,7 @@ async def sweep_orphaned_requests(
                 ActivityLog.request_id,
                 ActivityLog.agent_id,
                 earliest_ts,
+                Agent.actual_state,
             )
             .select_from(ActivityLog)
             .outerjoin(Agent, Agent.id == ActivityLog.agent_id)
@@ -1990,7 +2001,9 @@ async def sweep_orphaned_requests(
                     Agent.actual_state == "crashed",
                 ),
             )
-            .group_by(ActivityLog.request_id, ActivityLog.agent_id)
+            .group_by(
+                ActivityLog.request_id, ActivityLog.agent_id, Agent.actual_state
+            )
             .having(and_(started_expr > 0, terminal_expr == 0))
         )
 
@@ -2000,9 +2013,9 @@ async def sweep_orphaned_requests(
         # across dialects' JSON path syntax; fetch it with a second
         # pass by looking up one handler_started row per group.
         # This is fine at orphan scale — orphans are rare by design
-        # (engine_timeout already closes the common case).
+        # (the agent's idle timeout already closes the common case).
         orphaned: list[OrphanedRequest] = []
-        for req_id, agent_id, started_at in rows:
+        for req_id, agent_id, started_at, agent_state in rows:
             started_row = (
                 await db.execute(
                     select(ActivityLog.details)
@@ -2016,6 +2029,15 @@ async def sweep_orphaned_requests(
             room_id = None
             if isinstance(started_row, dict):
                 room_id = started_row.get("room_id")
+
+            if (
+                is_alive is not None
+                and agent_state != "crashed"
+                and agent_id is not None
+                and room_id is not None
+                and await _turn_is_alive(is_alive, agent_id, room_id)
+            ):
+                continue
 
             db.add(
                 ActivityLog(
@@ -2041,6 +2063,20 @@ async def sweep_orphaned_requests(
             )
         await db.commit()
         return orphaned
+
+
+async def _turn_is_alive(is_alive, agent_id: str, room_id: str) -> bool:
+    try:
+        alive = is_alive(agent_id, room_id)
+        if inspect.isawaitable(alive):
+            alive = await alive
+        return bool(alive)
+    except Exception as exc:  # noqa: BLE001 — fall back to the threshold
+        logger.warning(
+            "orphan_sweep.is_alive_failed",
+            agent_id=agent_id, room_id=room_id, error=str(exc),
+        )
+        return False
 
 
 # ── #481 — orphan visibility + recovery ──────────────────────────────

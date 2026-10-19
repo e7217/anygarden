@@ -42,7 +42,6 @@ from anygarden.agent.coordination.pending_context import (
     format_context_line,
 )
 from anygarden.agent.integrations._turn_timeout import (
-    resolve_supervisor_timeout,
     resolve_turn_timeout,
 )
 from anygarden.agent.integrations.base import EngineAdapter, ShaTrackedInjector
@@ -634,16 +633,19 @@ async def integrate_with_codex_cli(
     adapter._client = client
     await adapter.start()
 
-    return register_room_adapter(client, adapter, "codex-cli", _CODEX_CLI_TIMEOUT)
+    return register_room_adapter(client, adapter, "codex-cli")
 
 
-def register_room_adapter(client, adapter, engine_name, turn_timeout):
-    """Shared policy, delegation, typing and lifecycle handler for room engines."""
-    engine_timeout = resolve_supervisor_timeout(turn_timeout)
+def register_room_adapter(client, adapter, engine_name):
+    """Shared policy, delegation, typing and lifecycle handler for room engines.
+
+    The supervisor puts no time limit on a turn (#892); the engine runtime's
+    idle clock and the user's Stop end it. The 2s typing keepalive below is
+    also the server's liveness signal for its orphan sweep.
+    """
     supervisor = RoomHandlerSupervisor(
         client=client,
         engine_name=engine_name,
-        engine_timeout=engine_timeout,
         # #854 — the agent runs from its root; see the outbox prompt section.
         outbox_dir=Path.cwd() / "memory" / "outbox",
     )

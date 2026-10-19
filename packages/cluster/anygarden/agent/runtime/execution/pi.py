@@ -25,6 +25,8 @@ from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path
 
+import structlog
+
 from .codex import ProcessTree
 from .contracts import (
     Capabilities,
@@ -37,11 +39,16 @@ from .failure_feedback import classify_failure
 from .pi_auth import INPUT_KEY as PI_INPUT_KEY
 from .pi_auth import materialize_native_auth
 from .pi_self_tools import ALLOWED_TOOL_NAMES as PI_SELF_TOOL_NAMES
+from .turn_clock import TurnClock
+
+logger = structlog.get_logger(__name__)
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 # Whether this turn may have caused a side effect; shared with the timeout
 # path, which reports a transient TIMEOUT_STOPPED only when it surely did not.
 _SIDE_EFFECTS: ContextVar[dict | None] = ContextVar("pi_side_effects", default=None)
+# #892 — the turn's idle clock; every stdout line from the CLI is activity.
+_TURN_CLOCK: ContextVar[TurnClock | None] = ContextVar("pi_turn_clock", default=None)
 # Fail closed (EXE-10): a timeout is transient only if *every* event of the
 # turn is one of these known side-effect-free Pi 0.85.1 event types. Any other
 # type -- tool_execution_*, or one a newer Pi adds -- may stand for work with
@@ -369,6 +376,11 @@ class PiRuntime:
             measured: dict[str, int] = {}
             effects = {"started": False}
             stream: asyncio.Task | None = None
+            # #892 — ``timeout_seconds`` is an idle limit, not a turn cap.
+            clock = TurnClock(
+                invocation.timeout_seconds, asyncio.get_running_loop().time
+            )
+            emit = clock.wrap(emit)
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
                 launched(proc.pid)
@@ -378,22 +390,28 @@ class PiRuntime:
                 async def collect():
                     token = _MEASURED_USAGE.set(measured)
                     effects_token = _SIDE_EFFECTS.set(effects)
+                    clock_token = _TURN_CLOCK.set(clock)
                     try:
                         return await self._collect(
                             proc, invocation, session_handle, output, emit, authorized
                         )
                     finally:
+                        _TURN_CLOCK.reset(clock_token)
                         _SIDE_EFFECTS.reset(effects_token)
                         _MEASURED_USAGE.reset(token)
 
                 stream = asyncio.create_task(collect())
-                deadline = (
-                    asyncio.get_running_loop().time() + invocation.timeout_seconds
-                )
                 while not stream.done():
                     tree.observe()
-                    remaining = deadline - asyncio.get_running_loop().time()
+                    remaining = clock.remaining()
                     if remaining <= 0:
+                        logger.warning(
+                            "execution.idle_timeout",
+                            engine=ENGINE,
+                            idle=invocation.timeout_seconds,
+                            elapsed=round(clock.elapsed(), 1),
+                            open_tools=clock.open_tools,
+                        )
                         raise TimeoutError
                     await asyncio.wait({stream}, timeout=min(0.05, remaining))
                 result = stream.result()
@@ -462,7 +480,10 @@ class PiRuntime:
         failure_count = 0
         failure_code: str | None = None
         settled = False
+        clock = _TURN_CLOCK.get()
         while line := await proc.stdout.readline():
+            if clock is not None:
+                clock.touch()
             try:
                 event = json.loads(line)
             except (ValueError, UnicodeDecodeError):
@@ -543,6 +564,9 @@ class PiRuntime:
                         "event": "activity", "activity": activity, "phase": "completed",
                         "count": 1,
                     })
+                elif clock is not None:
+                    # The failed edit still ended for the idle clock (#892).
+                    clock.tool_ended()
             elif kind == "message_update":
                 update = event.get("assistantMessageEvent")
                 phase = {"thinking_start": "started", "thinking_end": "completed"}.get(

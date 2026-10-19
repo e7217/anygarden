@@ -116,7 +116,6 @@ async def test_supervisor_attaches_files_written_during_turn(tmp_path: Path) -> 
     sup = RoomHandlerSupervisor(
         client=client,
         engine_name="codex",
-        engine_timeout=5.0,
         outbox_dir=tmp_path / "outbox",
     )
 
@@ -147,7 +146,6 @@ async def test_supervisor_reports_failed_upload_and_still_replies(
     sup = RoomHandlerSupervisor(
         client=client,
         engine_name="codex",
-        engine_timeout=5.0,
         outbox_dir=tmp_path / "outbox",
     )
 
@@ -171,7 +169,7 @@ async def test_supervisor_reports_failed_upload_and_still_replies(
 @pytest.mark.asyncio
 async def test_supervisor_without_outbox_dir_sends_plain_reply() -> None:
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return "hi"

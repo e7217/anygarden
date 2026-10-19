@@ -1351,7 +1351,8 @@ class TestAgentManifestAPI:
     @pytest.mark.asyncio
     async def test_turn_timeout_sec_crud_and_validation(self, agents_env) -> None:
         """#493 — per-agent turn timeout: create/update round-trip, range
-        validation (below orphan threshold), and ``_set`` flag semantics.
+        validation, and ``_set`` flag semantics. #892 — it is an idle limit,
+        so values past the orphan threshold (up to 24h) are accepted.
         """
         client = agents_env["client"]
         token = agents_env["token"]
@@ -1378,10 +1379,19 @@ class TestAgentManifestAPI:
         assert resp.status_code == 201
         assert resp.json()["turn_timeout_sec"] is None
 
-        # Out-of-range rejected on create (>= 900 with default orphan 1200).
+        # #892 — no longer tied to the orphan threshold: 1h and 24h are fine.
+        for name, value in (("tt-hour", 3600), ("tt-day", 86400)):
+            resp = await client.post(
+                "/api/v1/agents",
+                json={"engine": "echo", "name": name, "turn_timeout_sec": value},
+                headers=hdr,
+            )
+            assert resp.status_code == 201, resp.text
+            assert resp.json()["turn_timeout_sec"] == value
+        # Above 24h rejected on create.
         resp = await client.post(
             "/api/v1/agents",
-            json={"engine": "echo", "name": "tt-hi", "turn_timeout_sec": 5000},
+            json={"engine": "echo", "name": "tt-hi", "turn_timeout_sec": 86401},
             headers=hdr,
         )
         assert resp.status_code == 422
@@ -1437,7 +1447,7 @@ class TestAgentManifestAPI:
         # Out-of-range rejected on update.
         resp = await client.put(
             f"/api/v1/agents/{agent_id}",
-            json={"turn_timeout_sec": 5000, "turn_timeout_sec_set": True},
+            json={"turn_timeout_sec": 86401, "turn_timeout_sec_set": True},
             headers=hdr,
         )
         assert resp.status_code == 422

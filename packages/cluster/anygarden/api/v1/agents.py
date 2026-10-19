@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 from uuid import UUID
@@ -55,36 +54,25 @@ logger = logging.getLogger(__name__)
 # ── Request / Response schemas ───────────────────────────────────────
 
 
-# Issue #493 — per-agent turn timeout bounds (seconds). The lower bound keeps
-# a turn meaningful; the upper bound stays below the cluster orphan-sweep
-# threshold (``ANYGARDEN_REQUEST_LIVENESS_SEC``) minus the supervisor slack, so
-# a legitimately long turn records ``handler_finished`` before the sweeper
-# would orphan it. ``None`` means "use the global env / hardcoded default".
+# Issue #493 — per-agent turn timeout bounds (seconds). #892 — the value is
+# an idle limit: the agent stops a turn that shows no activity for this long,
+# while a turn that keeps working runs on. Nothing caps a turn's total length
+# any more (the supervisor cap is gone and the orphan sweep skips turns whose
+# agent is still typing), so the bound no longer derives from the orphan
+# threshold. The lower bound keeps a turn meaningful; the upper bound (24h)
+# only rejects nonsense. ``None`` means "use the global env / hardcoded
+# default".
 _TURN_TIMEOUT_MIN_SEC = 30
-# mirrors anygarden.agent.integrations._turn_timeout.SUP_SLACK
-_SUPERVISOR_SLACK_SEC = 300
-_ORPHAN_THRESHOLD_DEFAULT_SEC = 1200
-
-
-def _turn_timeout_upper_bound_exclusive() -> int:
-    """Exclusive upper bound for ``turn_timeout_sec`` so the derived supervisor
-    deadline (``N + slack``) stays strictly below the orphan threshold."""
-    orphan = int(
-        os.environ.get(
-            "ANYGARDEN_REQUEST_LIVENESS_SEC", str(_ORPHAN_THRESHOLD_DEFAULT_SEC)
-        )
-    )
-    return orphan - _SUPERVISOR_SLACK_SEC
+_TURN_TIMEOUT_MAX_SEC = 86400
 
 
 def _validate_turn_timeout(value: Optional[int]) -> Optional[int]:
     if value is None:
         return None
-    upper = _turn_timeout_upper_bound_exclusive()
-    if value < _TURN_TIMEOUT_MIN_SEC or value >= upper:
+    if value < _TURN_TIMEOUT_MIN_SEC or value > _TURN_TIMEOUT_MAX_SEC:
         raise ValueError(
             f"turn_timeout_sec must be between {_TURN_TIMEOUT_MIN_SEC} and "
-            f"{upper - 1} seconds (got {value})"
+            f"{_TURN_TIMEOUT_MAX_SEC} seconds (got {value})"
         )
     return value
 

@@ -30,19 +30,6 @@ class _EngineChoice(click.Choice):
         return super().convert(value, param, ctx)
 
 
-# #492/#500 — CLI engine names → ``_turn_timeout`` engine keys. The helper
-# keys off short names (codex/pi); codex-cli shares
-# codex's turn-timeout profile. Every name in ENGINES MUST map to a key the
-# ``_turn_timeout`` defaults know, else the agent crashes at spawn when
-# ``resolve_turn_timeout`` raises (#500). Regression-tested in test_cli.
-_ENGINE_TIMEOUT_KEY: dict[str, str] = {
-    "pi-cli": "pi",
-    # codex-cli uses the "codex" turn-timeout profile (_ENGINE_DEFAULTS["codex"]);
-    # #506 removed the SDK "codex" engine but the timeout key stays for codex-cli.
-    "codex-cli": "codex",
-}
-
-
 @click.command("agent")
 @click.option(
     "--engine",
@@ -177,23 +164,13 @@ async def _run_agent(
     execution_launch=None,
 ) -> None:
     from anygarden.agent.client import ChatClient
-    from anygarden.agent.integrations._turn_timeout import (
-        resolve_ping_timeout,
-        resolve_turn_timeout,
-    )
 
-    # #492 — the WS ping_timeout must tolerate the engine's turn timeout or a
-    # long turn is silently dropped on keepalive. CLI engine names differ from
-    # the helper's engine keys; the mapping lives at module level
-    # (``_ENGINE_TIMEOUT_KEY``) so it can be regression-tested (#500).
-    engine_key = _ENGINE_TIMEOUT_KEY.get(engine, engine)
-    ping_timeout = resolve_ping_timeout(resolve_turn_timeout(engine_key))
-
+    # #892 — the WS ping_timeout is a fixed keepalive (ChatClient default,
+    # ``_turn_timeout.resolve_ping_timeout``), no longer derived from the turn.
     client = ChatClient(
         server,
         token=token,
         agent_name=name,
-        ping_timeout=ping_timeout,
         # The machine materializer preserves agent-created files directly
         # under the agent root, so cursors written here survive a respawn
         # and the reconnect replays whatever arrived while we were down.

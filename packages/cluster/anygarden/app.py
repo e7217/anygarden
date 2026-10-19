@@ -1107,7 +1107,8 @@ async def _startup_server(app: FastAPI) -> None:
 
     # #204 — orphan sweeper. Writes ``handler_orphaned`` rows when a
     # ``handler_started`` has no matching ``handler_finished`` after
-    # 20 min (engine_timeout 15 min + 5 min slack). Disabled when
+    # 20 min, unless the agent is still typing in the room (#892 — a long
+    # live turn). Disabled when
     # ``ANYGARDEN_ORPHAN_SWEEPER_INTERVAL_SEC=0`` (tests) or when a test
     # double has already populated ``app.state.orphan_sweeper_task``.
     orphan_task = getattr(app.state, "orphan_sweeper_task", None)
@@ -1468,6 +1469,7 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
     from anygarden.workspaces.lifecycle import revoke_invalid_attachments
 
     log = structlog.get_logger("turn_recovery")
+    is_alive = _turn_liveness(app)
     # Avoid racing the lifespan's own startup transactions (especially the
     # single-connection in-memory SQLite used by tests and local dev).
     try:
@@ -1546,7 +1548,10 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
             if manager is not None:
                 await deliver_pending_stops(factory, manager)
                 await deliver_pending_outbox(factory, manager, app=app)
-            recovered = await recover_stalled_turns(factory, manager, app=app)
+            # #892 — a turn whose agent is still typing keeps its lease.
+            recovered = await recover_stalled_turns(
+                factory, manager, app=app, is_alive=is_alive
+            )
             # #762 — wake ask_peer callers whose peers have all answered.
             await dispatch_peer_ask_groups(factory, manager)
             async with factory() as db:
@@ -1612,6 +1617,40 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
             return
 
 
+def _turn_liveness(app: FastAPI):
+    """#892 — ``is_alive(agent_id, room_id)`` for the orphan sweep and the
+    turn-lease recovery.
+
+    An agent sends a typing frame every 2s for as long as a turn runs; the
+    server records it in ``app.state.typing_tracker`` (TTL 5s) keyed by the
+    agent's participant in that room. A turn whose agent is still typing is
+    alive however long it has run. After a server restart the tracker is
+    empty until the agent reconnects and types again, which errs toward the
+    pre-#892 threshold behaviour, never toward hiding a dead turn.
+    """
+    from anygarden.db.models import Participant
+
+    async def is_alive(agent_id: str, room_id: str) -> bool:
+        tracker = getattr(app.state, "typing_tracker", None)
+        if tracker is None:
+            return False
+        typing = set(tracker.get_typing(room_id))
+        if not typing:
+            return False
+        async with app.state.session_factory() as db:
+            participant_ids = (
+                await db.execute(
+                    select(Participant.id).where(
+                        Participant.room_id == room_id,
+                        Participant.agent_id == agent_id,
+                    )
+                )
+            ).scalars().all()
+        return any(pid in typing for pid in participant_ids)
+
+    return is_alive
+
+
 async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     """Periodically promote stuck ``handler_started`` rows to
     ``handler_orphaned``.
@@ -1656,6 +1695,8 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     except ValueError:
         liveness_sec = ORPHAN_THRESHOLD_SEC_DEFAULT
 
+    is_alive = _turn_liveness(app)
+
     warmup = min(15.0, interval_seconds)
     try:
         await asyncio.sleep(warmup)
@@ -1674,8 +1715,9 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
                     log.info("orphan_sweeper.heartbeat_stale", count=crashed)
                     agents_crashed_by_sweep_total.inc(crashed)
             # #427/#481 — sweep returns the newly-orphaned requests.
+            # #892 — a long turn still sending its keepalive is not orphaned.
             orphaned = await sweep_orphaned_requests(
-                factory, threshold_sec=liveness_sec
+                factory, threshold_sec=liveness_sec, is_alive=is_alive
             )
             if orphaned:
                 log.info("orphan_sweeper.marked", count=len(orphaned))

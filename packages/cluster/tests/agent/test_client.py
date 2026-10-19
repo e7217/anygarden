@@ -313,8 +313,8 @@ class TestWebSocketKeepalive:
     websockets library's default ``ping_interval=20, ping_timeout=20``
     closed the connection mid-run, so the adapter's post-turn
     ``client.send`` hit a dead socket and the answer was silently
-    dropped. Regression: lock the adapter's ws_connect call to values
-    that tolerate a full ``_CODEX_TURN_TIMEOUT`` (600s) turn."""
+    dropped. #892 — that SDK is gone (#506) and pongs are answered during
+    a turn, so the keepalive is a fixed 660s rather than turn-derived."""
 
     @pytest.mark.asyncio
     async def test_room_loop_passes_extended_keepalive_kwargs(self) -> None:
@@ -345,9 +345,9 @@ class TestWebSocketKeepalive:
             "ping_interval must be >=60s so codex's multi-minute turns don't "
             "trip the websockets client keepalive"
         )
-        assert captured["kwargs"].get("ping_timeout") == 600, (
-            "ping_timeout must cover the adapter's _CODEX_TURN_TIMEOUT so a "
-            "slow server pong doesn't tear down a still-working connection"
+        assert captured["kwargs"].get("ping_timeout") == 660, (
+            "ping_timeout is the fixed keepalive so a slow server pong "
+            "doesn't tear down a still-working connection"
         )
 
 

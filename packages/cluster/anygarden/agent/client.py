@@ -147,7 +147,7 @@ class ChatClient:
         agent_name: str = "",
         *,
         max_reconnect_delay: float = 60.0,
-        ping_timeout: float = 600.0,
+        ping_timeout: float | None = None,
         state_dir: Path | None = None,
         execution_launch=None,
     ) -> None:
@@ -159,9 +159,14 @@ class ChatClient:
         self._token = token
         self._agent_name = agent_name
         self._max_reconnect_delay = max_reconnect_delay
-        # Issue #492 — WS ping_timeout derived from the engine's turn timeout
-        # (set by the agent CLI) so a long turn can't be cut by keepalive.
-        # Defaults to 600s for the plain text client, which has no engine.
+        # #892 — fixed WS keepalive timeout (``resolve_ping_timeout``); it no
+        # longer depends on the engine's turn timeout. See ``_connect_room``.
+        if ping_timeout is None:
+            from anygarden.agent.integrations._turn_timeout import (
+                resolve_ping_timeout,
+            )
+
+            ping_timeout = resolve_ping_timeout()
         self._ping_timeout = ping_timeout
         raw_generation = os.environ.get("ANYGARDEN_AGENT_GENERATION")
         try:
@@ -1384,26 +1389,20 @@ class ChatClient:
 
                 subprotocols = build_subprotocols(self._token)
 
-                # Issue #190 — codex turns can legitimately run 5+
-                # minutes while the SDK waits on tool chains, and the
-                # ``websockets`` library default
-                # ``ping_interval=20, ping_timeout=20`` closed the
-                # connection mid-turn (``sent 1011 keepalive ping
-                # timeout``). The adapter produced a full response
-                # from ``thread.run_text`` but the subsequent
-                # ``client.send`` hit a closed socket, silently
-                # dropping the answer. We still ping periodically so
-                # a dead agent is detectable, but the timeout has to
-                # tolerate the adapter's turn cap
-                # (``_CODEX_TURN_TIMEOUT = 600s``) plus tool-call
-                # reasoning slack.
+                # Issue #190 — the old SDK codex engine blocked the event
+                # loop for a whole turn, so the ``websockets`` default
+                # ``ping_interval=20, ping_timeout=20`` closed the socket
+                # mid-turn (``sent 1011 keepalive ping timeout``) and the
+                # answer was silently dropped. #492 then derived the ping
+                # timeout from the turn cap. #506 removed that engine: the
+                # runtime is an async subprocess and pongs are answered
+                # during a turn, so #892 uses a fixed keepalive (660s, env
+                # ``ANYGARDEN_AGENT_WS_PING_TIMEOUT_SEC``) that still
+                # detects a dead peer whatever the turn length.
                 async with ws_connect(
                     ws_url,
                     subprotocols=subprotocols,
                     ping_interval=60,
-                    # #492 — derived from the engine turn timeout so raising
-                    # the turn cap keeps the socket open (ping > turn); see
-                    # ``integrations/_turn_timeout``.
                     ping_timeout=self._ping_timeout,
                 ) as ws:
                     self._connections[room_id] = ws

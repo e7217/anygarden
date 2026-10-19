@@ -1,8 +1,8 @@
-"""Tests for the shared turn-timeout resolution + auto-derivation helper.
+"""Tests for the shared turn-timeout resolution helper.
 
-Issue #492 — symmetrize per-engine turn timeouts and derive the WS
-``ping_timeout`` / supervisor ``engine_timeout`` from the turn timeout so the
-invariant ``turn < ping <= supervisor`` always holds.
+Issue #492 — symmetrize per-engine turn timeouts. #892 — the turn timeout is
+an idle limit enforced by the engine runtime; the WS ``ping_timeout`` is a
+fixed keepalive and the supervisor has no cap, so neither derives from it.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ _TIMEOUT_ENV_KEYS = (
     "ANYGARDEN_AGENT_PI_TURN_TIMEOUT_SEC",
     "ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC",
     "ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC",
+    "ANYGARDEN_AGENT_WS_PING_TIMEOUT_SEC",
 )
 
 
@@ -68,60 +69,42 @@ def test_per_agent_overrides_everything(monkeypatch):
     assert tt.resolve_turn_timeout("pi") == 450.0
 
 
-# --- resolve_supervisor_timeout: floor 900 + SUP_SLACK 300 ------------------
+# --- resolve_ping_timeout: fixed keepalive, env override (#892) -----------
 
 
-def test_supervisor_floor_for_small_turn():
-    # turn + 300 <= 900 -> pinned to the 900 floor
-    assert tt.resolve_supervisor_timeout(120) == 900.0
-    assert tt.resolve_supervisor_timeout(600) == 900.0
-
-
-def test_supervisor_slack_for_large_turn():
-    assert tt.resolve_supervisor_timeout(700) == 1000.0
-    assert tt.resolve_supervisor_timeout(870) == 1170.0
-
-
-def test_supervisor_respects_env_floor(monkeypatch):
-    monkeypatch.setenv("ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC", "1200")
-    # env floor wins when higher than turn + slack
-    assert tt.resolve_supervisor_timeout(600) == 1200.0
-    # turn + slack wins when higher than env floor
-    assert tt.resolve_supervisor_timeout(1000) == 1300.0
-
-
-# --- resolve_ping_timeout: floor 600 + PING_SLACK 60 -----------------------
-
-
-def test_ping_floor_for_small_turn():
-    assert tt.resolve_ping_timeout(120) == 600.0
-
-
-def test_ping_slack_for_large_turn():
-    assert tt.resolve_ping_timeout(600) == 660.0
-    assert tt.resolve_ping_timeout(700) == 760.0
-
-
-# --- invariant: turn < ping <= supervisor ----------------------------------
-
-
-@pytest.mark.parametrize("turn", [60, 120, 300, 600, 700, 870])
 @pytest.mark.req("ENG-04")
-def test_invariant_turn_lt_ping_le_supervisor(turn):
-    ping = tt.resolve_ping_timeout(turn)
-    sup = tt.resolve_supervisor_timeout(turn)
-    assert turn < ping <= sup
+def test_ping_timeout_is_fixed_regardless_of_turn_timeout(monkeypatch):
+    assert tt.resolve_ping_timeout() == 660.0
+    # A long idle limit no longer stretches the keepalive.
+    monkeypatch.setenv("ANYGARDEN_AGENT_TURN_TIMEOUT_SEC", "7200")
+    assert tt.resolve_ping_timeout() == 660.0
 
 
-# --- ChatClient ping_timeout wiring (#492) ---------------------------------
+def test_ping_timeout_env_override(monkeypatch):
+    monkeypatch.setenv("ANYGARDEN_AGENT_WS_PING_TIMEOUT_SEC", "900")
+    assert tt.resolve_ping_timeout() == 900.0
+
+
+def test_supervisor_timeout_helper_is_gone():
+    # #892 — the supervisor no longer caps a turn.
+    assert not hasattr(tt, "resolve_supervisor_timeout")
+
+
+# --- ChatClient ping_timeout wiring ----------------------------------------
 
 
 def test_chat_client_ping_timeout_default():
     from anygarden.agent.client import ChatClient
 
     client = ChatClient("ws://example", token="t")
-    # plain text client (no engine) keeps the 600s floor
-    assert client._ping_timeout == 600.0
+    assert client._ping_timeout == 660.0
+
+
+def test_chat_client_ping_timeout_env(monkeypatch):
+    from anygarden.agent.client import ChatClient
+
+    monkeypatch.setenv("ANYGARDEN_AGENT_WS_PING_TIMEOUT_SEC", "120")
+    assert ChatClient("ws://example", token="t")._ping_timeout == 120.0
 
 
 def test_chat_client_ping_timeout_override():

@@ -63,7 +63,7 @@ with Path("calls.jsonl").open("a") as log:
     log.write(json.dumps({"argv": sys.argv[1:], "prompt": prompt, "env": dict(os.environ)}) + "\n")
 def event(value):
     print(json.dumps(value), flush=True)
-if prompt == "hang":
+if prompt in {"hang", "stall-tree"}:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     child = subprocess.Popen([sys.executable, "-c", "import time,signal; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)"])
     Path("child.pid").write_text(str(child.pid))
@@ -84,8 +84,30 @@ if prompt.startswith("noeffect-"):
     event({"type": "error", "message": failures[prompt]})
     event({"type": "turn.failed", "error": {"message": failures[prompt]}})
     sys.exit(1)
-if prompt == "stall":
+if prompt in {"stall", "stall-tree"}:
     time.sleep(60)  # times out before any side-effecting item started
+def finish(text="answer"):
+    event({"type": "item.completed", "item": {"type": "agent_message", "text": text}})
+    event({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 1}})
+    Path(sys.argv[sys.argv.index("-o") + 1]).write_text(text)
+    sys.exit(0)
+if prompt == "chatty":
+    # #892 — keeps reporting progress for longer than the idle limit.
+    for _ in range(12):
+        event({"type": "item.completed", "item": {"type": "reasoning", "text": "DO-NOT-PUBLISH"}})
+        time.sleep(0.1)
+    finish()
+if prompt == "tool-silent":
+    # #892 — a long command prints nothing while it runs.
+    event({"type": "item.started", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH", "status": "in_progress"}})
+    time.sleep(1.0)
+    event({"type": "item.completed", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH", "exit_code": 0, "status": "completed"}})
+    finish()
+if prompt == "effect-stall":
+    # A command ran and finished, then the engine went silent.
+    event({"type": "item.started", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH", "status": "in_progress"}})
+    event({"type": "item.completed", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH", "exit_code": 0, "status": "completed"}})
+    time.sleep(60)
 if prompt == "multi-step":
     # Shapes observed from codex-cli 0.162.1 (#880), raw values replaced.
     event({"type": "item.completed", "item": {"type": "agent_message", "text": "I will count the commits."}})
@@ -309,25 +331,49 @@ async def test_cancel_and_timeout_reap_tool_tree(
 ):
     m = manager(tmp_path, executable)
     try:
+        # #892 — a stalled open command never idles out; only Stop ends it.
+        # The idle path is exercised by a stall with no tool open.
         await m.start(
-            replace(invocation, prompt="hang", timeout_seconds=0.3 if timeout else 5)
+            replace(
+                invocation,
+                prompt="stall-tree" if timeout else "hang",
+                timeout_seconds=0.3,
+            )
         )
         async with asyncio.timeout(3):
             while not (invocation.workspace / "child.pid").exists():
                 await asyncio.sleep(0.01)
         pid = int((invocation.workspace / "child.pid").read_text())
         if not timeout:
+            # Well past the idle limit, the open command keeps the turn alive.
+            await asyncio.sleep(0.8)
+            assert m._store.get(invocation.execution_id).outcome is None
             receipt = await m.cancel(invocation.execution_id)
             assert receipt.state == "cancel_requested"  # not proof of stop yet
         receipt, _ = await done(m)
         assert receipt.outcome == ("failed" if timeout else "cancelled")
-        # "hang" started a command before stalling: never a transient timeout.
-        assert receipt.reason == ("TIMEOUT_AFTER_SIDE_EFFECT" if timeout else "cancelled")
+        assert receipt.reason == ("TIMEOUT_STOPPED" if timeout else "cancelled")
         assert receipt.process_state == "stopped"
         assert (
             not psutil.pid_exists(pid)
             or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
         )
+    finally:
+        await m.close()
+
+
+@pytest.mark.req("ENG-04")
+@pytest.mark.parametrize("prompt", ["chatty", "tool-silent"])
+async def test_active_turn_outlives_the_idle_limit(
+    tmp_path, executable, invocation, prompt
+):
+    """#892 — progress or an open command keeps a turn past its idle limit."""
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt=prompt, timeout_seconds=0.5))
+        receipt, _ = await done(m)
+        assert (receipt.outcome, receipt.reason) == ("succeeded", "completed")
+        assert receipt.text == "answer"
     finally:
         await m.close()
 
@@ -754,8 +800,8 @@ def test_contracts_engine_membership_and_provider_rules(tmp_path):
     [
         # A timeout before any side-effecting item may be retried safely ...
         ("stall", "TIMEOUT_STOPPED", ("MODEL_TRANSIENT_FAILURE", True)),
-        # ... but one after a command_execution item started must not be.
-        ("hang", "TIMEOUT_AFTER_SIDE_EFFECT", ("MODEL_EXECUTION_FAILED", False)),
+        # ... but one after a command_execution item ran must not be.
+        ("effect-stall", "TIMEOUT_AFTER_SIDE_EFFECT", ("MODEL_EXECUTION_FAILED", False)),
     ],
 )
 async def test_timeout_is_transient_only_before_any_side_effect(

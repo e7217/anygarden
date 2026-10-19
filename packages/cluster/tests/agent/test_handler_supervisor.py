@@ -82,7 +82,7 @@ class _FakeClient:
 @pytest.mark.asyncio
 async def test_ok_path_emits_four_lifecycle_events():
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         await asyncio.sleep(0.01)
@@ -113,7 +113,7 @@ async def test_engine_turn_carries_prompt_and_completion():
     # engine_call_finished so the cluster can put them on the span. The
     # reply is still delivered to the room exactly as before.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return EngineTurn(response="the reply", prompt="augmented input")
@@ -135,7 +135,7 @@ async def test_engine_turn_empty_response_keeps_prompt_drops_completion():
     # turn reclassifies to failed; the captured prompt is still surfaced
     # but completion is None (no output), and the user gets the notice.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return EngineTurn(response="", prompt="augmented input")
@@ -157,7 +157,7 @@ async def test_bare_str_return_stays_backward_compatible():
     # A legacy run_engine returning a plain str still works; no turn-I/O
     # fields are emitted (prompt/completion stay None → wire-excluded).
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return "plain reply"
@@ -175,13 +175,14 @@ async def test_bare_str_return_stays_backward_compatible():
 @pytest.mark.asyncio
 async def test_timeout_path_marks_both_events_and_notifies_user():
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=0.05)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
-    async def slow_engine():
-        await asyncio.sleep(1.0)
-        return "never reached"
+    async def idle_engine():
+        # #892 — the engine runtime's idle clock is the only timeout.
+        await asyncio.sleep(0.01)
+        raise EngineTimeoutError("codex-cli turn idle for 600s")
 
-    await sup.dispatch(room_id="r1", request_id="req-t", run_engine=slow_engine)
+    await sup.dispatch(room_id="r1", request_id="req-t", run_engine=idle_engine)
 
     events = [(e["event"], e.get("outcome")) for e in client.lifecycle_events]
     assert events == [
@@ -195,11 +196,37 @@ async def test_timeout_path_marks_both_events_and_notifies_user():
 
 
 @pytest.mark.asyncio
+async def test_supervisor_does_not_cap_a_long_engine_call(monkeypatch):
+    """#892 — no wall-clock cap: a long but healthy turn posts its answer."""
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
+    real_wait_for = asyncio.wait_for
+
+    async def guarded_wait_for(aw, timeout=None):
+        assert timeout is None or timeout > 3600, "supervisor must not cap turns"
+        return await real_wait_for(aw, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", guarded_wait_for)
+
+    async def long_engine():
+        await asyncio.sleep(0.2)
+        return "finished"
+
+    await sup.dispatch(room_id="r1", request_id="req-long", run_engine=long_engine)
+
+    handler_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "handler_finished"
+    )
+    assert handler_fin["outcome"] == "ok"
+    assert client.sends[0][1] == "finished"
+
+
+@pytest.mark.asyncio
 async def test_failed_path_marks_failed_and_notifies_user():
     # #422 — a crashing turn must surface as ``failed`` AND notify the
     # user, instead of being swallowed into a silent ``ok``.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def crashing_engine():
         raise RuntimeError("boom")
@@ -229,7 +256,7 @@ async def test_failed_path_marks_failed_and_notifies_user():
 )
 async def test_classified_failure_keeps_code_in_activity_and_guides_user(code, notice):
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex-cli", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex-cli")
 
     async def failing_engine():
         raise EngineError(code)
@@ -250,14 +277,11 @@ async def test_classified_failure_keeps_code_in_activity_and_guides_user(code, n
 @pytest.mark.parametrize("outcome", ["ok", "timeout", "failed"])
 async def test_thread_root_reaches_normal_and_failure_sends(outcome):
     client = _FakeClient()
-    timeout = 0.01 if outcome == "timeout" else 5.0
-    sup = RoomHandlerSupervisor(
-        client=client, engine_name="codex", engine_timeout=timeout
-    )
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         if outcome == "timeout":
-            await asyncio.sleep(1)
+            raise EngineTimeoutError("idle")
         if outcome == "failed":
             raise EngineError("boom")
         return "thread answer"
@@ -278,7 +302,7 @@ async def test_engine_error_marks_failed_and_notifies_user():
     # #422 — adapters raise EngineError instead of returning None; the
     # supervisor maps it to failed + notice (same as a bare exception).
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def failing_engine():
         raise EngineError("model 400: gpt-5.5 unsupported")
@@ -299,7 +323,7 @@ async def test_engine_timeout_error_marks_timeout():
     # #422 — an adapter-level turn timeout surfaces as ``timeout`` (not
     # ``failed``) and notifies the user.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def timing_out_engine():
         raise EngineTimeoutError("codex turn exceeded 600s")
@@ -323,7 +347,7 @@ async def test_over_cap_dispatch_is_rejected():
     # triggers once the queue is full: with the default cap of 3, the
     # first three follow-ups queue and the fourth is rejected.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     gate = asyncio.Event()
 
@@ -363,7 +387,7 @@ async def test_over_cap_dispatch_notifies_user():
     # notify the user so the dropped message isn't silent. Queued
     # follow-ups, by contrast, get NO notice (they will be answered).
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     gate = asyncio.Event()
 
@@ -407,7 +431,7 @@ async def test_thread_roots_survive_queue_and_over_cap_rejection(monkeypatch):
 
     monkeypatch.setattr(hw, "_MAX_QUEUE_DEPTH", 1)
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
     gate = asyncio.Event()
 
     async def first_engine():
@@ -447,7 +471,7 @@ async def test_thread_roots_survive_queue_and_over_cap_rejection(monkeypatch):
 @pytest.mark.asyncio
 async def test_long_error_is_truncated_for_log_safety():
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def crashing_engine():
         raise RuntimeError("x" * 5000)
@@ -465,7 +489,7 @@ async def test_no_request_id_skips_user_metadata():
     """Proactive sends (no triggering user message) pass through
     without a request_id; the reply must not stamp an empty one."""
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return "proactive"
@@ -483,7 +507,7 @@ async def test_tracked_empty_response_is_failed_and_notifies():
     ``failed`` and notifies the user. (This is the gpt-5.5 symptom: the
     engine produced nothing and the user saw only silence.)"""
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return ""
@@ -506,7 +530,7 @@ async def test_proactive_empty_response_stays_silent_ok():
     these reach the supervisor empty in practice — ambient ingestion
     flows through ingest_context, never here."""
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return ""
@@ -533,7 +557,7 @@ async def test_untracked_empty_marks_engine_frame_and_counts():
     metrics.agent_empty_untracked_total.reset()
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return ""
@@ -565,7 +589,7 @@ async def test_proactive_nonempty_does_not_mark_or_count():
     metrics.agent_empty_untracked_total.reset()
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     await sup.dispatch(
         room_id="r1", request_id=None, run_engine=lambda: asyncio.sleep(0, result="hi")
@@ -588,7 +612,7 @@ async def test_queued_followups_run_in_order_after_first_completes():
     # notice) and then drained FIFO by the lock holder after the first
     # turn finishes — each producing its own real reply, in order.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     gate = asyncio.Event()
 
@@ -641,7 +665,7 @@ async def test_serialization_invariant_no_two_runs_concurrent():
     # even with queued follow-ups draining. A counter tracks concurrent
     # _run bodies; it must never exceed 1.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     concurrent = 0
     max_concurrent = 0
@@ -689,7 +713,7 @@ async def test_stale_queued_item_skipped_on_drain(monkeypatch):
     monkeypatch.setattr(hw, "_QUEUE_ITEM_TTL_SEC", 0.0)
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     gate = asyncio.Event()
     ran_stale = False
@@ -738,7 +762,7 @@ async def test_default_no_retry_for_transient_failure():
     assert hw._MAX_RETRY_ATTEMPTS == 0  # the shipped default is OFF
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     calls = 0
 
@@ -770,7 +794,7 @@ async def test_transient_empty_failure_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     calls = 0
 
@@ -803,7 +827,7 @@ async def test_transient_retry_exhausted_emits_outcome_and_notice(monkeypatch):
     monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     calls = 0
 
@@ -835,7 +859,7 @@ async def test_output_producing_transient_failure_does_not_retry(monkeypatch):
     monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     calls = 0
 
@@ -864,7 +888,7 @@ async def test_non_transient_failure_not_retried(monkeypatch):
     monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
 
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     calls = 0
 
@@ -886,7 +910,7 @@ async def test_non_transient_failure_not_retried(monkeypatch):
 @pytest.mark.parametrize("outcome", ["ok", "failed", "timeout", "cancelled", "empty"])
 async def test_delegated_turn_returns_correlation_for_every_terminal_outcome(outcome):
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client, "codex", 1)
+    sup = RoomHandlerSupervisor(client, "codex")
 
     async def run_engine():
         if outcome == "failed":
@@ -911,7 +935,7 @@ async def test_queued_delegations_keep_their_own_identity_and_rejections(monkeyp
 
     monkeypatch.setattr(hw, "_MAX_QUEUE_DEPTH", 1)
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client, "codex", 1)
+    sup = RoomHandlerSupervisor(client, "codex")
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def first():
@@ -939,7 +963,7 @@ async def test_stale_delegation_returns_its_own_rejected_result(monkeypatch):
 
     monkeypatch.setattr(hw, "_QUEUE_ITEM_TTL_SEC", 0)
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client, "codex", 1)
+    sup = RoomHandlerSupervisor(client, "codex")
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def first():
@@ -961,7 +985,7 @@ async def test_stale_delegation_returns_its_own_rejected_result(monkeypatch):
 @pytest.mark.asyncio
 async def test_queued_attempts_keep_immutable_response_and_lifecycle_proof():
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client, "codex", 1)
+    sup = RoomHandlerSupervisor(client, "codex")
     entered, release = asyncio.Event(), asyncio.Event()
     old = {"turn_attempt": 1, "turn_generation": 1, "turn_lease": "old"}
     new = {"turn_attempt": 2, "turn_generation": 1, "turn_lease": "new"}
@@ -999,7 +1023,7 @@ async def test_cancelled_turn_is_not_retried_and_delegation_gets_notice(
     monkeypatch.setattr(hw, "_MAX_RETRY_ATTEMPTS", 3)
     monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
     calls = 0
 
     async def cancelled_engine():
@@ -1036,7 +1060,7 @@ async def test_leased_room_turn_transient_failure_leaves_retry_to_the_server():
     notice: the notice would complete the turn and pre-empt the server's
     bounded transient retry, which posts its own notice if it gives up."""
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client, "codex-cli", 5.0)
+    sup = RoomHandlerSupervisor(client, "codex-cli")
 
     async def capacity():
         raise EngineError("Selected model is at capacity", transient=True,
@@ -1055,7 +1079,7 @@ async def test_leased_room_turn_transient_failure_leaves_retry_to_the_server():
 @pytest.mark.parametrize("case", ["execution", "delegated", "unleased", "not_transient", "after_effect"])
 async def test_other_failures_still_notify_the_room(case):
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client, "codex-cli", 5.0)
+    sup = RoomHandlerSupervisor(client, "codex-cli")
     context = dict(_LEASED)
     proof = dict(_TRANSIENT_PROOF)
     delegation_id = None
@@ -1089,7 +1113,7 @@ _TRACE = {"v": 1, "steps": [{"narration": "Checking.", "activities": {"commands"
 async def test_reply_carries_the_execution_trace():
     # #880 — the turn's narration and work ride on the reply metadata.
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return EngineTurn(response="done", execution_trace=_TRACE)
@@ -1108,7 +1132,7 @@ async def test_reply_carries_the_execution_trace():
 ])
 async def test_failure_notice_keeps_the_work_done_before_it(error_cls, notice):
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def failing_engine():
         raise error_cls("boom", turn=EngineTurn(None, execution_trace=_TRACE))
@@ -1123,7 +1147,7 @@ async def test_failure_notice_keeps_the_work_done_before_it(error_cls, notice):
 @pytest.mark.asyncio
 async def test_reply_without_trace_has_no_trace_key():
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex")
 
     async def run_engine():
         return EngineTurn(response="plain")

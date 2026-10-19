@@ -1,6 +1,15 @@
 # Agent Turn Timeout Configuration — Design
 
-**Status**: Design approved 2026-06-23
+**Status**: Design approved 2026-06-23. **Partly superseded by #892
+(2026-10-19)**: `turn_timeout_sec` is now an *idle* limit enforced by the
+engine runtime (`agent/runtime/execution/turn_clock.py`); a turn that keeps
+producing output, or has a tool running, is never cut by total length. The
+derived layers below are gone: the supervisor `engine_timeout`
+(`ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC`) was removed, the WS `ping_timeout` is a
+fixed 660s (`ANYGARDEN_AGENT_WS_PING_TIMEOUT_SEC`), the per-agent value accepts
+30..86400s, and the server skips the orphan sweep and renews the turn lease
+while the agent sends its typing keepalive. The invariant in §"Required
+invariant" no longer applies.
 **Next**: implementation plan via `writing-plans` skill
 
 ## Problem
