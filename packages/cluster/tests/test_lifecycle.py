@@ -157,9 +157,9 @@ class TestAgentLifecycle:
             assert agent.lifecycle_delivery_state == "acknowledged"
 
     @pytest.mark.asyncio
-    async def test_running_to_crashed_restart_anywhere(self, lifecycle_env) -> None:
-        """Agent crash with restart_anywhere policy: machine requests
-        replacement, which re-places the agent and sends sync_desired_state."""
+    async def test_running_to_crashed_legacy_replacement_stops(self, lifecycle_env) -> None:
+        """#907 — a legacy ``restart_anywhere`` replacement request no longer
+        re-places the agent: it stays on its machine, stopped and crashed."""
         factory = lifecycle_env["factory"]
         lifecycle = lifecycle_env["lifecycle"]
         machine = lifecycle_env["machine"]
@@ -180,7 +180,6 @@ class TestAgentLifecycle:
 
         await lifecycle_env["attach_to_room"](agent_id)
 
-        # Machine requests replacement (crash + restart_anywhere → re-place)
         await lifecycle.handle_request_replacement(
             machine.id, agent_id, reason="segfault"
         )
@@ -188,10 +187,9 @@ class TestAgentLifecycle:
         async with factory() as db:
             result = await db.execute(select(Agent).where(Agent.id == agent_id))
             agent = result.scalar_one()
-            # After replacement request + request_start, should be "pending"
-            assert agent.actual_state == "pending"
-            assert agent.last_crash_reason is not None
-            # The reason recorded before re-placement
+            assert agent.actual_state == "crashed"
+            assert agent.desired_state == "stopped"
+            assert agent.placed_on_machine_id == machine.id
             assert "segfault" in agent.last_crash_reason
 
     @pytest.mark.asyncio
@@ -1812,3 +1810,145 @@ class TestSweepStaleAgents:
                 await db.execute(select(Agent).where(Agent.id == agent_id))
             ).scalar_one()
             assert agent.actual_state == "running"
+
+
+@pytest.mark.req("AGT-10")
+class TestStickyPlacement:
+    """#907 — once placed, the server never picks a different machine."""
+
+    @staticmethod
+    async def _placed_agent(factory, machine_id: str, **overrides) -> str:
+        values = {
+            "name": "sticky",
+            "engine": "echo",
+            "desired_state": "running",
+            "actual_state": "running",
+            "placed_on_machine_id": machine_id,
+            "pid": 4242,
+            "generation": 3,
+            "restart_policy": "restart_on_same_machine",
+        }
+        values.update(overrides)
+        async with factory() as db:
+            agent = Agent(**values)
+            db.add(agent)
+            await db.commit()
+            return agent.id
+
+    @pytest.mark.asyncio
+    async def test_replacement_request_stops_on_same_machine(self, lifecycle_env) -> None:
+        """A crash-loop replacement request keeps the placement and stops."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        agent_id = await self._placed_agent(factory, machine.id)
+        await lifecycle_env["attach_to_room"](agent_id)
+
+        started: list[str] = []
+
+        async def record_start(aid: str) -> None:
+            started.append(aid)
+
+        lifecycle.request_start = record_start  # type: ignore[method-assign]
+        await lifecycle.handle_request_replacement(
+            machine.id, agent_id, "Crash budget exhausted (3 crashes in 300s)", generation=3
+        )
+
+        assert started == []
+        async with factory() as db:
+            agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one()
+            assert agent.placed_on_machine_id == machine.id
+            assert agent.desired_state == "stopped"
+            assert agent.actual_state == "crashed"
+            assert agent.pid is None
+            assert agent.unavailable_code == "crash_loop"
+            assert agent.unavailable_detail["reason"].startswith("Crash budget exhausted")
+            logs = (
+                await db.execute(
+                    select(ActivityLog.event_type).where(ActivityLog.agent_id == agent_id)
+                )
+            ).scalars().all()
+            assert "agent_crash_loop_stopped" in logs
+
+    @pytest.mark.asyncio
+    async def test_start_waits_when_placed_machine_is_full(self, lifecycle_env) -> None:
+        """A full placed machine keeps the placement instead of releasing it."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        async with factory() as db:
+            row = await db.get(Machine, machine.id)
+            row.max_agents = 1
+            await db.commit()
+        await self._placed_agent(factory, machine.id, name="occupant")
+        agent_id = await self._placed_agent(
+            factory, machine.id, name="waiting", actual_state="stopped", pid=None
+        )
+        await lifecycle_env["attach_to_room"](agent_id)
+        sent_before = len(lifecycle_env["fake_ws"].sent)
+
+        await lifecycle.request_start(agent_id)
+
+        assert len(lifecycle_env["fake_ws"].sent) == sent_before
+        async with factory() as db:
+            agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one()
+            assert agent.placed_on_machine_id == machine.id
+            assert agent.actual_state == "pending"
+            assert agent.unavailable_code == "machine_busy"
+
+    @pytest.mark.asyncio
+    async def test_roomless_start_keeps_placement(self, lifecycle_env) -> None:
+        factory = lifecycle_env["factory"]
+        machine = lifecycle_env["machine"]
+        agent_id = await self._placed_agent(
+            factory, machine.id, actual_state="stopped", pid=None
+        )
+
+        await lifecycle_env["lifecycle"].request_start(agent_id)
+
+        async with factory() as db:
+            agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one()
+            assert agent.placed_on_machine_id == machine.id
+            assert agent.unavailable_code == "no_room"
+
+    @pytest.mark.asyncio
+    async def test_agent_of_removed_machine_is_not_auto_placed(self, lifecycle_env) -> None:
+        factory = lifecycle_env["factory"]
+        async with factory() as db:
+            agent = Agent(
+                name="orphan",
+                engine="echo",
+                desired_state="running",
+                actual_state="stopped",
+                unavailable_code="machine_removed",
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+        await lifecycle_env["attach_to_room"](agent_id)
+        sent_before = len(lifecycle_env["fake_ws"].sent)
+
+        await lifecycle_env["lifecycle"].request_start(agent_id)
+
+        assert len(lifecycle_env["fake_ws"].sent) == sent_before
+        async with factory() as db:
+            agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one()
+            assert agent.placed_on_machine_id is None
+            assert agent.unavailable_code == "machine_removed"
+
+    @pytest.mark.asyncio
+    async def test_unplaced_agent_is_still_auto_placed(self, lifecycle_env) -> None:
+        """The first placement of a never-placed agent stays automatic."""
+        factory = lifecycle_env["factory"]
+        async with factory() as db:
+            agent = Agent(name="fresh", engine="echo", desired_state="running", actual_state="pending")
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+        await lifecycle_env["attach_to_room"](agent_id)
+
+        await lifecycle_env["lifecycle"].request_start(agent_id)
+
+        async with factory() as db:
+            agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one()
+            assert agent.placed_on_machine_id == lifecycle_env["machine"].id

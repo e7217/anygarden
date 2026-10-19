@@ -17,6 +17,9 @@ from anygarden.agent_availability import (
     INVALID_PI_AUTH,
     INVALID_PROVIDER,
     NO_MACHINE_FOR_ENGINE,
+    MACHINE_BUSY,
+    MACHINE_REMOVED,
+    CRASH_LOOP,
     NO_ROOM,
     QUOTA_EXHAUSTED,
     SPAWN_FAILED,
@@ -38,6 +41,9 @@ def test_all_codes_are_registered() -> None:
         INVALID_PI_AUTH,
         QUOTA_EXHAUSTED,
         ENGINE_REMOVED,
+        MACHINE_BUSY,
+        MACHINE_REMOVED,
+        CRASH_LOOP,
     }
 
 
@@ -114,3 +120,16 @@ def test_room_notice_names_agent_and_hides_stderr() -> None:
     assert "Nova" in notice
     assert stderr not in notice
     assert "관리자" in notice
+
+
+def test_sticky_placement_messages() -> None:
+    """#907 — reasons that replace silent re-placement explain what to do."""
+    assert "머신" in render_unavailable_message(MACHINE_REMOVED, None)
+    assert "자리" in render_unavailable_message(MACHINE_BUSY, None)
+    admin = render_unavailable_message(
+        CRASH_LOOP, {"reason": "Crash budget exhausted"}, audience="admin"
+    )
+    assert "Crash budget exhausted" in admin
+    assert "Crash budget" not in render_unavailable_message(
+        CRASH_LOOP, {"reason": "Crash budget exhausted"}
+    )

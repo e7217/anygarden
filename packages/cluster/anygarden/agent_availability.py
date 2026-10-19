@@ -38,6 +38,10 @@ INVALID_PROVIDER = "invalid_provider"
 INVALID_ENDPOINT = "invalid_endpoint"
 INVALID_PI_AUTH = "invalid_pi_auth"
 ENGINE_REMOVED = "engine_removed"
+# #907 — placement is sticky: the server never moves a placed agent on its own.
+MACHINE_BUSY = "machine_busy"
+MACHINE_REMOVED = "machine_removed"
+CRASH_LOOP = "crash_loop"
 
 UNAVAILABLE_CODES: frozenset[str] = frozenset(
     {
@@ -50,6 +54,9 @@ UNAVAILABLE_CODES: frozenset[str] = frozenset(
         INVALID_ENDPOINT,
         INVALID_PI_AUTH,
         ENGINE_REMOVED,
+        MACHINE_BUSY,
+        MACHINE_REMOVED,
+        CRASH_LOOP,
     }
 )
 
@@ -111,6 +118,19 @@ def render_unavailable_message(
             exit_code = d.get("exit_code")
             suffix = f" (exit={exit_code})" if exit_code is not None else ""
             return _with_admin_trace(base + suffix, d)
+        return base
+
+    if code == MACHINE_BUSY:
+        return "실행 머신에 남은 자리가 없어 대기 중입니다. 자리가 나면 다시 시작하세요."
+
+    if code == MACHINE_REMOVED:
+        return "실행하던 머신이 삭제되었습니다. 에이전트 설정에서 실행할 머신을 고르세요."
+
+    if code == CRASH_LOOP:
+        base = "반복해서 비정상 종료되어 같은 머신에서 멈췄습니다."
+        if audience == "admin":
+            reason = d.get("reason")
+            return f"{base}\n{reason}" if reason else base
         return base
 
     if code == INVALID_PROVIDER:

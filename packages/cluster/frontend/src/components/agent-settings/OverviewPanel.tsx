@@ -35,6 +35,7 @@ import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import type { ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
 import EngineChangeDialog, { type EngineChange } from '@/components/agent-settings/EngineChangeDialog'
+import MachineChangeDialog from '@/components/agent-settings/MachineChangeDialog'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
@@ -100,15 +101,23 @@ interface Props {
   /** #769 — both are needed for the engine Change button. */
   changeAgentEngine?: (id: string, change: EngineChange) => Promise<Agent>
   availableEngines?: string[]
+  /** #907 — explicit move; the Machine row's Change button needs it. */
+  changeAgentMachine?: (id: string, machineId: string) => Promise<Agent>
+  /** #907 — "Start again" on a crash-looped agent's reason row. */
+  startAgent?: (id: string) => Promise<unknown>
   connectionState?: ConnectionState | null
   /** #716 — latest-turn health row rendered right after the process state. */
   recentTurn?: ReactNode
 }
 
-export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, changeAgentEngine, availableEngines, connectionState, recentTurn }: Props) {
+// #907 — reasons that call for a machine decision get an action next to them.
+const MOVE_REASONS = new Set(['machine_busy', 'machine_removed'])
+
+export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, changeAgentEngine, availableEngines, changeAgentMachine, startAgent, connectionState, recentTurn }: Props) {
   const { t } = useLocale()
   const [showPicker, setShowPicker] = useState(false)
   const [engineDialogOpen, setEngineDialogOpen] = useState(false)
+  const [machineDialogOpen, setMachineDialogOpen] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
@@ -504,6 +513,30 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           ) : null}
         </dd>
 
+        <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.machine')}</dt>
+        <dd className="flex flex-wrap items-center gap-2 text-[var(--color-foreground)]" data-testid="overview-machine">
+          {agent.placed_on_machine_id ? (
+            <>
+              <span className="min-w-0 break-words">{agent.placement?.machine_name ?? agent.placed_on_machine_id}</span>
+              <span className="text-caption text-[var(--color-foreground-muted)]">
+                · {machineOffline ? t('admin.overview.machineOffline') : t('admin.overview.machineOnline')}
+              </span>
+            </>
+          ) : (
+            <span className="text-[var(--color-foreground-muted)]">{t('admin.overview.machineNone')}</span>
+          )}
+          {changeAgentMachine ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMachineDialogOpen(true)}
+              data-testid="overview-change-machine"
+            >
+              {agent.placed_on_machine_id ? t('admin.overview.changeMachine') : t('admin.overview.chooseMachine')}
+            </Button>
+          ) : null}
+        </dd>
+
         {(agent.engine === 'pi-cli' || agent.engine === 'codex-cli') && (
           <>
             <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.connection')}</dt>
@@ -589,6 +622,40 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             {displayState}
           </span>
         </dd>
+        {agent.unavailable_reason ? (
+          <dd className="col-span-full" data-testid="overview-unavailable-reason">
+            <div
+              role="status"
+              className={`flex gap-2 rounded-[var(--radius-md)] border p-3 text-sm text-[var(--color-foreground)] ${
+                agent.unavailable_reason.code === 'crash_loop'
+                  ? 'border-[var(--color-danger)] bg-[var(--color-danger-soft)]'
+                  : 'border-[var(--color-warning)] bg-[var(--color-warning-soft)]'
+              }`}
+            >
+              <AlertCircle
+                className={`mt-0.5 h-4 w-4 shrink-0 ${agent.unavailable_reason.code === 'crash_loop' ? 'text-[var(--color-danger)]' : 'text-[var(--color-warning)]'}`}
+                aria-hidden="true"
+              />
+              <div className="min-w-0 space-y-2">
+                <p className="whitespace-pre-wrap break-words">{agent.unavailable_reason.message}</p>
+                {(agent.unavailable_reason.code === 'crash_loop' && startAgent) || (MOVE_REASONS.has(agent.unavailable_reason.code) && changeAgentMachine) ? (
+                  <div className="flex flex-wrap gap-2">
+                    {agent.unavailable_reason.code === 'crash_loop' && startAgent ? (
+                      <Button variant="outline" size="sm" onClick={() => { void startAgent(agent.id).catch(() => {}) }} data-testid="overview-reason-start">
+                        {t('admin.overview.unavailable.crashLoopAction')}
+                      </Button>
+                    ) : null}
+                    {MOVE_REASONS.has(agent.unavailable_reason.code) && changeAgentMachine ? (
+                      <Button variant="outline" size="sm" onClick={() => setMachineDialogOpen(true)} data-testid="overview-reason-move">
+                        {t('admin.overview.unavailable.moveAction')}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </dd>
+        ) : null}
         {recentTurn}
       </dl>
       {canChangeEngine ? (
@@ -599,6 +666,18 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           engines={availableEngines ?? []}
           fetchEngineCatalog={fetchEngineCatalog}
           onSubmit={async change => { await changeAgentEngine!(agent.id, change) }}
+        />
+      ) : null}
+      {changeAgentMachine ? (
+        <MachineChangeDialog
+          open={machineDialogOpen}
+          onOpenChange={setMachineDialogOpen}
+          agentName={agent.name}
+          engine={agent.engine}
+          trusted={agent.permission_level === 'trusted'}
+          currentMachineId={agent.placed_on_machine_id ?? null}
+          currentMachineName={agent.placed_on_machine_id ? agent.placement?.machine_name ?? agent.placed_on_machine_id : null}
+          onSubmit={async machineId => { await changeAgentMachine(agent.id, machineId) }}
         />
       ) : null}
     </div>

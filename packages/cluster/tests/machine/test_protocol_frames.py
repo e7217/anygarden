@@ -80,7 +80,7 @@ class TestSyncDesiredStateFrame:
         assert frame.files == {}
         assert frame.engine_secrets == {}
         assert frame.reasoning_effort is None
-        assert frame.restart_policy == "restart_anywhere"
+        assert frame.restart_policy == "restart_on_same_machine"
         assert frame.max_restarts == 3
         assert frame.restart_window_seconds == 300
 

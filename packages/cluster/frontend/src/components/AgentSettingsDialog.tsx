@@ -83,6 +83,10 @@ interface Props {
    *  unless both are provided and another engine is available. */
   changeAgentEngine?: (id: string, change: EngineChange) => Promise<Agent>
   availableEngines?: string[]
+  /** #907 — explicit move to another machine (Overview "Machine" row). */
+  changeAgentMachine?: (id: string, machineId: string) => Promise<Agent>
+  /** #907 — restart from the reason row of a crash-looped agent. */
+  startAgent?: (id: string) => Promise<unknown>
   /** Fired when Rooms panel mutates so the caller can refresh its
    *  own derived state (e.g. comma-joined room names in a machine
    *  detail view). */
@@ -165,6 +169,8 @@ export default function AgentSettingsDialog({
   fetchEngineCatalog,
   changeAgentEngine,
   availableEngines,
+  changeAgentMachine,
+  startAgent,
   onRoomsChange,
   onDelete,
   contextWindowOptOut,
@@ -312,6 +318,8 @@ export default function AgentSettingsDialog({
                   fetchEngineCatalog={fetchEngineCatalog}
                   changeAgentEngine={changeAgentEngine}
                   availableEngines={availableEngines}
+                  changeAgentMachine={changeAgentMachine}
+                  startAgent={startAgent}
                   connectionState={connectionState}
                   recentTurn={
                     <RecentTurnSummary

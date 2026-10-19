@@ -72,6 +72,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | AGT-07 | 경로 탈출을 시도하는 파일 쓰기는 400 | pytest |
 | AGT-08 | admin은 설정을 유지한 채 에이전트의 엔진을 바꿀 수 있다 | pytest, vitest |
 | AGT-09 | 쿼터가 소진된 에이전트는 라우팅에서 빠지고 룸에 사유가 표시된다 | pytest |
+| AGT-10 | 배치된 에이전트는 서버가 다른 머신으로 옮기지 않는다(반복 충돌·용량 부족·방 없음·머신 삭제 모두 원래 배치 유지 또는 대기). 머신 변경은 admin의 명시적 이동으로만 일어난다 | pytest, vitest |
 
 ## 엔진 실행 (ENG)
 

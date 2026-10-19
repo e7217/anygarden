@@ -390,6 +390,7 @@ class TestMachinesAPI:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.req("AGT-10")
     async def test_delete_machine_force_stops_agents(self, machines_env) -> None:
         """DELETE ?force=true should stop all agents and delete the machine."""
         from anygarden.db.models import Agent
@@ -413,9 +414,17 @@ class TestMachinesAPI:
                 desired_state="running",
                 actual_state="running",
             )
-            db.add(agent)
+            idle = Agent(
+                name="idle-agent",
+                engine="openai",
+                placed_on_machine_id=machine_id,
+                desired_state="stopped",
+                actual_state="stopped",
+            )
+            db.add_all([agent, idle])
             await db.commit()
             agent_id = agent.id
+            idle_id = idle.id
 
         resp = await client.delete(
             f"/api/v1/machines/{machine_id}?force=true",
@@ -436,6 +445,12 @@ class TestMachinesAPI:
             agent = result.scalar_one()
             assert agent.actual_state == "stopped"
             assert agent.placed_on_machine_id is None
+            # #907 — every agent of the deleted machine waits for an explicit
+            # machine choice instead of being adopted by any machine.
+            assert agent.unavailable_code == "machine_removed"
+            idle = await db.get(Agent, idle_id)
+            assert idle.placed_on_machine_id is None
+            assert idle.unavailable_code == "machine_removed"
 
     @pytest.mark.asyncio
     async def test_regenerate_token(self, machines_env) -> None:

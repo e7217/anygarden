@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -15,7 +15,11 @@ from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.agent_availability import SPAWN_FAILED, render_unavailable_message
+from anygarden.agent_availability import (
+    MACHINE_REMOVED,
+    SPAWN_FAILED,
+    render_unavailable_message,
+)
 from anygarden.agent_files import AgentFilePathError, validate_agent_file_path
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import (
@@ -123,7 +127,9 @@ class AgentCreate(BaseModel):
     provider: Optional[ProviderName] = None
     # Issue #493 — per-agent turn timeout (seconds). None = global default.
     turn_timeout_sec: TurnTimeoutSec = None
-    restart_policy: str = "restart_anywhere"
+    # #907 — moving machines is an explicit admin action, so
+    # ``restart_anywhere`` is no longer accepted.
+    restart_policy: Literal["stop", "restart_on_same_machine"] = "restart_on_same_machine"
     # Issue #271 — short public-facing introduction visible to other
     # participants (LLM roster + mention popover + participant list).
     # Capped at 200 chars to keep the per-turn token cost predictable
@@ -237,6 +243,13 @@ class AgentEngineChange(BaseModel):
     engine: str
     provider: Optional[ProviderName] = None
     model: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+
+class AgentMachineChange(BaseModel):
+    """#907 — body for ``PUT /agents/{id}/machine``."""
+
+    machine_id: str = Field(min_length=1, max_length=64)
+
 
 class UnavailableReasonOut(BaseModel):
     """#516 — why an agent can't respond, for the admin UI.
@@ -937,6 +950,95 @@ async def change_agent_engine(
     return await _agent_out(request, db, agent)
 
 
+@router.put("/{agent_id}/machine", response_model=AgentOut)
+async def change_agent_machine(
+    agent_id: str,
+    body: AgentMachineChange,
+    request: Request,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """#907 — move the agent to another machine.
+
+    The server never moves a placed agent on its own; this is the only way
+    its machine changes. A running agent is stopped on the old machine and
+    started on the new one. Workspace files and memory stay on the old
+    machine's disk.
+    """
+    from anygarden.engines.pi_auth import CAPABILITY as PI_AUTH_CAPABILITY
+    from anygarden.scheduler.placement import (
+        NoSuitableMachineError,
+        reserve_machine_for,
+    )
+
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if body.machine_id == agent.placed_on_machine_id:
+        raise HTTPException(422, "The agent already runs on this machine")
+    machine = await db.get(Machine, body.machine_id)
+    if machine is None:
+        raise HTTPException(404, "Selected machine not found")
+    bus = request.app.state.machine_bus
+    if machine.status != "online" or not bus.is_connected(machine.id):
+        raise HTTPException(409, "Selected machine must be online and connected")
+    capabilities = (
+        {"direct_endpoint_v1"} if agent.base_url
+        else {PI_AUTH_CAPABILITY} if agent.engine == "pi-cli"
+        else set()
+    )
+    await _require_machine_supports(db, machine, agent.engine, capabilities)
+    try:
+        await reserve_machine_for(
+            agent.engine, db, bus,
+            required_control_capabilities=capabilities,
+            machine_id=machine.id,
+            exclude_agent_id=agent.id,
+        )
+    except NoSuitableMachineError:
+        raise HTTPException(409, "Selected machine has no capacity for another agent") from None
+    target_id = machine.id
+    previous = agent.placed_on_machine_id
+    was_running = agent.desired_state == "running"
+    needs_stop = previous is not None and agent.actual_state in (
+        "pending", "starting", "running", "stopping"
+    )
+    # Release the capacity lock before the stop below opens its own session.
+    await db.rollback()
+
+    lifecycle = request.app.state.agent_lifecycle
+    if needs_stop:
+        await lifecycle.request_stop(agent_id)
+
+    await db.refresh(agent)
+    agent.placed_on_machine_id = target_id
+    agent.actual_state = "stopped"
+    agent.pid = None
+    agent.lifecycle_lease_token = None
+    agent.lifecycle_lease_expires_at = None
+    agent.lifecycle_delivery_state = "stopped"
+    agent.unavailable_code = None
+    agent.unavailable_detail = None
+    agent.unavailable_since = None
+    db.add(
+        ActivityLog(
+            agent_id=agent.id,
+            event_type="agent_machine_changed",
+            details={
+                "from": previous,
+                "to": target_id,
+                "by_user_id": identity.id if identity.kind == "user" else None,
+            },
+        )
+    )
+    await db.commit()
+
+    if was_running:
+        await lifecycle.request_start(agent_id)
+    await db.refresh(agent)
+    return await _agent_out(request, db, agent)
+
+
 # ── agent_files CRUD ────────────────────────────────────────────────
 #
 # These endpoints back the admin UI's per-agent file editor: list
@@ -1314,6 +1416,11 @@ async def start_agent(
     )
     if error:
         raise HTTPException(status_code=422, detail=error)
+    if agent.placed_on_machine_id is None and agent.unavailable_code == MACHINE_REMOVED:
+        raise HTTPException(
+            status_code=409,
+            detail="The agent's machine was deleted; choose a machine before starting it",
+        )
 
     if agent.engine == "pi-cli" and not agent.base_url:
         from anygarden.engines.pi_auth import CAPABILITY, build_pi_native_engine_secrets
@@ -1329,6 +1436,7 @@ async def start_agent(
                 agent.engine, db, request.app.state.machine_bus,
                 required_control_capabilities={CAPABILITY},
                 exclude_agent_id=agent.id,
+                machine_id=agent.placed_on_machine_id,
             )
         except (ValueError, NoSuitableMachineError):
             raise HTTPException(422, "Pi provider credential or compatible machine unavailable; add an API key in agent settings") from None
@@ -1351,6 +1459,7 @@ async def start_agent(
                 request.app.state.machine_bus,
                 required_control_capabilities={"direct_endpoint_v1"},
                 exclude_agent_id=agent.id,
+                machine_id=agent.placed_on_machine_id,
             )
         except (ValueError, NoSuitableMachineError):
             raise HTTPException(
@@ -1371,11 +1480,11 @@ async def start_agent(
     if agent.actual_state in ("running", "starting", "stopping"):
         await lifecycle.request_stop(agent.id)
 
-    # Reset to pending
+    # Reset to pending. The placement is kept (#907): a restart runs on the
+    # same machine, and only an explicit move changes it.
     agent.actual_state = "pending"
     agent.desired_state = "running"
     agent.pid = None
-    agent.placed_on_machine_id = None
     agent.lifecycle_lease_token = None
     agent.lifecycle_lease_expires_at = None
     agent.lifecycle_delivery_state = "released"

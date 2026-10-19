@@ -324,6 +324,24 @@ export function useAgents() {
 
   // #769 — switch the engine in place. Separate endpoint from ``updateAgent``
   // because the server resets engine-specific settings and restarts the agent.
+  // #907 — move the agent to another machine. The server never does this on
+  // its own; it stops the agent on the old machine and starts it on the new.
+  const changeAgentMachine = useCallback(async (id: string, machineId: string) => {
+    const resp = await apiFetch(`/api/v1/agents/${id}/machine`, {
+      method: 'PUT',
+      body: JSON.stringify({ machine_id: machineId }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(typeof body.detail === 'string' ? body.detail : 'Failed to change machine');
+    }
+    const updated = await resp.json() as Agent;
+    mutationRevision.current += 1;
+    setAgents(previous => previous.map(agent => agent.id === id ? updated : agent));
+    void fetchAgents().catch(() => {});
+    return updated;
+  }, [fetchAgents]);
+
   const changeAgentEngine = useCallback(async (
     id: string,
     change: { engine: string; provider: string | null; model: string | null },
@@ -471,6 +489,7 @@ export function useAgents() {
     fetchAgents,
     updateAgent,
     changeAgentEngine,
+    changeAgentMachine,
     fetchAgentFiles,
     upsertAgentFile,
     deleteAgentFile,
