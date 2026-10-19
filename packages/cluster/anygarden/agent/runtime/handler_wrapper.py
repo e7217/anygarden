@@ -284,7 +284,6 @@ _FAILURE_NOTICES = {
     "AUTH_CHECK_FAILED": _PI_NATIVE_CONFIG_NOTICE,
 }
 _REJECTED_NOTICE = "⚠️ 에이전트가 다른 요청을 처리 중이라 이 메시지를 받지 못했습니다."
-_CANCELLED_NOTICE = "위임된 작업이 취소되었습니다."
 # #457 — a queued follow-up sat past its TTL before the queue drained;
 # answering it now would be a stale reply, so it is skipped with a notice
 # rather than silently dropped.
@@ -327,7 +326,7 @@ class RoomHandlerSupervisor:
         self._cancelled_turns.add(key)
         queue = self._queues.get(identity["room_id"])
         if queue is not None:
-            retained = [item for item in queue if self._turn_key(identity["room_id"], item[0], item[3]) != key]
+            retained = [item for item in queue if self._turn_key(identity["room_id"], item[0], item[2]) != key]
             queue.clear()
             queue.extend(retained)
         task = self._engine_tasks.get(key)
@@ -340,7 +339,6 @@ class RoomHandlerSupervisor:
         request_id: Optional[str],
         run_engine: Callable[[], Awaitable[EngineResult]],
         thread_root_id: Optional[str] = None,
-        delegation_id: str | None = None,
         turn_context: dict[str, Any] | None = None,
     ) -> None:
         turn_context = dict(turn_context or {})
@@ -356,7 +354,7 @@ class RoomHandlerSupervisor:
             queue = self._queues.setdefault(room_id, deque())
             if len(queue) < _MAX_QUEUE_DEPTH:
                 queue.append(
-                    (request_id, thread_root_id, delegation_id, turn_context, run_engine, time.monotonic())
+                    (request_id, thread_root_id, turn_context, run_engine, time.monotonic())
                 )
                 # ``queued`` is a terminal handler_finished result, not a
                 # new lifecycle phase — no user notice (the turn will be
@@ -386,7 +384,7 @@ class RoomHandlerSupervisor:
             await self._send_room_message(
                 room_id,
                 _REJECTED_NOTICE,
-                metadata=_reply_metadata(request_id, delegation_id, "rejected", turn_context),
+                metadata=_reply_metadata(request_id, "rejected", turn_context),
                 thread_root_id=thread_root_id,
             )
             return
@@ -398,7 +396,6 @@ class RoomHandlerSupervisor:
                     request_id,
                     run_engine,
                     thread_root_id=thread_root_id,
-                    delegation_id=delegation_id,
                     turn_context=turn_context,
                 )
                 # Drain any follow-ups that arrived while this turn ran. The
@@ -425,7 +422,7 @@ class RoomHandlerSupervisor:
         if queue is None:
             return
         while queue:
-            req_id, thread_root_id, delegation_id, turn_context, run_engine, enqueued_at = queue.popleft()
+            req_id, thread_root_id, turn_context, run_engine, enqueued_at = queue.popleft()
             if self._turn_key(room_id, req_id, turn_context) in self._cancelled_turns:
                 await self._lifecycle(room_id, req_id, turn_context, event="handler_finished", outcome="cancelled")
                 continue
@@ -443,7 +440,7 @@ class RoomHandlerSupervisor:
                 await self._send_room_message(
                     room_id,
                     _STALE_NOTICE,
-                    metadata=_reply_metadata(req_id, delegation_id, "rejected", turn_context),
+                    metadata=_reply_metadata(req_id, "rejected", turn_context),
                     thread_root_id=thread_root_id,
                 )
                 continue
@@ -453,7 +450,6 @@ class RoomHandlerSupervisor:
                 req_id,
                 run_engine,
                 thread_root_id=thread_root_id,
-                delegation_id=delegation_id,
                 turn_context=turn_context,
             )
         # Tidy up the empty deque so idle rooms don't accumulate state.
@@ -467,7 +463,6 @@ class RoomHandlerSupervisor:
         run_engine: Callable[[], Awaitable[EngineResult]],
         *,
         thread_root_id: Optional[str] = None,
-        delegation_id: str | None = None,
         turn_context: dict[str, Any] | None = None,
     ) -> None:
         turn_key = self._turn_key(room_id, request_id, turn_context)
@@ -581,13 +576,6 @@ class RoomHandlerSupervisor:
                     **native_proof,
                 )
                 total = int((time.monotonic() - started) * 1000)
-                if delegation_id:
-                    await self._send_room_message(
-                        room_id,
-                        _CANCELLED_NOTICE,
-                        metadata=_reply_metadata(request_id, delegation_id, outcome, turn_context),
-                        thread_root_id=thread_root_id,
-                    )
                 await self._lifecycle(
                     room_id,
                     request_id,
@@ -628,7 +616,7 @@ class RoomHandlerSupervisor:
             # that carries a ``request_id`` means the engine was asked to
             # answer and didn't. Surface it as ``failed`` + a user notice
             # rather than leaving the user staring at silence.
-            if outcome == "ok" and not response and (request_id is not None or delegation_id):
+            if outcome == "ok" and not response and request_id is not None:
                 outcome = "failed"
                 if error is None:
                     error = "engine produced no response"
@@ -720,11 +708,10 @@ class RoomHandlerSupervisor:
                 outcome = "retry_exhausted"
             break
 
-        send_metadata = _reply_metadata(request_id, delegation_id, outcome, turn_context)
+        send_metadata = _reply_metadata(request_id, outcome, turn_context)
         if execution_trace:
             send_metadata = {**(send_metadata or {}), "execution_trace": execution_trace}
-        # A durable room turn (leased, outside any project execution, not a
-        # delegation) whose native call failed transiently before any side
+        # A durable room turn (leased, outside any project execution) whose native call failed transiently before any side
         # effect is retried by the server with backoff. A visible failure
         # notice would be accepted as that turn's answer and pre-empt the
         # retry; the server posts its own notice if it gives up.
@@ -732,7 +719,6 @@ class RoomHandlerSupervisor:
             leased_turn
             and not response
             and outcome in ("timeout", "failed")
-            and delegation_id is None
             and not (turn_context or {}).get("execution_id")
             and native_proof.get("native_outcome") == "failed"
             and native_proof.get("native_reason_code") == "MODEL_TRANSIENT_FAILURE"
@@ -769,13 +755,6 @@ class RoomHandlerSupervisor:
             await self._send_room_message(
                 room_id,
                 _FAILURE_NOTICES.get(error, _FAILED_NOTICE),
-                metadata=send_metadata,
-                thread_root_id=thread_root_id,
-            )
-        elif outcome == "cancelled" and delegation_id:
-            await self._send_room_message(
-                room_id,
-                _CANCELLED_NOTICE,
                 metadata=send_metadata,
                 thread_root_id=thread_root_id,
             )
@@ -852,7 +831,7 @@ class RoomHandlerSupervisor:
 
 
 def _reply_metadata(
-    request_id: str | None, delegation_id: str | None, outcome: str,
+    request_id: str | None, outcome: str,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     metadata = dict(context or {})
@@ -863,6 +842,4 @@ def _reply_metadata(
         metadata["turn_outcome"] = outcome if outcome in {
             "ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted",
         } else "failed"
-    if delegation_id:
-        metadata.update(delegation_id=delegation_id, delegation_outcome=outcome)
     return metadata or None

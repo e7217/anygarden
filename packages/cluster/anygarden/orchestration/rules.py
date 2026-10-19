@@ -249,7 +249,7 @@ def is_peer_mention(
     User and guest mentions never count, nor do legacy ``@name``
     mentions (we can't resolve a name to a participant_id at the
     server boundary, and the safety-net machinery only meaningfully
-    governs ID-based delegation).
+    governs ID-based mentions).
 
     ``agent_participants`` maps ``participant_id -> agent_id`` for
     the room — the caller assembles it once per turn so the helper

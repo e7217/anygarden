@@ -907,30 +907,7 @@ async def test_non_transient_failure_not_retried(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["ok", "failed", "timeout", "cancelled", "empty"])
-async def test_delegated_turn_returns_correlation_for_every_terminal_outcome(outcome):
-    client = _FakeClient()
-    sup = RoomHandlerSupervisor(client, "codex")
-
-    async def run_engine():
-        if outcome == "failed":
-            raise EngineError("failed")
-        if outcome == "timeout":
-            raise EngineTimeoutError("timeout")
-        if outcome == "cancelled":
-            raise EngineCancelledError(EngineTurn(None))
-        return "answer" if outcome == "ok" else None
-
-    await sup.dispatch("room", None, run_engine, delegation_id="delegated-1")
-    assert len(client.sends) == 1
-    assert client.sends[0][2] == {
-        "delegation_id": "delegated-1",
-        "delegation_outcome": "failed" if outcome == "empty" else outcome,
-    }
-
-
-@pytest.mark.asyncio
-async def test_queued_delegations_keep_their_own_identity_and_rejections(monkeypatch):
+async def test_queued_turns_keep_their_own_identity_and_rejections(monkeypatch):
     import anygarden.agent.runtime.handler_wrapper as hw
 
     monkeypatch.setattr(hw, "_MAX_QUEUE_DEPTH", 1)
@@ -946,19 +923,19 @@ async def test_queued_delegations_keep_their_own_identity_and_rejections(monkeyp
     async def later():
         return "second"
 
-    running = asyncio.create_task(sup.dispatch("room", "r1", first, delegation_id="d1"))
+    running = asyncio.create_task(sup.dispatch("room", "r1", first))
     await entered.wait()
-    await sup.dispatch("room", "r2", later, delegation_id="d2")
-    await sup.dispatch("room", "r3", later, delegation_id="d3")
+    await sup.dispatch("room", "r2", later)
+    await sup.dispatch("room", "r3", later)
     release.set()
     await running
-    assert [(m[2]["delegation_id"], m[2]["delegation_outcome"]) for m in client.sends] == [
-        ("d3", "rejected"), ("d1", "ok"), ("d2", "ok"),
+    assert [(m[2]["request_id"], m[2]["turn_outcome"]) for m in client.sends] == [
+        ("r3", "rejected"), ("r1", "ok"), ("r2", "ok"),
     ]
 
 
 @pytest.mark.asyncio
-async def test_stale_delegation_returns_its_own_rejected_result(monkeypatch):
+async def test_stale_queued_turn_returns_its_own_rejected_result(monkeypatch):
     import anygarden.agent.runtime.handler_wrapper as hw
 
     monkeypatch.setattr(hw, "_QUEUE_ITEM_TTL_SEC", 0)
@@ -974,12 +951,12 @@ async def test_stale_delegation_returns_its_own_rejected_result(monkeypatch):
     async def stale():
         pytest.fail("stale queued engine must not execute")
 
-    running = asyncio.create_task(sup.dispatch("room", "r1", first, delegation_id="d1"))
+    running = asyncio.create_task(sup.dispatch("room", "r1", first))
     await entered.wait()
-    await sup.dispatch("room", "r2", stale, delegation_id="d2")
+    await sup.dispatch("room", "r2", stale)
     release.set()
     await running
-    assert client.sends[-1][2] == {"request_id": "r2", "turn_outcome": "rejected", "delegation_id": "d2", "delegation_outcome": "rejected"}
+    assert client.sends[-1][2] == {"request_id": "r2", "turn_outcome": "rejected"}
 
 
 @pytest.mark.asyncio
@@ -1012,12 +989,9 @@ async def test_queued_attempts_keep_immutable_response_and_lifecycle_proof():
 
 @pytest.mark.asyncio
 @pytest.mark.req("ENG-05")
-@pytest.mark.parametrize("delegation_id", [None, "delegated-1"])
-async def test_cancelled_turn_is_not_retried_and_delegation_gets_notice(
-    monkeypatch, delegation_id
-):
-    """A cancelled turn is never retried, even with retries enabled. A plain
-    room turn stays silent; a delegated turn leaves the cancel notice."""
+async def test_cancelled_turn_is_not_retried_and_stays_silent(monkeypatch):
+    """A cancelled turn is never retried, even with retries enabled, and
+    leaves no notice in the room."""
     import anygarden.agent.runtime.handler_wrapper as hw
 
     monkeypatch.setattr(hw, "_MAX_RETRY_ATTEMPTS", 3)
@@ -1031,18 +1005,14 @@ async def test_cancelled_turn_is_not_retried_and_delegation_gets_notice(
         calls += 1
         raise EngineCancelledError(EngineTurn(None))
 
-    await sup.dispatch("r1", "req-1", cancelled_engine, delegation_id=delegation_id)
+    await sup.dispatch("r1", "req-1", cancelled_engine)
 
     assert calls == 1
     outcomes = [
         e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
     ]
     assert outcomes == ["cancelled"]
-    if delegation_id is None:
-        assert client.sends == []
-    else:
-        assert [s[1] for s in client.sends] == [hw._CANCELLED_NOTICE]
-        assert client.sends[0][2]["delegation_outcome"] == "cancelled"
+    assert client.sends == []
 
 
 _TRANSIENT_PROOF = {
@@ -1076,17 +1046,14 @@ async def test_leased_room_turn_transient_failure_leaves_retry_to_the_server():
 
 @pytest.mark.asyncio
 @pytest.mark.req("EXE-10")
-@pytest.mark.parametrize("case", ["execution", "delegated", "unleased", "not_transient", "after_effect"])
+@pytest.mark.parametrize("case", ["execution", "unleased", "not_transient", "after_effect"])
 async def test_other_failures_still_notify_the_room(case):
     client = _FakeClient()
     sup = RoomHandlerSupervisor(client, "codex-cli")
     context = dict(_LEASED)
     proof = dict(_TRANSIENT_PROOF)
-    delegation_id = None
     if case == "execution":
         context["execution_id"] = "execution-1"
-    elif case == "delegated":
-        delegation_id = "delegated-1"
     elif case == "unleased":
         context = {}
     elif case == "not_transient":
@@ -1098,8 +1065,7 @@ async def test_other_failures_still_notify_the_room(case):
     async def failing():
         raise EngineError("failed", transient=True, turn=EngineTurn(None, **proof))
 
-    await sup.dispatch("room", "req-n", failing, turn_context=context,
-                       delegation_id=delegation_id)
+    await sup.dispatch("room", "req-n", failing, turn_context=context)
     assert len(client.sends) == 1
     assert "생성하지 못했습니다" in client.sends[0][1]
 

@@ -91,7 +91,7 @@ anygarden client --server ws://localhost:8000 --user engineer --room sprint-01 -
 Agents no longer drop every message that isn't addressed to them. The
 unified response gate is a three-way decision:
 
-- `RESPOND` — generate a reply (mentions, `[DELEGATED]`, `[ROOM_QUERY]`,
+- `RESPOND` — generate a reply (mentions, `[ROOM_QUERY]`,
   human broadcasts).
 - `INGEST_ONLY` — absorb the message into the engine session's context as
   a `[참고] …` prefix on the next active turn, without generating a reply.

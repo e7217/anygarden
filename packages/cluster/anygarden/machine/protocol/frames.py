@@ -124,10 +124,6 @@ class SyncDesiredStateFrame(BaseModel):
     # supervisor deadlines). None = global env / hardcoded default.
     turn_timeout_sec: int | None = None
 
-    # Sub-rooms this agent can delegate to (v2 delegation)
-    # Each entry: {"name": "...", "description": "..." or null}
-    sub_rooms: list[dict[str, str | None]] = Field(default_factory=list)
-
     # Issue #277 — bearer token for the anygarden self-MCP entry the
     # cluster baked into ``files`` (``.codex/config.toml`` references
     # this via ``bearer_token_env_var``). Machine spawner exposes the

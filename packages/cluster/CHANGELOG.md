@@ -149,6 +149,15 @@
 
 ### ⚠ Breaking changes
 
+- The text `/delegate <sub-room> <task>` command is gone (#899). Sub-room work
+  is delegated only through the project execution tools
+  (`begin_project_execution`, `delegate_project_task`, …), which are recorded
+  in the database, have no fixed time limit and wake the lead with the results.
+  To hand work to a sub-room, ask the operating room's lead. The agent
+  guidance no longer has a `## Delegation` section, `[DELEGATED]` messages are
+  ordinary messages, and the machine `sync_desired_state` frame no longer
+  carries `sub_rooms` (machines ignore it from an older server).
+
 - Removed the room speaker strategies (#802, migration `091`). Every room now
   follows the mention-only rule from #739: an unmentioned message wakes no
   agent, except in a room with exactly one agent. The `round_robin` and

@@ -74,7 +74,6 @@ class FakeWS:
             files=data.get("files", {}),
             engine_secrets=data.get("engine_secrets", {}),
             reasoning_effort=data.get("reasoning_effort"),
-            sub_rooms=data.get("sub_rooms", []),
         )
 
 

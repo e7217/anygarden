@@ -40,7 +40,6 @@ def make_frame(
         files={"skills/tool/SKILL.md": "content"},
         engine_secrets=engine_secrets or {"API_KEY": "secret-value"},
         reasoning_effort="medium",
-        sub_rooms=[{"name": "sub-room", "description": "a sub room"}],
         restart_policy="restart_on_same_machine",
         max_restarts=5,
         restart_window_seconds=600,

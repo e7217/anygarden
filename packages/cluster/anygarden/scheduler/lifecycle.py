@@ -1816,17 +1816,6 @@ class AgentLifecycle:
         ):
             anygarden_token = self._acquire_anygarden_token(db, agent.id)
 
-        # Sub-rooms
-        sub_rooms_info: list[dict[str, str | None]] = []
-        if rooms:
-            sub_result = await db.execute(
-                select(Room.name, Room.description)
-                .where(Room.parent_room_id.in_(rooms))
-                .order_by(Room.name)
-            )
-            for name, desc in sub_result.all():
-                sub_rooms_info.append({"name": name, "description": desc})
-
         workspace_attachment = (
             await db.execute(
                 select(WorkspaceAttachment).where(
@@ -1876,7 +1865,6 @@ class AgentLifecycle:
             # engine adapters resolve it (see ``_turn_timeout``). None = global
             # default.
             "turn_timeout_sec": agent.turn_timeout_sec,
-            "sub_rooms": sub_rooms_info,
             "restart_policy": agent.restart_policy,
             "max_restarts": agent.max_restarts,
             "restart_window_seconds": agent.restart_window_seconds,

@@ -136,16 +136,6 @@ class TestTurnHop:
         assert await turn_hop(db, await db.get(AgentTurn, "turn-1")) == 1
 
     @pytest.mark.asyncio
-    async def test_delegation_is_hop_one(self, db) -> None:
-        ids = await _seed(db)
-        await _retrigger(db, ids, author_pid=ids["peer_p"], metadata={
-            "mentions": [{"type": "user", "id": ids["caller_p"]}],
-            "delegation_target_participant_id": ids["caller_p"],
-            "delegation_id": "d-1",
-        })
-        assert await turn_hop(db, await db.get(AgentTurn, "turn-1")) == 1
-
-    @pytest.mark.asyncio
     async def test_sender_hop_only_trusts_the_senders_own_turn(self, db) -> None:
         ids = await _seed(db)
         await _retrigger(db, ids, author_pid=ids["peer_p"],

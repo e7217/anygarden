@@ -62,14 +62,11 @@ def _is_task_init_content(content: str) -> bool:
     rounds therefore drives the counter past ``max_agent_turns`` and
     later replies are dropped.
 
-    The two recognised task-init prefixes are:
-
-    - ``[ROOM_QUERY]`` — the representative agent forwards a room
-      query to another room. Each forward is an independent task.
-    - ``[DELEGATED]``  — a user/agent delegates a subtask to another
-      agent. Each delegation is an independent task.
+    The recognised task-init prefix is ``[ROOM_QUERY]``: the
+    representative agent forwards a room query to another room, and
+    each forward is an independent task.
     """
-    return content.startswith(("[ROOM_QUERY]", "[DELEGATED]"))
+    return content.startswith("[ROOM_QUERY]")
 
 
 # Issue #445 Wave 0 — terminal WS close code. The server uses 4040 to
@@ -213,8 +210,6 @@ class ChatClient:
 
         # Callbacks
         self._message_handlers: list[MessageHandler] = []
-        self._delegate_result_handlers: list[MessageHandler] = []
-        self._delegation_cleanups: set[Callable[[], None]] = set()
         self._join_handlers: list[Callable[..., Any]] = []
 
         # Self-echo filtering: nonces of messages we sent
@@ -266,7 +261,7 @@ class ChatClient:
         self.max_agent_turns: int = 6
 
         # Issue #157 Phase A — reset-prefix abuse guard.
-        # ``[ROOM_QUERY]`` / ``[DELEGATED]`` frames reset the agent-
+        # ``[ROOM_QUERY]`` frames reset the agent-
         # turn counter (issue #67), which a looping agent can exploit
         # to evade ``max_agent_turns`` by emitting task-init prefixes
         # in a loop. This counter tracks consecutive task-init resets
@@ -335,7 +330,7 @@ class ChatClient:
         self._tasks[room_id] = task
 
     async def wait_for_room(self, room_id: str, timeout: float = 10) -> None:
-        """Wait for an active subscription before sending a delegated task."""
+        """Wait for an active subscription before sending a task to a room."""
         async def connected() -> None:
             while room_id not in self._connections or room_id not in self._ready_rooms:
                 task = self._tasks.get(room_id)
@@ -563,20 +558,6 @@ class ChatClient:
             partial.unlink(missing_ok=True)
         return size
 
-    async def find_sub_room(self, parent_room_id: str, name: str) -> str | None:
-        """Find a sub-room by name. Returns room_id or None."""
-        http = await self._get_http()
-        base = self._server_url.replace("ws://", "http://").replace("wss://", "https://")
-        resp = await http.get(
-            f"{base}/api/v1/rooms/{parent_room_id}/sub-rooms",
-            params={"name": name},
-            headers={"Authorization": f"Bearer {self._token}"},
-        )
-        if resp.status_code != 200:
-            return None
-        rooms = resp.json()
-        return rooms[0]["id"] if rooms else None
-
     async def get_room_participants(self, room_id: str) -> list[dict]:
         """Fetch participant list for a room via REST API."""
         http = await self._get_http()
@@ -632,8 +613,6 @@ class ChatClient:
     async def close(self) -> None:
         """Close all connections and cancel tasks."""
         self._running = False
-        for cancel in list(self._delegation_cleanups):
-            cancel()
         tasks = [*self._tasks.values(), *self._handler_tasks, *self._turn_stop_tasks.values()]
         for future in self._turn_start_waiters.values():
             if not future.done():
@@ -893,7 +872,7 @@ class ChatClient:
         arrived without a human message breaking the streak. The
         caller must then keep ``_agent_turn_count`` as-is so
         ``max_agent_turns`` can still fire on runaway loops that
-        spam ``[ROOM_QUERY]`` / ``[DELEGATED]`` prefixes.
+        spam ``[ROOM_QUERY]`` prefixes.
         """
         count = self._consecutive_task_init.get(room_id, 0) + 1
         self._consecutive_task_init[room_id] = count
@@ -956,8 +935,8 @@ class ChatClient:
             # A fresh server lease still authorizes that concrete task;
             # ordinary self echoes retain the filter below.
             if sender and sender in self._my_participant_ids and not leased_assignment:
-                # Issue #67 — a self-emitted ``[ROOM_QUERY]``/
-                # ``[DELEGATED]`` is a task boundary even though the
+                # Issue #67 — a self-emitted ``[ROOM_QUERY]``
+                # is a task boundary even though the
                 # frame is our own echo. Reset so agent-only rooms
                 # don't inherit the previous exchange's count on the
                 # next task round.  Regular self-messages still count
@@ -996,23 +975,6 @@ class ChatClient:
                 return
 
             # Turn counter: track consecutive agent-only messages.
-            # Terminal delegation results are control messages. Deliver them
-            # before loop guards or a slow engine handler can discard/delay
-            # an already completed child, and never wake another engine.
-            if msg_meta.get("delegation_id") and msg_meta.get("delegation_outcome") in {
-                "ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted",
-            }:
-                if self._mark_seq_seen(room_id, seq):
-                    return
-                data["room_id"] = room_id
-                for handler in list(self._delegate_result_handlers):
-                    try:
-                        await handler(data)
-                    except Exception:
-                        logger.exception("delegate.result_handler_failed", room_id=room_id)
-                return
-
-            # Turn counter: track consecutive agent-only messages.
             # A message from a non-self participant is either from
             # a human (reset counter) or another agent (increment).
             # We use nonce presence as a heuristic: agent messages
@@ -1020,7 +982,7 @@ class ChatClient:
             content = data.get("content", "")
             sender_has_nonce = bool(msg_meta.get("_nonce"))
 
-            # [DELEGATED] and [ROOM_QUERY] messages are new task
+            # [ROOM_QUERY] messages are new task
             # initiations — always reset the counter so the handler
             # processes the task even if the previous agent-only
             # exchange hit the limit.
