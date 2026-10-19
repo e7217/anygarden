@@ -15,7 +15,7 @@ import {
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import ThreadReplyAffordance from '@/components/ThreadReplyAffordance'
 import { canHostThread, type ThreadIndex } from '@/lib/threads'
-import { stageLabel, type AgentStage, type PeerProgress } from '@/lib/typingStage'
+import { workLabel, type AgentStage, type AgentWorkDetail, type PeerProgress } from '@/lib/typingStage'
 import { activeTurnByParticipant, placeWorkingParticipants, threadTurnIds, type OpenTurn } from '@/lib/openTurns'
 import { isHiddenSystemMessage } from '@/lib/systemMessages'
 import { alignsRight } from '@/lib/messageLayout'
@@ -29,6 +29,7 @@ interface ChatAreaProps {
   typingUsers?: Set<string>
   typingStages?: Record<string, AgentStage>
   typingProgress?: Record<string, PeerProgress>
+  typingWork?: Record<string, AgentWorkDetail>
   /** Grouped view of ``messages`` — replies are rendered in the
    *  thread panel, not inline in this timeline. Computed once by
    *  ``ChatPage`` so the panel and the timeline agree.
@@ -59,6 +60,7 @@ export default function ChatArea({
   typingUsers,
   typingStages = {},
   typingProgress = {},
+  typingWork = {},
   threadIndex,
   activeThreadRootId,
   onOpenThread,
@@ -226,10 +228,14 @@ export default function ChatArea({
     rootId => shownRootIds.has(rootId),
   )
   const typingNames = mainTypingIds.map(pid => {
-    const stage = typingStages[pid]
-    if (!stage) return nameOf(pid)
-    return `${nameOf(pid)} · ${stageLabel(t, stage, typingProgress[pid])}`
+    const label = workLabel(t, typingStages[pid], typingWork[pid], typingProgress[pid])
+    return label ? `${nameOf(pid)} · ${label}` : nameOf(pid)
   })
+  // #880 — the latest sentence each working agent wrote, beside the spinner.
+  const narrated = mainTypingIds.filter(pid => typingWork[pid]?.narration)
+  const narration = narrated
+    .map(pid => (narrated.length > 1 ? `${nameOf(pid)}: ` : '') + typingWork[pid]!.narration)
+    .join(' · ')
 
   const cancellable = canCancelTurns && onCancelTurns
   const activeTurns = activeTurnByParticipant(openTurns)
@@ -310,6 +316,15 @@ export default function ChatArea({
                 <div className="px-1 py-1">
                   <BrailleSpinner />
                 </div>
+                {narration && (
+                  <p
+                    className="min-w-0 truncate text-caption text-[var(--color-foreground-muted)]"
+                    title={narration}
+                    data-testid="typing-narration"
+                  >
+                    {narration}
+                  </p>
+                )}
                 {/* ENG-09 — stop control per agent working in the main
                     timeline; thread work is stopped from its reply row. */}
                 {onCancelTurns && typingAgentIds.map(pid => {

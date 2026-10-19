@@ -63,7 +63,7 @@ export default function GuestRoomPage() {
     }
   }, [errorStatus, navigate])
 
-  const { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping } = useWebSocket(
+  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, send, sendTyping } = useWebSocket(
     scope,
   )
 
@@ -196,6 +196,7 @@ export default function GuestRoomPage() {
           typingUsers={typingUsers}
           typingStages={typingStages}
               typingProgress={typingProgress}
+              typingWork={typingWork}
           // ENG-09 — turn cancellation is for registered room members.
           canCancelTurns={false}
         />

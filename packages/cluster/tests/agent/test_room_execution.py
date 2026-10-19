@@ -108,6 +108,8 @@ else:
         event({'type':'error','message':msg})
         event({'type':'turn.failed','error':{'message':msg}})
         sys.exit(1)
+    if os.environ.get('TEST_PROGRESS')=='trace':
+        event({'type':'item.completed','item':{'type':'agent_message','text':'Checking the repo.'}})
     if os.environ.get('TEST_PROGRESS'):
         event({'type':'item.started','item':{'type':'command_execution','command':'DO-NOT-PUBLISH'}})
         event({'type':'item.completed','item':{'type':'command_execution','command':'DO-NOT-PUBLISH'}})
@@ -207,6 +209,34 @@ async def test_room_typing_reports_observed_stages_only(setup_room, monkeypatch,
         assert sent[-1] == ("room", False)
         assert "DO-NOT-PUBLISH" not in str(sent)
         assert client._execution_adapter.progress_stage("room") is None
+    finally:
+        await client._execution_adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("ENG-10")
+@pytest.mark.req("ENG-11")
+async def test_room_typing_and_reply_carry_activity_narration_and_trace(setup_room, monkeypatch):
+    # #880 — the typing heartbeat names the work and the latest narration;
+    # the reply carries the turn's trace. Raw commands never leave.
+    monkeypatch.setenv("TEST_PROGRESS", "trace")
+    client = await client_for("codex-cli", monkeypatch)
+    try:
+        await client._message_handlers[0](message())
+        details = [call.kwargs for call in client.sendTyping.call_args_list if call.kwargs]
+        assert {"activity": "command", "activity_seq": 1, "narration": "Checking the repo."} in details
+        assert {"narration": "Checking the repo."} in details
+        metadata = client.send.call_args.kwargs["metadata"]
+        assert metadata["execution_trace"] == {
+            "v": 1,
+            "steps": [{"narration": "Checking the repo.", "activities": {"commands": 1}}],
+            "totals": {"commands": 1},
+            "truncated": 0,
+        }
+        assert client.send.call_args.args[1] == "local answer"
+        assert "DO-NOT-PUBLISH" not in str(client.sendTyping.call_args_list)
+        assert "DO-NOT-PUBLISH" not in str(metadata)
+        assert client._execution_adapter.progress_detail("room") == {}
     finally:
         await client._execution_adapter.stop()
 

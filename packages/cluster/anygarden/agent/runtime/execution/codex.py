@@ -109,6 +109,39 @@ class ProcessTree:
         return not self.live() and not self.uncertain
 
 
+def _activity_kind(item: object) -> str | None:
+    """Closed #880 activity kind of a Codex item; never its command or path."""
+    if not isinstance(item, dict):
+        return None
+    item_type = item.get("type")
+    if item_type == "command_execution":
+        return "command"
+    if item_type == "file_change":
+        return "file_change"
+    if item_type == "web_search":
+        return "web_search"
+    if item_type == "mcp_tool_call":
+        return "anygarden_tool" if item.get("server") == "anygarden" else "tool"
+    return None
+
+
+def _emit_activity(emit, kind: str, activity: str, item: dict) -> None:
+    if kind == "item.started":
+        emit("progress", {"event": "activity", "activity": activity, "phase": "started"})
+        return
+    if activity == "file_change":
+        # A failed patch changed nothing; a completed one counts its files.
+        if item.get("status") == "failed":
+            return
+        changes = item.get("changes")
+        count = len(changes) if isinstance(changes, list) and changes else 1
+    else:
+        count = 1
+    emit("progress", {
+        "event": "activity", "activity": activity, "phase": "completed", "count": count,
+    })
+
+
 class CodexRuntime:
     def __init__(self, executable: Path):
         if not executable.is_absolute():
@@ -368,6 +401,9 @@ class CodexRuntime:
         proc.stdin.close()
         texts: list[str] = []
         text_size = 0
+        # #880 — a message is narration once more work follows it; the last
+        # one is the reply (``-o`` writes exactly that message).
+        unconfirmed: str | None = None
         completed = failed = False
         failures = _FAILURES.get() or CodexFailureTracker()
         measured = _MEASURED_USAGE.get()
@@ -414,6 +450,10 @@ class CodexRuntime:
                     usage["terminal_usage"] = False
                 item = event.get("item")
                 item_type = item.get("type") if isinstance(item, dict) else None
+                activity = _activity_kind(item) if kind != "item.updated" else None
+                if activity is not None and unconfirmed:
+                    emit("progress", {"event": "narration", "text": unconfirmed})
+                    unconfirmed = None
                 if kind == "item.completed" and item_type == "agent_message":
                     text = item.get("text")
                     if isinstance(text, str):
@@ -421,6 +461,9 @@ class CodexRuntime:
                         if text_size > MAX_TEXT:
                             raise ValueError("runtime output exceeds limit")
                         texts.append(text)
+                        if unconfirmed:
+                            emit("progress", {"event": "narration", "text": unconfirmed})
+                        unconfirmed = text if text.strip() else None
                 # Progress is deliberately selected metadata, not commands, paths,
                 # credentials, native session IDs or arbitrary runtime payloads.
                 payload = {"event": kind}
@@ -433,6 +476,8 @@ class CodexRuntime:
                 }:
                     payload["item_type"] = item_type
                 emit("progress", payload)
+                if activity is not None:
+                    _emit_activity(emit, kind, activity, item)
         await proc.wait()
         # Transient (retryable) only when the provider failure looks transient
         # AND no side-effecting item started in this turn; see

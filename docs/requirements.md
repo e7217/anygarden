@@ -84,6 +84,9 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | ENG-07 | Pi는 관리형 고정 버전으로만 실행된다 (`ANYGARDEN_PI_USE_PATH=1` 제외) | pytest |
 | ENG-08 | 같은 룸에서 에이전트당 동시에 실행되는 턴은 1개다 | pytest |
 | ENG-09 | 사용자는 일반 룸에서 진행 중인 턴을 취소할 수 있다 | pytest, vitest |
+| ENG-10 | 응답 대기 표시는 에이전트가 보낸 작업 종류·순번과 최근 서술을 보여준다. 명령·인자·경로·출력·추론 원문은 WS로 전달되지 않는다 | pytest, vitest |
+| ENG-11 | 도구를 쓴 턴의 답변 본문은 마지막 도구 작업 뒤의 최종 답변만 담고, 서술과 작업 집계는 순서대로 `execution_trace`에 저장되어 접힌 "작업 과정"으로 보인다 | pytest, vitest |
+| ENG-12 | 에이전트가 아닌 발신자는 `execution_trace`와 typing 작업 필드를 위조할 수 없고, 다른 에이전트가 읽는 대화에는 trace가 포함되지 않는다 | pytest |
 
 ## 에이전트 협업 (COL)
 

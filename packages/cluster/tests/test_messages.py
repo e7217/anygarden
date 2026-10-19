@@ -160,3 +160,23 @@ class TestRestMessageCreatedAtTimezone:
             assert self.TZ_SUFFIX.search(m["created_at"]), (
                 f"created_at missing timezone designator: {m['created_at']!r}"
             )
+
+
+class TestExecutionTraceIngress:
+    """#880 — REST sends never carry an agent's work trace."""
+
+    @pytest.mark.req("ENG-12")
+    @pytest.mark.asyncio
+    async def test_rest_send_drops_execution_trace(self, msg_env) -> None:
+        transport = ASGITransport(app=msg_env["app"])
+        async with AsyncClient(transport=transport, base_url="http://test") as http:
+            resp = await http.post(
+                f"/api/v1/rooms/{msg_env['room'].id}/messages",
+                headers={"Authorization": f"Bearer {msg_env['token']}"},
+                json={"content": "forged", "metadata": {
+                    "execution_trace": {"v": 1, "steps": [], "totals": {"commands": 9}},
+                    "note": "kept",
+                }},
+            )
+        assert resp.status_code in (200, 201), resp.text
+        assert resp.json()["metadata"] == {"note": "kept"}

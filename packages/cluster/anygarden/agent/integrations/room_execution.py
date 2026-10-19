@@ -7,7 +7,7 @@ import hashlib
 import os
 import shutil
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,6 +22,10 @@ from anygarden.agent.runtime.execution.launch import load_execution_launch
 from anygarden.agent.runtime.execution.manager import LocalExecutionManager
 from anygarden.agent.runtime.execution.progress_stage import (
     ProgressStage,
+    TraceBuilder,
+    activity_for_progress,
+    clip,
+    narration_for_progress,
     stage_for_progress,
 )
 from anygarden.agent.runtime.execution.project_turn import (
@@ -84,6 +88,32 @@ def resolve_engine_executable(engine: str) -> str:
     )
 
 
+# The typing frame's ``narration`` is a one-line preview of the full one.
+NARRATION_PREVIEW_CHARS = 280
+
+
+@dataclass(frozen=True)
+class _Progress:
+    """What one room's typing heartbeat currently says (#701, #880)."""
+
+    execution_id: str
+    stage: ProgressStage
+    activity: str | None = None
+    activity_seq: int | None = None
+    narration: str | None = None
+
+    def detail(self) -> dict:
+        return {
+            key: value
+            for key, value in (
+                ("activity", self.activity),
+                ("activity_seq", self.activity_seq),
+                ("narration", self.narration),
+            )
+            if value is not None
+        }
+
+
 class RoomExecutionAdapter(CodexCliAdapter):
     """Reuse room prompt/context composition; execute only through the manager."""
 
@@ -97,7 +127,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
         self._local_invocation = ContextVar("delivered_local_invocation", default=None)
         self._last_project_context: dict[str, tuple] = {}
         self._manager = None
-        self._progress_by_room: dict[str, tuple[str, ProgressStage]] = {}
+        self._progress_by_room: dict[str, _Progress] = {}
         self._active_execution_by_room: dict[str, str] = {}
         self._scope_memory_epochs: dict[str, str] = {}
         self._turn_timeout = resolve_turn_timeout(
@@ -378,15 +408,16 @@ class RoomExecutionAdapter(CodexCliAdapter):
         self._scope_memory_epochs[invocation.scope.key] = memory_session_scope(self._client, room_id)
         self._active_execution_by_room[room_id] = invocation.execution_id
         started = False
+        trace = TraceBuilder()
         try:
             await self._set_progress(room_id, invocation.execution_id, "preparing")
             await self._manager.start(invocation)
             started = True
             async for event in self._manager.events(invocation.execution_id):
                 if event.kind == "progress":
-                    stage = stage_for_progress(event.payload)
-                    if stage is not None:
-                        await self._set_progress(room_id, invocation.execution_id, stage)
+                    await self._observe_progress(
+                        room_id, invocation.execution_id, event.payload, trace
+                    )
             receipt = await self._manager.reconcile(invocation.execution_id)
         except asyncio.CancelledError:
             if not started:
@@ -403,16 +434,18 @@ class RoomExecutionAdapter(CodexCliAdapter):
                 receipt = await asyncio.shield(cleanup)
             except asyncio.CancelledError:
                 receipt = await cleanup
-            raise EngineTaskCancelledError(
-                self._telemetry(receipt, invocation.model)
-            ) from None
+            turn = self._telemetry(receipt, invocation.model)
+            turn.execution_trace = trace.finish(receipt.text)
+            raise EngineTaskCancelledError(turn) from None
         finally:
             if self._active_execution_by_room.get(room_id) == invocation.execution_id:
                 self._active_execution_by_room.pop(room_id, None)
                 self._progress_by_room.pop(room_id, None)
         turn = self._telemetry(receipt, invocation.model)
+        turn.execution_trace = trace.finish(receipt.text)
         self._usage.set(
             {
+                "execution_trace": turn.execution_trace,
                 "model": turn.model,
                 "input_tokens": turn.input_tokens,
                 "output_tokens": turn.output_tokens,
@@ -453,18 +486,53 @@ class RoomExecutionAdapter(CodexCliAdapter):
 
     def progress_stage(self, room_id: str) -> ProgressStage | None:
         current = self._progress_by_room.get(room_id)
-        return current[1] if current else None
+        return current.stage if current else None
+
+    def progress_detail(self, room_id: str) -> dict:
+        current = self._progress_by_room.get(room_id)
+        return current.detail() if current else {}
+
+    async def _observe_progress(
+        self, room_id: str, execution_id: str, payload: dict, trace: TraceBuilder
+    ) -> None:
+        """Fold one runtime progress event into the trace and the heartbeat."""
+        current = self._progress_by_room.get(room_id)
+        if current is None or current.execution_id != execution_id:
+            current = _Progress(execution_id, "preparing")
+        changes: dict = {}
+        stage = stage_for_progress(payload)
+        if stage is not None:
+            changes["stage"] = stage
+        activity = activity_for_progress(payload)
+        if activity is not None and activity.phase == "started":
+            seq = trace.started(activity.kind)
+            changes.update(activity=activity.kind, activity_seq=seq)
+        elif activity is not None:
+            trace.completed(activity.kind, activity.count)
+            if current.activity == activity.kind:
+                changes.update(activity=None, activity_seq=None)
+        narration = narration_for_progress(payload)
+        if narration is not None:
+            trace.narration(narration)
+            changes["narration"] = clip(" ".join(narration.split()), NARRATION_PREVIEW_CHARS)
+        if changes:
+            await self._publish_progress(room_id, replace(current, **changes))
 
     async def _set_progress(
         self, room_id: str, execution_id: str, stage: ProgressStage
     ) -> None:
-        if self._active_execution_by_room.get(room_id) != execution_id:
-            return
         current = self._progress_by_room.get(room_id)
-        if current == (execution_id, stage):
+        if current is None or current.execution_id != execution_id:
+            current = _Progress(execution_id, stage)
+        await self._publish_progress(room_id, replace(current, stage=stage))
+
+    async def _publish_progress(self, room_id: str, progress: _Progress) -> None:
+        if self._active_execution_by_room.get(room_id) != progress.execution_id:
             return
-        self._progress_by_room[room_id] = (execution_id, stage)
-        await self._client.sendTyping(room_id, True, stage)
+        if self._progress_by_room.get(room_id) == progress:
+            return
+        self._progress_by_room[room_id] = progress
+        await self._client.sendTyping(room_id, True, progress.stage, **progress.detail())
 
     @staticmethod
     def _telemetry(receipt, model):

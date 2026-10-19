@@ -224,6 +224,9 @@ class EngineTurn:
     native_reason_code: Optional[str] = None
     native_transient: Optional[bool] = None
     usage_metadata: dict[str, Any] | None = None
+    # #880 — the turn's narration and work counts (progress_stage.TraceBuilder),
+    # attached to whatever the room receives: the reply or a failure notice.
+    execution_trace: dict[str, Any] | None = None
 
     def native_proof(self) -> dict[str, Any]:
         """Only persisted receipt identity and closed terminal categories."""
@@ -508,6 +511,7 @@ class RoomHandlerSupervisor:
             output_tokens: Optional[int] = None
             cost_usd: Optional[float] = None
             usage_metadata: dict[str, Any] | None = None
+            execution_trace: dict[str, Any] | None = None
             transient = False  # #457 — set from a transient EngineError cause
             native_proof: dict[str, Any] = {}
             # #433 — turn I/O capture is opt-in: only when the adapter returns
@@ -534,6 +538,7 @@ class RoomHandlerSupervisor:
                     output_tokens = raw.output_tokens
                     cost_usd = raw.cost_usd
                     usage_metadata = raw.usage_metadata
+                    execution_trace = raw.execution_trace
             except asyncio.TimeoutError:
                 outcome = "timeout"
                 error = f"engine exceeded {self._timeout}s"
@@ -541,6 +546,7 @@ class RoomHandlerSupervisor:
                 if exc.turn is not None:
                     native_proof = exc.turn.native_proof()
                     usage_metadata = exc.turn.usage_metadata
+                    execution_trace = exc.turn.execution_trace
                     model, input_tokens, output_tokens, cost_usd = (
                         exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
                     )
@@ -553,6 +559,7 @@ class RoomHandlerSupervisor:
                 if exc.turn is not None:
                     native_proof = exc.turn.native_proof()
                     usage_metadata = exc.turn.usage_metadata
+                    execution_trace = exc.turn.execution_trace
                     model, input_tokens, output_tokens, cost_usd = (
                         exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
                     )
@@ -604,6 +611,7 @@ class RoomHandlerSupervisor:
                 if exc.turn is not None:
                     native_proof = exc.turn.native_proof()
                     usage_metadata = exc.turn.usage_metadata
+                    execution_trace = exc.turn.execution_trace
                     model, input_tokens, output_tokens, cost_usd = (
                         exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
                     )
@@ -718,6 +726,8 @@ class RoomHandlerSupervisor:
             break
 
         send_metadata = _reply_metadata(request_id, delegation_id, outcome, turn_context)
+        if execution_trace:
+            send_metadata = {**(send_metadata or {}), "execution_trace": execution_trace}
         # A durable room turn (leased, outside any project execution, not a
         # delegation) whose native call failed transiently before any side
         # effect is retried by the server with backoff. A visible failure

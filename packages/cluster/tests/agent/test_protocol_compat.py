@@ -47,6 +47,49 @@ class TestProtocolCompat:
         with pytest.raises(ValueError):
             sdk_frames.parse_incoming({"type": "typing", "is_typing": True, "stage": "secret"})
 
+    @pytest.mark.req("ENG-10")
+    @pytest.mark.parametrize("module", ["sdk", "server"])
+    def test_typing_activity_fields_are_closed_and_optional(self, module) -> None:
+        """#880 — activity detail rides beside ``stage`` without changing it."""
+        from anygarden.ws import protocol as server_frames
+
+        frames = sdk_frames if module == "sdk" else server_frames
+        f = frames.parse_incoming({
+            "type": "typing", "is_typing": True, "stage": "using_tool",
+            "activity": "command", "activity_seq": 3, "narration": "Checking the logs.",
+        })
+        assert (f.stage, f.activity, f.activity_seq, f.narration) == (
+            "using_tool", "command", 3, "Checking the logs.",
+        )
+        plain = frames.parse_incoming({"type": "typing", "is_typing": True})
+        assert (plain.activity, plain.activity_seq, plain.narration) == (None, None, None)
+        for bad in (
+            {"activity": "secret"},
+            {"activity_seq": 0},
+            {"activity_seq": 10_001},
+            {"narration": "x" * 281},
+        ):
+            with pytest.raises(ValueError):
+                frames.parse_incoming({"type": "typing", "is_typing": True, **bad})
+
+    def test_older_typing_model_ignores_activity_fields(self) -> None:
+        """A server without #880 must still accept the frame (and its stage)."""
+        from typing import Literal
+
+        from pydantic import BaseModel
+
+        class TypingFrameBefore880(BaseModel):
+            type: Literal["typing"] = "typing"
+            is_typing: bool = True
+            stage: Literal["preparing", "using_tool", "writing"] | None = None
+
+        frame = TypingFrameBefore880.model_validate({
+            "type": "typing", "is_typing": True, "stage": "using_tool",
+            "activity": "command", "activity_seq": 1, "narration": "hi",
+        })
+        assert frame.stage == "using_tool"
+        assert "extra" not in sdk_frames.TypingFrame.model_config
+
     def test_parse_incoming_unknown_raises(self) -> None:
         """parse_incoming raises ValueError for unknown types."""
         with pytest.raises(ValueError, match="Unknown frame type"):

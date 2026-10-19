@@ -1078,3 +1078,56 @@ async def test_other_failures_still_notify_the_room(case):
                        delegation_id=delegation_id)
     assert len(client.sends) == 1
     assert "생성하지 못했습니다" in client.sends[0][1]
+
+
+_TRACE = {"v": 1, "steps": [{"narration": "Checking.", "activities": {"commands": 2}}],
+          "totals": {"commands": 2}, "truncated": 0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("ENG-11")
+async def test_reply_carries_the_execution_trace():
+    # #880 — the turn's narration and work ride on the reply metadata.
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return EngineTurn(response="done", execution_trace=_TRACE)
+
+    await sup.dispatch(room_id="r1", request_id="req-t", run_engine=run_engine)
+
+    assert client.sends == [("r1", "done", {
+        "request_id": "req-t", "turn_outcome": "ok", "execution_trace": _TRACE,
+    })]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_cls,notice", [
+    (EngineError, "생성하지 못했습니다"),
+    (EngineTimeoutError, "타임아웃"),
+])
+async def test_failure_notice_keeps_the_work_done_before_it(error_cls, notice):
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def failing_engine():
+        raise error_cls("boom", turn=EngineTurn(None, execution_trace=_TRACE))
+
+    await sup.dispatch(room_id="r1", request_id="req-f", run_engine=failing_engine)
+
+    (_, content, metadata), = client.sends
+    assert notice in content
+    assert metadata["execution_trace"] == _TRACE
+
+
+@pytest.mark.asyncio
+async def test_reply_without_trace_has_no_trace_key():
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return EngineTurn(response="plain")
+
+    await sup.dispatch(room_id="r1", request_id="req-p", run_engine=run_engine)
+
+    assert "execution_trace" not in client.sends[0][2]

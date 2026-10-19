@@ -175,3 +175,19 @@ async def test_tool_is_reachable_over_mcp_rpc(ws_env) -> None:
     result = resp.json()["result"]
     assert result["isError"] is False
     assert [m["content"] for m in result["structuredContent"]["messages"]] == ["hello room"]
+
+
+@pytest.mark.req("ENG-12")
+@pytest.mark.asyncio
+async def test_an_agent_reads_replies_without_their_work_trace(db) -> None:
+    # #880 — the trace is for people; peers read only what was said.
+    ids = await _seed(db, main=0)
+    db.add(Message(room_id=ids["room"], participant_id=ids["peer_p"], content="done",
+                   seq=int(ids["last_seq"]) + 1,
+                   extra_metadata={"execution_trace": {"v": 1, "steps": [
+                       {"narration": "Deploying now.", "activities": {"commands": 2}}],
+                       "totals": {"commands": 2}, "truncated": 0}}))
+    await db.flush()
+    result = await read_room_messages(db, agent_id=ids["me"], arguments={"room_id": ids["room"]})
+    assert "Deploying now." not in str(result)
+    assert "execution_trace" not in str(result)
