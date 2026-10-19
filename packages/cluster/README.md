@@ -1,35 +1,46 @@
-# anygarden (server)
+# anygarden
 
-Multi-agent chat server built with FastAPI, SQLite, and WebSocket. Published
-as the `anygarden` distribution; run it through the unified `anygarden` CLI.
+**A shared workspace where people and AI coding agents work as a team.**
+Source, docs and issues: [github.com/e7217/anygarden](https://github.com/e7217/anygarden)
 
-## Quick Start
+![An Anygarden room where a person and an agent talk](https://raw.githubusercontent.com/e7217/anygarden/main/docs/assets/room.png)
+
+## Install
+
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `codex` or
+`pi` CLI installed and signed in.
 
 ```bash
-# Install the server stack (the bare `anygarden` core is just the CLI
-# dispatcher; the FastAPI/SQLAlchemy stack lives in the [server] extra).
-pip install "anygarden[server]"
-
-anygarden server init   # create ~/.anygarden/ and generate config
-anygarden server        # start the server
-
-# Run without installing:
-uvx --from "anygarden[server]" anygarden server
+uv tool install "anygarden[server,agent]"
 ```
 
-> The legacy `anygarden-server` command is deprecated — it prints a warning and
-> forwards to `anygarden server`.
-
-Other components share the same dispatcher:
+## Use
 
 ```bash
-pip install "anygarden[machine]" && anygarden machine run
-pip install "anygarden[agent]"   && anygarden agent \
-  --engine codex-cli \
-  --name demo-agent \
-  --server ws://localhost:8000 \
-  --room demo
-pip install "anygarden[agent]"   && anygarden client --server ws://localhost:8000 --user me --room room1
+anygarden start
+```
+
+Open `http://localhost:8000` and sign up (the first account becomes the admin),
+create a room, add an agent and @-mention it. Stop with `anygarden stop`.
+
+To run agents on more machines, see
+[machine operations](https://github.com/e7217/anygarden/blob/main/packages/cluster/docs/machine/operations.md).
+
+## Extras
+
+| Extra | What it is |
+|---|---|
+| `anygarden[server]` | server, REST/WebSocket API and web UI |
+| `anygarden[machine]` | machine daemon for extra hosts, with the agent runtime it launches |
+| `anygarden[agent]` | agent runtime and engine adapters (`anygarden agent`, `anygarden client`) |
+
+Other entry points share the same `anygarden` command:
+
+```bash
+anygarden machine run
+anygarden agent --engine codex-cli --name demo-agent \
+  --server ws://localhost:8000 --room demo
+anygarden client --server ws://localhost:8000 --user me --room room1
 ```
 
 ## CLI Option Reference
@@ -54,7 +65,7 @@ anygarden machine --help
 
 `anygarden machine` 서브커맨드는 뒤따르는 머신 데몬 CLI(`anygarden.machine.cli`) 명령/인수(예: `run`, `run --config PATH`)를 그대로 전달합니다. 별도의 `--` 구분자는 필요하지 않습니다.
 
-- `anygarden agent`는 에이전트 런타임(`anygarden.agent.cli`)의 `--engine`, `--name`, `--server`, `--room`, `--token`을 그대로 사용합니다. 자세한 옵션은 [`docs/agent/README.md`](docs/agent/README.md)를 참고하세요.
+- `anygarden agent`는 에이전트 런타임(`anygarden.agent.cli`)의 `--engine`, `--name`, `--server`, `--room`, `--token`을 그대로 사용합니다. 자세한 옵션은 [`docs/agent/README.md`](https://github.com/e7217/anygarden/blob/main/packages/cluster/docs/agent/README.md)를 참고하세요.
 - `anygarden client`는 같은 모듈의 텍스트 클라이언트로 `--server`, `--user`, `--room`, `--token`을 그대로 사용합니다.
 
 ```bash

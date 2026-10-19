@@ -4,7 +4,8 @@ Thanks for your interest in improving Anygarden! This guide covers the essential
 
 ## Development setup
 
-See [Prerequisites](README.md#prerequisites) for what you need installed, then:
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/) and Node.js 20+ (for the
+web UI and the Pi engine). Then:
 
 ```bash
 make setup   # install the uv workspace + enable git hooks (run this, not a bare uv sync)
@@ -12,8 +13,9 @@ make dev     # run the cluster dev server + frontend
 ```
 
 `make setup` also wires `core.hooksPath=.githooks` so `git pull` keeps the workspace
-in sync — see the note in the README's [Develop](README.md#develop-from-a-checkout)
-section for why a bare `uv sync` is not enough.
+in sync. Don't run a bare `uv sync` at the root: it uninstalls the `anygarden`
+workspace package and its extras. Use `make setup` or
+`uv sync --all-packages --all-extras`.
 
 ### Choosing a dev mode
 
@@ -52,7 +54,7 @@ stopping and restarting the node — `anygarden stop` takes the same `--data-dir
 Anygarden is a single package under `packages/cluster/` — the server and web UI,
 the per-host machine daemon under `anygarden/machine/` and the agent runtime under
 `anygarden/agent/` (tests in `tests/machine/` and `tests/agent/`). See
-[Packages](README.md#packages) for the extras.
+[the package README](packages/cluster/README.md#extras) for the extras.
 
 ## Workflow
 
