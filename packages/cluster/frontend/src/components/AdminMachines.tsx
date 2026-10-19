@@ -3,6 +3,7 @@ import { useMachines } from '@/hooks/useMachines'
 import { useAgents } from '@/hooks/useAgents'
 import { useRooms } from '@/hooks/useRooms'
 import { useMachineDetail, type MachineEngineInfo } from '@/hooks/useMachineDetail'
+import { useUpdateStatus } from '@/hooks/useSystemVersion'
 import type { RegisterMachineResult } from '@/hooks/useMachines'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -14,7 +15,7 @@ import {
 import {
   Plus, Trash2, RefreshCw,
   PauseCircle, Server, Bot, Square, Play,
-  Loader2, ArrowUpCircle, Cable,
+  Loader2, ArrowUpCircle, Cable, Package,
 } from 'lucide-react'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import MachineConnectionDialog from '@/components/MachineConnectionDialog'
@@ -27,6 +28,7 @@ import { shouldShowFallbackCrashWarning } from '@/lib/admin-agent-warning'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import MachineLinksSection from '@/components/MachineLinksSection'
+import ServerVersionPanel from '@/components/ServerVersionPanel'
 import type { Agent } from '@/hooks/useAgents'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -132,9 +134,17 @@ export default function AdminMachines() {
   // machine". Centralising as a single constant keeps the string
   // from leaking into a dozen equality checks.
   const UNPLACED = '__unplaced__'
+  // #888 — ``SERVER`` shows this server's own version and updates (the
+  // former System page). Kept apart from the machines: with remote-only
+  // machines the server and a daemon are different installs.
+  const SERVER = '__server__'
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selectedMachine = machines.find(m => m.id === selectedId) ?? null
   const isUnplacedView = selectedId === UNPLACED
+  const isServerView = selectedId === SERVER
+  const serverStatus = useUpdateStatus(true)
+  const serverPackage = serverStatus.updates.find(u => u.package === 'anygarden') ?? serverStatus.updates[0]
+  const serverUpdateAvailable = serverStatus.updates.some(u => u.update_available)
 
   // Agents without a placed_on_machine_id — created but never
   // successfully scheduled (or detached after a stop). Filtered from
@@ -352,6 +362,31 @@ export default function AdminMachines() {
           <Button variant="ghost" size="sm" onClick={() => { void fetchMachines().catch(() => {}) }}><RefreshCw />{t('common.refresh')}</Button>
         </div>}
         <div className="flex min-w-0 gap-2 overflow-x-auto p-3 lg:block lg:space-y-2 lg:overflow-x-visible lg:p-2">
+          <button
+            type="button"
+            onClick={() => setSelectedId(SERVER)}
+            aria-current={isServerView ? 'true' : undefined}
+            className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-[background-color,border-color,box-shadow] lg:w-full ${
+              isServerView
+                ? 'bg-[var(--color-brand-tint-bg)] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
+                : 'bg-[var(--color-surface-alt)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 text-sm font-medium text-[var(--color-foreground)]">
+              <Package className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
+              <span className="truncate">{t('admin.machines.serverEntry')}</span>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2">
+              {serverPackage && (
+                <span className="font-mono text-xs text-[var(--color-foreground-muted)]">v{serverPackage.current}</span>
+              )}
+              {serverUpdateAvailable && (
+                <span className="rounded-full bg-[var(--color-brand-tint-bg)] px-2 py-0.5 text-badge font-semibold text-[var(--color-brand-tint-text)]">
+                  {t('admin.system.updateAvailable')}
+                </span>
+              )}
+            </div>
+          </button>
           {machines.length === 0 ? (
             <div className="w-full px-3 py-8 text-center">
               <Server className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
@@ -413,7 +448,9 @@ export default function AdminMachines() {
 
       {/* ── Right: Machine Detail ── */}
       <div className="min-w-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto">
-        {isUnplacedView ? (
+        {isServerView ? (
+          <ServerVersionPanel status={serverStatus} />
+        ) : isUnplacedView ? (
           <div className="max-w-2xl space-y-6">
             <div>
               <h2 className="text-lead text-[var(--color-foreground)]">{t('admin.machines.unplacedTitle')}</h2>

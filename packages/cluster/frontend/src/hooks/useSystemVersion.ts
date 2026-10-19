@@ -89,3 +89,5 @@ export function useUpdateStatus(enabled: boolean) {
 
   return { updates, loading, error, refresh }
 }
+
+export type UpdateStatus = ReturnType<typeof useUpdateStatus>

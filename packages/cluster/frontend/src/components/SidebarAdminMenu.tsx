@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import {
-  BookOpen, Gauge, Network, Package, Plug, Server, Settings, Share2, Waypoints,
+  BookOpen, Gauge, Network, Plug, Server, Settings, Share2, Waypoints,
 } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
@@ -13,7 +13,6 @@ interface SidebarAdminMenuProps {
 
 const links: { labelKey: MessageKey; path: string; icon: typeof Server; children?: boolean; experimental?: boolean }[] = [
   { labelKey: 'navigation.machines', path: '/admin/machines', icon: Server },
-  { labelKey: 'navigation.system', path: '/admin/system', icon: Package },
   { labelKey: 'navigation.skills', path: '/admin/skills', icon: BookOpen },
   { labelKey: 'navigation.mcpServers', path: '/admin/mcp-templates', icon: Plug },
   { labelKey: 'navigation.usage', path: '/admin/usage', icon: Waypoints, children: true },
@@ -114,7 +113,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
               >
                 <Icon className="mr-2 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
                 <span className="min-w-0 truncate">{t(link.labelKey)}</span>
-                {link.path === '/admin/system' && updateAvailable && (
+                {link.path === '/admin/machines' && updateAvailable && (
                   <span className="ml-auto rounded-full bg-[var(--color-brand-tint-bg)] px-2 py-0.5 text-badge font-semibold text-[var(--color-brand-tint-text)]" title={t('navigation.updateAvailable')}>
                     {t('navigation.update')}
                   </span>

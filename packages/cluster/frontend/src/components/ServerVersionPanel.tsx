@@ -1,18 +1,18 @@
 import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useUpdateStatus, type PackageUpdate } from '@/hooks/useSystemVersion'
+import type { PackageUpdate, UpdateStatus } from '@/hooks/useSystemVersion'
 import { parseServerDate } from '@/lib/datetime'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
- * Admin System panel (#546) — shows each tracked package's running
- * version vs the latest on PyPI, with a manual "check for updates"
- * action. Applying an update is intentionally out-of-band: the panel
- * surfaces the exact command rather than running it.
+ * "This server" panel on the Machines page (#546, #888) — shows each
+ * tracked package's running version vs the latest on PyPI, with a manual
+ * "check for updates" action. Applying an update is intentionally
+ * out-of-band: the panel surfaces the exact command rather than running it.
  */
-export default function AdminSystem() {
+export default function ServerVersionPanel({ status }: { status: UpdateStatus }) {
   const { t } = useLocale()
-  const { updates, loading, error, refresh } = useUpdateStatus(true)
+  const { updates, loading, error, refresh } = status
   const checkError = error?.match(/^Check failed \((\d+)\)$/)
   const displayError = checkError
     ? t('admin.system.checkRequestFailed', { status: checkError[1] })
@@ -21,22 +21,22 @@ export default function AdminSystem() {
       : error
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <section aria-labelledby="server-version-heading" className="flex max-w-2xl flex-col gap-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-heading text-[var(--color-foreground)]">{t('admin.system.title')}</h1>
+          <h2 id="server-version-heading" className="text-lead text-[var(--color-foreground)]">{t('admin.machines.serverEntry')}</h2>
           <p className="mt-1 text-sm text-[var(--color-foreground-muted)]">
             {t('admin.system.description')}
           </p>
         </div>
-        <Button onClick={refresh} disabled={loading} className="w-full sm:w-auto lg:shrink-0">
+        <Button onClick={refresh} disabled={loading} className="w-full sm:w-auto sm:shrink-0">
           <RefreshCw className={loading ? 'animate-spin' : ''} />
           {loading ? t('admin.system.checking') : t('admin.system.checkUpdates')}
         </Button>
       </div>
 
       {error && (
-        <p className="text-sm text-[var(--color-danger,#d4442e)]">{displayError}</p>
+        <p className="text-sm text-[var(--color-danger)]">{displayError}</p>
       )}
 
       <div className="flex flex-col gap-3">
@@ -49,7 +49,7 @@ export default function AdminSystem() {
           </p>
         )}
       </div>
-    </div>
+    </section>
   )
 }
 

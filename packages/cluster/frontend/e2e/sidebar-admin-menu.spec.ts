@@ -59,7 +59,7 @@ for (const { name, width, height, mobile } of [
     if (!mobile) {
       await expect(page.getByRole('button', { name: 'Machines' })).toBeFocused()
       await page.keyboard.press('Tab')
-      await expect(page.getByRole('button', { name: 'System' })).toBeFocused()
+      await expect(page.getByRole('button', { name: 'Skills' })).toBeFocused()
       await page.keyboard.press('Shift+Tab')
       await expect(page.getByRole('button', { name: 'Machines' })).toBeFocused()
       await page.keyboard.press('Escape')
