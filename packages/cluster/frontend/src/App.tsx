@@ -27,7 +27,6 @@ const InboxPage = lazy(() => import('@/pages/InboxPage'))
 // before the login form paints.
 const AdminMachinesPage = lazy(() => import('@/pages/AdminMachinesPage'))
 const AdminSkillsPage = lazy(() => import('@/pages/AdminSkillsPage'))
-const AdminSystemPage = lazy(() => import('@/pages/AdminSystemPage'))
 const AdminMCPTemplatesPage = lazy(() => import('@/pages/AdminMCPTemplatesPage'))
 const AdminUsagePage = lazy(() => import('@/pages/AdminUsagePage'))
 const AdminBudgetsPage = lazy(() => import('@/pages/AdminBudgetsPage'))
@@ -110,7 +109,7 @@ export default function App() {
             <Route path="/inbox" element={<ProtectedRoute><Suspense fallback={<RouteFallback label={t('common.loading')} />}><InboxPage /></Suspense></ProtectedRoute>} />
             <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
             <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
-            <Route path="/admin/system" element={<AdminRoute><AdminSystemPage /></AdminRoute>} />
+            <Route path="/admin/system" element={<Navigate to="/admin/machines" replace />} />
             <Route path="/admin/skills" element={<AdminRoute><AdminSkillsPage /></AdminRoute>} />
             <Route path="/admin/mcp-templates" element={<AdminRoute><AdminMCPTemplatesPage /></AdminRoute>} />
             {/* #593 — federated collaboration admin. AdminRoute gates the

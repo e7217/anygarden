@@ -213,7 +213,7 @@ describe('Sidebar — footer admin menu (#699)', () => {
     expect(screen.queryByRole('button', { name: 'Budgets' })).not.toBeInTheDocument()
   })
 
-  it('shows all eight links only after opening the admin settings menu', () => {
+  it('shows all seven links only after opening the admin settings menu', () => {
     authMockState.isAdmin = true
     renderSidebar()
     const trigger = screen.getByRole('button', { name: 'Admin settings' })
@@ -223,9 +223,10 @@ describe('Sidebar — footer admin menu (#699)', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(trigger).toHaveAttribute('aria-controls')
     expect(screen.getByRole('group', { name: 'Admin navigation' })).toBeInTheDocument()
-    for (const name of ['Machines', 'System', 'Skills', 'MCP Servers', 'Usage', 'Budgets']) {
+    for (const name of ['Machines', 'Skills', 'MCP Servers', 'Usage', 'Budgets']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
+    expect(screen.queryByRole('button', { name: 'System' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', {
       name: 'Usage',
     })).toBeInTheDocument()
@@ -265,14 +266,14 @@ describe('Sidebar — footer admin menu (#699)', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('marks the current route and exposes system updates on the closed trigger', () => {
+  it('marks the current route and exposes server updates on the Machines link', () => {
     authMockState.isAdmin = true
     updateMockState.available = true
     renderSidebar('/admin/usage/details')
     const trigger = screen.getByRole('button', { name: 'Admin settings, update available' })
     fireEvent.click(trigger)
     expect(screen.getByRole('button', { name: 'Usage' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('button', { name: /System/ })).toHaveTextContent('update')
+    expect(screen.getByRole('button', { name: /Machines/ })).toHaveTextContent('update')
   })
 })
 
