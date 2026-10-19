@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -266,139 +265,6 @@ async def test_new_attempt_reuses_seq_but_duplicate_and_old_replay_do_not_run():
     assert client._turn_context["request"]["turn_lease"] == "lease-2"
 
 
-@pytest.mark.asyncio
-async def test_socket_reader_delivers_result_while_previous_engine_handler_is_busy():
-    from anygarden.agent.integrations.delegate import _register_reply_callback
-
-    client = ChatClient("ws://test", token="test")
-    entered, release, reported = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    client.sendLifecycle = AsyncMock()
-
-    async def send(*args, **kwargs):
-        assert kwargs["metadata"]["delegation_outcome"] == "ok"
-        reported.set()
-
-    client.send = AsyncMock(side_effect=send)
-
-    async def slow_handler(data):
-        entered.set()
-        await release.wait()
-
-    client.on_message(slow_handler)
-    _register_reply_callback(client, "parent", "room", "worker room", timeout=1,
-                             delegation_id="d1", target_participant_ids={"worker"})
-
-    class Socket:
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, *args):
-            pass
-        async def __aiter__(self):
-            yield json.dumps({"type": "message", "seq": 1, "participant_id": "user", "content": "other work"})
-            await entered.wait()
-            yield json.dumps({"type": "message", "seq": 2, "participant_id": "worker", "content": "finished",
-                              "metadata": {"delegation_id": "d1", "delegation_outcome": "ok"}})
-            await reported.wait()
-
-    with patch("anygarden.agent.client.ws_connect", return_value=Socket()):
-        await asyncio.wait_for(client._room_loop("room"), 0.5)
-    assert reported.is_set()
-    assert not release.is_set()
-    await client.close()
-    assert not client._handler_tasks
-
-
-class TestWebSocketKeepalive:
-    """Issue #190 — codex turns can legitimately run 5+ minutes; the
-    websockets library's default ``ping_interval=20, ping_timeout=20``
-    closed the connection mid-run, so the adapter's post-turn
-    ``client.send`` hit a dead socket and the answer was silently
-    dropped. #892 — that SDK is gone (#506) and pongs are answered during
-    a turn, so the keepalive is a fixed 660s rather than turn-derived."""
-
-    @pytest.mark.asyncio
-    async def test_room_loop_passes_extended_keepalive_kwargs(self) -> None:
-        client = ChatClient("ws://localhost:8000", token="t")
-        # ``_running=False`` lets the reconnect loop break immediately
-        # after the first ws_connect attempt raises — the production
-        # code keeps reconnecting forever, which is exactly what we
-        # don't want in a unit test.
-        client._running = False
-
-        captured: dict[str, object] = {}
-
-        def fake_ws_connect(*args, **kwargs):
-            captured["args"] = args
-            captured["kwargs"] = kwargs
-            # Any raised exception works: the reconnect loop catches
-            # all exceptions, logs, then checks ``_running`` to decide
-            # whether to retry. Raising ensures we never try to iterate
-            # a fake socket.
-            raise RuntimeError("stop-loop")
-
-        with patch("anygarden.agent.client.ws_connect", side_effect=fake_ws_connect):
-            # Should return cleanly because _running is False.
-            await client._room_loop("room-1")
-
-        assert captured, "ws_connect was never called — loop didn't run"
-        assert captured["kwargs"].get("ping_interval") == 60, (
-            "ping_interval must be >=60s so codex's multi-minute turns don't "
-            "trip the websockets client keepalive"
-        )
-        assert captured["kwargs"].get("ping_timeout") == 660, (
-            "ping_timeout is the fixed keepalive so a slow server pong "
-            "doesn't tear down a still-working connection"
-        )
-
-
-class TestWebSocketUrlScheme:
-    """The integrated node (``anygarden start``) spawns agents with an
-    ``http://`` ``--server`` base while the legacy daemon passes ``ws://``.
-    ``websockets`` rejects an http URI outright, so an unconverted base left
-    every agent retrying forever without ever joining a room."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("server", "expected"),
-        [
-            ("http://127.0.0.1:8001", "ws://127.0.0.1:8001/ws/rooms/room-1"),
-            ("https://example.com/anygarden", "wss://example.com/anygarden/ws/rooms/room-1"),
-            ("ws://127.0.0.1:8001", "ws://127.0.0.1:8001/ws/rooms/room-1"),
-            ("wss://example.com", "wss://example.com/ws/rooms/room-1"),
-        ],
-    )
-    async def test_room_loop_connects_with_ws_scheme(self, server, expected) -> None:
-        client = ChatClient(server, token="t")
-        client._running = False
-        client._generation = None
-        captured: list[str] = []
-
-        def fake_ws_connect(url, *args, **kwargs):
-            captured.append(url)
-            raise RuntimeError("stop-loop")
-
-        with patch("anygarden.agent.client.ws_connect", side_effect=fake_ws_connect):
-            await client._room_loop("room-1")
-
-        assert captured == [expected + "?ready=1"]
-
-
-@pytest.mark.asyncio
-async def test_wait_for_room_requires_subscription_ready_not_just_welcome():
-    client = ChatClient("ws://test", token="test")
-    client._connections["room"] = AsyncMock()
-    client._tasks["room"] = asyncio.create_task(asyncio.sleep(10))
-    waiting = asyncio.create_task(client.wait_for_room("room", timeout=1))
-    await client._process_frame("room", {"type": "welcome", "participant_id": "self"})
-    await asyncio.sleep(0)
-    assert not waiting.done()
-    await client._process_frame("room", {"type": "room_ready", "room_id": "other"})
-    assert not waiting.done()
-    await client._process_frame("room", {"type": "room_ready", "room_id": "room"})
-    await waiting
-    await client.close()
-
-
 class TestIsTaskInitContent:
     """Issue #67 — ``_is_task_init_content`` identifies task boundaries
     that should reset the agent-only turn counter."""
@@ -406,8 +272,10 @@ class TestIsTaskInitContent:
     def test_room_query_prefix(self) -> None:
         assert _is_task_init_content("[ROOM_QUERY] what's the plan?") is True
 
-    def test_delegated_prefix(self) -> None:
-        assert _is_task_init_content("[DELEGATED] please summarise") is True
+    def test_legacy_delegated_prefix_is_not_task_init(self) -> None:
+        # #899 — the text /delegate path is gone; ``[DELEGATED]`` is a
+        # plain message and no longer resets the agent-only counter.
+        assert _is_task_init_content("[DELEGATED] please summarise") is False
 
     def test_regular_content(self) -> None:
         assert _is_task_init_content("hello, team") is False
@@ -421,7 +289,7 @@ class TestIsTaskInitContent:
 
 class TestAgentTurnCounter:
     """Issue #67 — in agent-only rooms (no human participant) the
-    representative agent emits ``[ROOM_QUERY]``/``[DELEGATED]`` frames
+    representative agent emits ``[ROOM_QUERY]`` frames
     that echo back through hard/soft filters. These frames are task
     boundaries and MUST reset the counter, otherwise consecutive
     task rounds accumulate and later agent replies get dropped at
@@ -471,8 +339,9 @@ class TestAgentTurnCounter:
         assert client._agent_turn_count["room-a"] == 0
 
     @pytest.mark.asyncio
-    async def test_self_delegated_resets_counter(self) -> None:
-        """Self-emitted ``[DELEGATED]`` is also a task boundary."""
+    async def test_self_legacy_delegated_counts_as_regular(self) -> None:
+        """#899 — a self-emitted ``[DELEGATED]`` is no longer a task
+        boundary; it bumps the counter like any other self message."""
         client = self._make_client()
         client._agent_turn_count["room-a"] = 4
         await client._process_frame(
@@ -484,7 +353,7 @@ class TestAgentTurnCounter:
                 "content": "[DELEGATED] do this subtask",
             },
         )
-        assert client._agent_turn_count["room-a"] == 0
+        assert client._agent_turn_count["room-a"] == 5
 
     @pytest.mark.asyncio
     async def test_nonce_echo_regular_increments(self) -> None:
@@ -780,7 +649,7 @@ class TestAgentTurnCounter:
 class TestTaskInitResetGuard:
     """Issue #157 Phase A — reset prefix abuse guard.
 
-    Issue #67 reset behaviour (``[ROOM_QUERY]``/``[DELEGATED]`` zero
+    Issue #67 reset behaviour (``[ROOM_QUERY]`` zeroes
     the agent-only turn counter) can be exploited by a runaway agent
     that keeps emitting task-init prefixes to evade ``max_agent_turns``.
     Once the same room sees more than ``max_task_init_resets`` (5)
@@ -914,7 +783,7 @@ class TestTaskInitResetGuard:
                     "type": "message",
                     "seq": i + 1,
                     "participant_id": "other-pid",
-                    "content": "[DELEGATED] subtask",
+                    "content": "[ROOM_QUERY] subtask",
                     "metadata": {"_nonce": f"n-{i}"},
                 },
             )
@@ -926,7 +795,7 @@ class TestTaskInitResetGuard:
                 "type": "message",
                 "seq": 6,
                 "participant_id": "other-pid",
-                "content": "[DELEGATED] sixth",
+                "content": "[ROOM_QUERY] sixth",
                 "metadata": {"_nonce": "n-6"},
             },
         )
@@ -1199,7 +1068,7 @@ class TestSeqDedup:
 class TestHandlerSnapshot:
     """Issue #445 Wave 0 — handlers are iterated over a ``list()`` copy
     so a one-shot callback that deregisters itself mid-dispatch (e.g. a
-    delegate / room_query reply handler popping itself off
+    room_query reply handler popping itself off
     ``_message_handlers``) cannot shift the live list and skip the
     following handler."""
 

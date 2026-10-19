@@ -722,27 +722,6 @@ class TestReviewFixes:
         assert question.root_message_id == trigger["id"]
 
     @pytest.mark.asyncio
-    async def test_delegation_result_is_not_absorbed(self, ws_env) -> None:
-        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
-        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
-
-        with TestClient(app) as client:
-            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 점검")
-            _ask_peer(client, sender_token, room.id, [(peer_pid, "q")])
-            proof = await _proof(sf, sender_pid)
-            _agent_send(client, room.id, sender_token, "위임 결과", {
-                **proof, "delegation_id": "d-1", "delegation_outcome": "ok",
-            })
-
-        group = await _group(sf)
-        assert group.caller_draft is None
-        async with sf() as db:
-            posted = (await db.scalars(
-                select(Message.content).where(Message.participant_id == sender_pid)
-            )).all()
-        assert "위임 결과" in posted
-
-    @pytest.mark.asyncio
     async def test_a_missed_ready_transition_is_repaired_by_the_worker(self, ws_env) -> None:
         """A peer and the caller closing at once can each miss the other's
         write; the worker re-checks every group whose caller is closed."""

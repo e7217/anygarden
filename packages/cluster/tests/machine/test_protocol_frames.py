@@ -36,7 +36,6 @@ class TestSyncDesiredStateFrame:
             files={"config.yaml": "key: value"},
             engine_secrets={"OPENAI_API_KEY": "sk-xxx"},
             reasoning_effort="high",
-            sub_rooms=[{"name": "sub1", "description": "Sub room 1"}],
             restart_policy="restart_on_same_machine",
             max_restarts=5,
             restart_window_seconds=600,
@@ -52,7 +51,6 @@ class TestSyncDesiredStateFrame:
         assert frame.files == {"config.yaml": "key: value"}
         assert frame.engine_secrets == {"OPENAI_API_KEY": "sk-xxx"}
         assert frame.reasoning_effort == "high"
-        assert frame.sub_rooms == [{"name": "sub1", "description": "Sub room 1"}]
         assert frame.restart_policy == "restart_on_same_machine"
         assert frame.max_restarts == 5
         assert frame.restart_window_seconds == 600
@@ -82,10 +80,21 @@ class TestSyncDesiredStateFrame:
         assert frame.files == {}
         assert frame.engine_secrets == {}
         assert frame.reasoning_effort is None
-        assert frame.sub_rooms == []
         assert frame.restart_policy == "restart_anywhere"
         assert frame.max_restarts == 3
         assert frame.restart_window_seconds == 300
+
+    def test_legacy_sub_rooms_field_is_ignored(self):
+        """#899 — an older server still sends ``sub_rooms``; the machine
+        ignores it instead of rejecting the frame."""
+        frame = SyncDesiredStateFrame.model_validate({
+            "agent_id": "agent-legacy",
+            "desired_state": "running",
+            "generation": 1,
+            "sub_rooms": [{"name": "sub1", "description": "Sub room 1"}],
+        })
+        assert frame.agent_id == "agent-legacy"
+        assert not hasattr(frame, "sub_rooms")
 
     def test_type_literal_is_fixed(self):
         frame = SyncDesiredStateFrame(

@@ -167,7 +167,7 @@ _OPERATING_LEAD_WORKFLOW = (
     "검토(QA) 작업은 사용자가 요청했거나 외부 동작 직전에만 추가하세요.\n"
     "담당 서브룸에 업무를 위임할 때 begin_project_execution으로 현재 사용자 요청을 "
     "실행에 연결하고 반환된 subrooms/assignees로 delegate_project_task를 호출하세요. "
-    "도구가 실제 작업을 만들고 입력 자료를 전달합니다. 텍스트 /delegate는 실행이 아닙니다. "
+    "도구가 실제 작업을 만들고 입력 자료를 전달합니다. "
     "모든 필수 담당 작업을 만든 뒤 seal_project_plan으로 계획을 확정하고 담당 결과를 기다리세요. "
     "재개된 실행은 get_project_execution으로 실제 결과를 읽고 필요한 후속 작업을 이어가세요. "
     "담당자가 작업을 막거나(TASK_BLOCKED) 담당자의 엔진 호출이 실패해 멈추면(MODEL_EXECUTION_FAILED) "
@@ -637,7 +637,7 @@ async def integrate_with_codex_cli(
 
 
 def register_room_adapter(client, adapter, engine_name):
-    """Shared policy, delegation, typing and lifecycle handler for room engines.
+    """Shared policy, room-query, typing and lifecycle handler for room engines.
 
     The supervisor puts no time limit on a turn (#892); the engine runtime's
     idle clock and the user's Stop end it. The 2s typing keepalive below is
@@ -669,16 +669,6 @@ def register_room_adapter(client, adapter, engine_name):
                 await client.sendLifecycle(
                     room_id, declined_rid, event="handler_finished", outcome="skipped",
                 )
-            return
-
-        from anygarden.agent.integrations.delegate import (
-            execute_delegate,
-            parse_delegate,
-        )
-
-        delegate = parse_delegate(msg.get("content", ""))
-        if delegate:
-            await execute_delegate(client, msg, delegate)
             return
 
         from anygarden.agent.integrations.room_query import (
@@ -741,7 +731,6 @@ def register_room_adapter(client, adapter, engine_name):
             request_id=request_id,
             run_engine=run_engine,
             thread_root_id=msg.get("root_message_id"),
-            delegation_id=(msg.get("metadata") or {}).get("delegation_id"),
             turn_context={
                 key: value for key, value in (msg.get("metadata") or {}).items()
                 if key in {"turn_attempt", "turn_generation", "turn_lease", "turn_protocol", "turn_idempotency_key", "execution_id", "input_revision"}

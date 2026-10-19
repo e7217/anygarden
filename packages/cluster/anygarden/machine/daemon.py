@@ -903,7 +903,6 @@ class MachineDaemon:
             # Issue #493 — per-agent turn timeout propagated from the sync
             # frame. ``getattr`` keeps pre-#493 in-memory manifests compatible.
             turn_timeout_sec=getattr(manifest, "turn_timeout_sec", None),
-            sub_rooms=list(manifest.sub_rooms),
             # Issue #277 — anygarden self-MCP bearer token from the
             # in-memory cache (manifest on disk strips it for the same
             # reasons engine_secrets are stripped).

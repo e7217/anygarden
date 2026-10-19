@@ -22,7 +22,6 @@ anygarden/agent/
     ├── anthropic.py    # Anthropic API 어댑터
     ├── deep_agents.py  # Deep Agents 어댑터
     ├── openhands.py    # OpenHands 어댑터
-    ├── delegate.py     # /delegate 명령 처리
     └── room_query.py   # /rooms, /join 등 룸 명령 처리
 ```
 

@@ -96,7 +96,6 @@ class SpawnManifest:
     # ``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC`` in the child env when set; ``None``
     # leaves the engine adapter on its global env / hardcoded default.
     turn_timeout_sec: int | None = None
-    sub_rooms: list[dict] = field(default_factory=list)
     # Issue #277 — bearer token for the anygarden self-MCP entry that the
     # cluster baked into ``.codex/config.toml`` (codex) /
     # ``.mcp.json`` (claude-code) / ``.gemini/settings.json`` at frame
@@ -301,32 +300,6 @@ class Spawner:
                 sections.append(f"### `{path}`")
                 sections.append("")
                 sections.append(body.strip())
-
-        # ── Delegation auto-inline ──────────────────────────────
-        if msg.sub_rooms:
-            sections.append("")
-            sections.append("## Delegation")
-            sections.append("")
-            sections.append(
-                "Sub-rooms you can delegate to using /delegate command. "
-                "When a task matches a sub-room's purpose, delegate "
-                "instead of answering directly. Report the result back "
-                "to the current room.\n\n"
-                "IMPORTANT: When you receive a [DELEGATED] task in a "
-                "sub-room, answer the question concisely and STOP. "
-                "Do NOT ask follow-up questions, do NOT suggest next "
-                "steps, do NOT continue the conversation. Just provide "
-                "the answer and finish."
-            )
-            sections.append("")
-            for sr in msg.sub_rooms:
-                name = sr.get("name", "")
-                desc = sr.get("description") or ""
-                if desc:
-                    sections.append(f"- **{name}**: {desc}")
-                else:
-                    sections.append(f"- **{name}**")
-                sections.append(f"  → /delegate {name} <task>")
 
         # ── Memory auto-inline (#237 file-memory convention) ────
         sections.append("")

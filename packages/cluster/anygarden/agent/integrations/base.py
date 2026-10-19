@@ -710,7 +710,7 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     2. Thread replies wake only on a server-derived explicit mention.
        Unmentioned replies become INGEST_ONLY before task-init or
        room-query fallbacks can run.
-    3. For root messages, ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or
+    3. For root messages, ``[ROOM_QUERY]`` prefix or
        ``room_query`` metadata → RESPOND.
     2d. Cycle detection (#157 Phase B) → SKIP when the same
         (sender, content_hash) repeats within a small window.
@@ -854,18 +854,6 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         if re.search(pattern, content, re.IGNORECASE):
             mentioned_me = True
 
-    # Directed delegations execute only on the nominated agent's leased
-    # delivery, including thread requests. Raw broadcasts remain context.
-    if content.startswith("[DELEGATED]") and metadata.get("delegation_target_participant_id"):
-        target = metadata["delegation_target_participant_id"]
-        return (
-            MessagePolicy.RESPOND
-            if target in client._my_participant_ids and f"<@user:{target}>" in content
-            and isinstance(metadata.get("request_id"), str)
-            and isinstance(metadata.get("turn_lease"), str)
-            else MessagePolicy.INGEST_ONLY
-        )
-
     # Thread replies are room-wide context, but only a canonical explicit
     # mention wakes this agent. This precedes every legacy routing fallback.
     if is_thread_reply and not mentioned_me:
@@ -873,8 +861,8 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
             return MessagePolicy.SKIP
         return MessagePolicy.INGEST_ONLY
 
-    # Root-message task-init prefixes retain their legacy eager behaviour.
-    if not is_thread_reply and content.startswith(("[DELEGATED]", "[ROOM_QUERY]")):
+    # Root-message task-init prefix retains its legacy eager behaviour.
+    if not is_thread_reply and content.startswith("[ROOM_QUERY]"):
         return MessagePolicy.RESPOND
 
     # Root-message room_query metadata → only the representative forwards.

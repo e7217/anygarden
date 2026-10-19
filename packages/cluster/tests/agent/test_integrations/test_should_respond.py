@@ -36,29 +36,17 @@ def _make_client(
 
 
 class TestShouldRespond:
-    @pytest.mark.parametrize("target,lease,expected", [
-        ("my-pid-123", "valid-lease", True),
-        ("other-agent", "valid-lease", False),
-        ("my-pid-123", None, False),
-    ])
-    def test_directed_delegation_requires_target_and_durable_delivery(self, target, lease, expected):
-        client = _make_client()
-        metadata = {"delegation_id": "d1", "delegation_target_participant_id": target,
-                    "request_id": "child-request"}
-        if lease:
-            metadata["turn_lease"] = lease
-        msg = {"participant_id": "parent-agent", "content": f"[DELEGATED] <@user:{target}> task", "metadata": metadata}
-        assert should_respond(msg, client) is expected
-
     def test_skip_own_message(self):
         client = _make_client()
         msg = {"participant_id": "my-pid-123", "content": "hello", "metadata": {}}
         assert should_respond(msg, client) is False
 
-    def test_delegated_always_respond(self):
+    def test_legacy_delegated_prefix_is_a_plain_message(self):
+        """#899 — the text /delegate path is gone, so an unaddressed
+        ``[DELEGATED]`` message no longer wakes the agent."""
         client = _make_client()
         msg = {"participant_id": "other", "content": "[DELEGATED] do something", "metadata": {"_nonce": "x"}}
-        assert should_respond(msg, client) is True
+        assert should_respond(msg, client) is False
 
     def test_mentioned_via_user_id_token(self):
         """Frontend autocomplete produces ``<@user:<participant_id>>``
@@ -424,7 +412,7 @@ class TestShouldRespond:
         assert should_respond(msg, client) is True
 
     def test_room_query_prefix_responds(self):
-        """[ROOM_QUERY] prefix triggers response like [DELEGATED]."""
+        """[ROOM_QUERY] prefix triggers a response."""
         client = _make_client()
         msg = {
             "participant_id": "other-agent",
@@ -476,20 +464,20 @@ class TestDecidePolicy:
         }
         assert decide_policy(msg, client) is MessagePolicy.SKIP
 
-    def test_delegated_prefix_beats_ingest_only(self):
-        """[DELEGATED] always means ``do the work``. If both flags
+    def test_room_query_prefix_beats_ingest_only(self):
+        """[ROOM_QUERY] always means ``do the work``. If both flags
         coexist, RESPOND wins — INGEST_ONLY is for passive
         observation, not for silencing actionable tasks."""
         client = _make_client()
         msg = {
             "participant_id": "other",
-            "content": "[DELEGATED] do X",
+            "content": "[ROOM_QUERY] do X",
             "metadata": {"_nonce": "x", "ingest_only": True},
         }
         assert decide_policy(msg, client) is MessagePolicy.RESPOND
 
     def test_direct_mention_beats_ingest_only(self):
-        """Same principle as DELEGATED: addressability wins. A
+        """Same principle as ROOM_QUERY: addressability wins. A
         listener explicitly pinged on a context-tagged broadcast
         should still answer."""
         client = _make_client(my_pids={"alice-pid"})
@@ -790,7 +778,6 @@ class TestThreadReplyPolicy:
     @pytest.mark.parametrize(
         ("content", "metadata"),
         [
-            ("[DELEGATED] hidden wake", {"_nonce": "agent"}),
             ("[ROOM_QUERY] hidden wake", {"_nonce": "agent"}),
             (
                 "room query metadata without a mention",

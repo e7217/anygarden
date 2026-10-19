@@ -285,6 +285,10 @@ class TestMaterializeFresh:
         assert text.startswith("## Memory")
         assert "memory/outbox/<room_id>/" in text
         assert "memory/shared/<room_id>/" in text
+        # #899 — sub-room delegation runs only through the project
+        # execution tools; the guidance never teaches the text command.
+        assert "/delegate" not in text
+        assert "## Delegation" not in text
 
     def test_codex_workspace_links_agents_md_without_agents_md(
         self, spawner: Spawner
