@@ -45,7 +45,7 @@ export default function SidebarCreateAgentDialog({ open, onOpenChange, createAge
     setMachineId(current => onlineMachines.some(m => m.id === current) ? current : onlineMachines[0]?.id ?? null)
   }, [onlineMachines])
 
-  const { data: detail, status: detailStatus } = useMachineDetail(open ? machineId : null, '')
+  const { data: detail, status: detailStatus, refresh: refreshDetail } = useMachineDetail(open ? machineId : null, '')
   const engines = useMemo(() => {
     const deprecated = new Set(availableEngines.filter(e => e.deprecated).map(e => e.engine))
     const list = detail?.engines ?? []
@@ -92,6 +92,7 @@ export default function SidebarCreateAgentDialog({ open, onOpenChange, createAge
       roomsStatus={roomsStatus}
       onRetryRooms={refetchRooms}
       initialRoomIds={initialRoomIds}
+      onEnginesDetected={() => { void refreshDetail() }}
       createAgent={createAgent}
       fetchEngineCatalog={fetchEngineCatalog}
       onCreated={onCreated}

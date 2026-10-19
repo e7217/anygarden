@@ -189,6 +189,15 @@ export const agentSetupEn = {
   'agentSetup.openReportRoom': 'Open report room',
   'agentSetup.roomsSaveFailed': 'Could not update room membership: {{error}}',
   'agentSetup.roomsLoadFailed': 'Rooms could not be loaded. Retry to choose shared rooms.',
+  'agentSetup.engineSetup.title': 'No engine on {{machine}} yet',
+  'agentSetup.engineSetup.body': 'Install one engine on {{machine}} and sign in, then detect again. Both install with npm (Node.js).',
+  'agentSetup.engineSetup.codex': 'Codex',
+  'agentSetup.engineSetup.pi': 'Pi (your own model endpoint)',
+  'agentSetup.engineSetup.copy': 'Copy the {{name}} command',
+  'agentSetup.engineSetup.detect': 'Detect again',
+  'agentSetup.engineSetup.detecting': 'Detecting…',
+  'agentSetup.engineSetup.pending': 'No engine found yet. Preparing Pi for the first time can take a minute or two; try again shortly.',
+  'agentSetup.engineSetup.failed': 'Could not ask the machine to detect. It may be offline.',
 } as const
 
 export const agentSetupKo: Record<keyof typeof agentSetupEn, string> = {
@@ -382,4 +391,13 @@ export const agentSetupKo: Record<keyof typeof agentSetupEn, string> = {
   'agentSetup.openReportRoom': '보고 방 열기',
   'agentSetup.roomsSaveFailed': '소속 방을 변경하지 못했습니다: {{error}}',
   'agentSetup.roomsLoadFailed': '소속 방 목록을 불러오지 못했습니다. 다시 시도해 참여할 방을 선택하세요.',
+  'agentSetup.engineSetup.title': '{{machine}}에 아직 엔진이 없습니다',
+  'agentSetup.engineSetup.body': '{{machine}}에 엔진을 하나 설치하고 로그인한 뒤 다시 감지하세요. 둘 다 npm(Node.js)으로 설치합니다.',
+  'agentSetup.engineSetup.codex': 'Codex',
+  'agentSetup.engineSetup.pi': 'Pi (직접 모델 엔드포인트)',
+  'agentSetup.engineSetup.copy': '{{name}} 명령 복사',
+  'agentSetup.engineSetup.detect': '다시 감지',
+  'agentSetup.engineSetup.detecting': '감지하는 중…',
+  'agentSetup.engineSetup.pending': '아직 감지된 엔진이 없습니다. Pi를 처음 준비할 때는 1~2분 걸릴 수 있으니 잠시 후 다시 시도하세요.',
+  'agentSetup.engineSetup.failed': '머신에 감지를 요청하지 못했습니다. 오프라인일 수 있습니다.',
 }
