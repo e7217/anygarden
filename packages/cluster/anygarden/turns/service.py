@@ -8,11 +8,14 @@ reply at-most-once.
 
 from __future__ import annotations
 
+import inspect
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Literal
 from uuid import uuid4
+
+import structlog
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +39,8 @@ from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import append_message
 from anygarden.rooms.authorization import AGENT_EXECUTION_ROLES
 from anygarden.turns.conversation_context import build_conversation_context
+
+logger = structlog.get_logger(__name__)
 
 ACTIVE_ATTEMPT_STATES = frozenset({"leased", "started"})
 OPEN_TURN_STATES = frozenset({"pending", "leased", "retrying", "completing"})
@@ -771,9 +776,7 @@ async def deliver_pending_outbox(
             turn_id = row.turn_id
             attempt_id = row.attempt_id
             expected_generation = attempt.generation
-            lease_seconds = max(
-                60, int(getattr(agent, "turn_timeout_sec", 0) or 900) + 300
-            )
+            lease_seconds = _turn_lease_seconds(agent)
             if attempt.state not in {"pending", *ACTIVE_ATTEMPT_STATES}:
                 row.state = "cancelled"
                 await db.commit()
@@ -1505,6 +1508,54 @@ async def record_lifecycle(
     return True
 
 
+def _turn_lease_seconds(agent: Any) -> int:
+    """Execution lease of one delivered attempt (renewed while live, #892)."""
+    return max(60, int(getattr(agent, "turn_timeout_sec", 0) or 900) + 300)
+
+
+async def _live_lease_attempts(
+    session_factory: Any, ids: list[str], current: datetime, is_alive: Any
+) -> set[str]:
+    """#892 — attempts whose only recovery cause is an expired lease while
+    their agent still signals the turn (typing keepalive in the room).
+
+    Checked before any write transaction because ``is_alive`` may read the
+    database. A failing check counts as not alive (pre-#892 behaviour).
+    """
+    if not ids:
+        return set()
+    async with session_factory() as db:
+        rows = (await db.execute(
+            select(
+                AgentTurnAttempt.id, AgentTurnAttempt.agent_id, AgentTurn.room_id,
+            )
+            .join(AgentTurn, AgentTurn.request_id == AgentTurnAttempt.turn_id)
+            .join(Agent, Agent.id == AgentTurnAttempt.agent_id)
+            .where(
+                AgentTurnAttempt.id.in_(ids),
+                AgentTurnAttempt.reason.is_(None),
+                Agent.actual_state != "crashed",
+                or_(
+                    Agent.restart_deadline_at.is_(None),
+                    Agent.restart_deadline_at > current,
+                    AgentTurnAttempt.generation != Agent.generation,
+                ),
+            )
+        )).all()
+    alive: set[str] = set()
+    for attempt_id, agent_id, room_id in rows:
+        try:
+            result = is_alive(agent_id, room_id)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:  # noqa: BLE001 — fall back to recovery
+            logger.warning("turn_recovery.is_alive_failed", error=str(exc))
+            continue
+        if result:
+            alive.add(attempt_id)
+    return alive
+
+
 @dataclass(slots=True)
 class RecoveryResult:
     redispatched: int = 0
@@ -1527,11 +1578,18 @@ async def recover_stalled_turns(
     now: datetime | None = None,
     attempt_ids: set[str] | None = None,
     app: Any = None,
+    is_alive: Any = None,
 ) -> RecoveryResult:
     """Fence expired/dead-generation attempts and redispatch at most once.
 
     ``attempt_ids`` scopes recovery to leases fenced by a confirmed shutdown;
     the periodic recovery worker leaves it unset to scan all agents.
+
+    #892 — ``is_alive(agent_id, room_id)`` (sync or async) marks a turn whose
+    agent is still working on it. An attempt whose lease merely ran out
+    while its agent is alive is a long turn, not a stalled one: its lease is
+    renewed instead of fencing and redispatching it. Crashes, restart
+    deadlines and explicit fences (``attempt.reason``) are recovered as before.
     """
 
     current = now or _now()
@@ -1560,6 +1618,11 @@ async def recover_stalled_turns(
             query = query.where(AgentTurnAttempt.id.in_(attempt_ids))
         ids = list((await db.scalars(query)).all())
 
+    live_ids = (
+        await _live_lease_attempts(session_factory, ids, current, is_alive)
+        if is_alive is not None else set()
+    )
+
     notices: list[Any] = []
     for attempt_id in ids:
         async with session_factory() as db:
@@ -1582,6 +1645,16 @@ async def recover_stalled_turns(
                 continue
             agent = await db.get(Agent, attempt.agent_id) if attempt.agent_id else None
             if turn is None or agent is None or turn.state not in OPEN_TURN_STATES:
+                continue
+            if (
+                attempt_id in live_ids
+                and attempt.reason is None
+                and agent.actual_state != "crashed"
+            ):
+                attempt.lease_expires_at = current + timedelta(
+                    seconds=_turn_lease_seconds(agent)
+                )
+                await db.commit()
                 continue
             reason = attempt.reason or "lease_expired"
             if agent.actual_state == "crashed":

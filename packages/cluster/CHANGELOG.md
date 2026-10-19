@@ -104,6 +104,19 @@
 
 ### Changed
 
+- A turn now times out only when the agent goes quiet, not when it has run for
+  a fixed time (#892). The agent's `turn_timeout_sec` (default 600s) is the
+  idle limit: the turn stops when no output or progress arrives for that long.
+  While a shell command or other tool is running, the turn is never idle, so a
+  long silent command (a remote disk clone) runs to the end; stop a stuck one
+  with **Stop**. Nothing else caps a turn's length any more: the agent-side
+  supervisor cap and `ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC` are gone, the
+  WebSocket ping timeout is a fixed 660s (`ANYGARDEN_AGENT_WS_PING_TIMEOUT_SEC`),
+  and the server keeps a turn's lease and skips the orphan sweep while the
+  agent still sends its typing keepalive in the room. The settings field is
+  now called **Idle limit** and accepts 30 to 86400 seconds. Upgrade the server
+  before its agents: an older server still orphans turns after 20 minutes.
+
 - A Pi reply now holds only the text after its last tool work; earlier
   sentences move to the reply's work trace instead of being joined into the
   answer (#880). Codex replies already held only the last message.

@@ -48,7 +48,7 @@ def wired(monkeypatch):
     monkeypatch.setattr(codex_cli, "RoomHandlerSupervisor", _FakeSupervisor)
     client = _FakeClient()
     adapter = AsyncMock()
-    register_room_adapter(client, adapter, "codex-cli", 60)
+    register_room_adapter(client, adapter, "codex-cli")
     return client, adapter
 
 

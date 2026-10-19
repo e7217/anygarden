@@ -77,8 +77,8 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 |---|---|---|
 | ENG-01 | 추적 턴에서 엔진이 빈 응답을 내면 failed로 끝나고 사용자 안내가 나간다. 비추적 턴은 안내하지 않는다 | pytest |
 | ENG-02 | `skipped`는 턴을 `agent_skipped`로 완료하고 재시도하지 않는다 | pytest |
-| ENG-03 | 완료 없이 끝난 lease는 만료 후 최대 1회 재시도된다 | pytest |
-| ENG-04 | 턴 타임아웃 우선순위가 지켜지고 supervisor 타임아웃은 항상 턴보다 길다 | pytest |
+| ENG-03 | 완료 없이 끝난 lease는 만료 후 최대 1회 재시도된다. 에이전트가 typing 신호를 보내는 동안에는 lease를 연장한다 | pytest |
+| ENG-04 | 턴 타임아웃 우선순위가 지켜지고, 턴 타임아웃은 활동 없음 한도로만 적용된다(진행 중이거나 도구가 실행 중인 턴은 시간만으로 끊기지 않는다) | pytest |
 | ENG-05 | 취소된 턴은 재시도하지 않고, 위임 턴이면 취소 안내를 남긴다 | pytest |
 | ENG-06 | 룸 세션은 respawn 후 재개되고, 세션이 없으면 새 턴으로 대체된다 | pytest |
 | ENG-07 | Pi는 관리형 고정 버전으로만 실행된다 (`ANYGARDEN_PI_USE_PATH=1` 제외) | pytest |

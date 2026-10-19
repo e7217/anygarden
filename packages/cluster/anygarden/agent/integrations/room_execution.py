@@ -587,7 +587,7 @@ async def integrate_with_room_execution(
     )
     adapter._client = client
     await adapter.start()
-    register_room_adapter(client, adapter, engine, adapter._turn_timeout)
+    register_room_adapter(client, adapter, engine)
     client._execution_adapter = adapter
     client.execution_launch_ready = True
     return adapter

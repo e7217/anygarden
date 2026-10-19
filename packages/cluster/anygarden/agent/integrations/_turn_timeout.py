@@ -1,16 +1,14 @@
-"""Shared turn-timeout resolution and auto-derivation.
+"""Shared turn-timeout resolution.
 
-Issue #492 — every engine adapter (codex, claude-code, gemini, openhands) caps a
-single turn with ``asyncio.wait_for``. Historically codex/gemini hardcoded the
-cap while claude/openhands read a dedicated env (#483), leaving the override
-surface asymmetric. This module is the single source of truth for:
+Issue #492 made one module the source of truth for the per-engine turn
+timeout, resolved as ``ANYGARDEN_AGENT_<ENGINE>_TURN_TIMEOUT_SEC`` env >>
+hardcoded default.
 
-1. the per-engine turn timeout, resolved as
-   ``ANYGARDEN_AGENT_<ENGINE>_TURN_TIMEOUT_SEC`` env  >>  hardcoded default;
-2. the derived WS ``ping_timeout`` and supervisor ``engine_timeout``, computed
-   from the turn timeout so the invariant ``turn < ping <= supervisor`` holds by
-   construction (raising the turn cap can no longer silently drop a response on
-   the ping deadline or get pre-empted by the supervisor).
+#892 — the value is an **idle** limit: the engine runtime ends a turn that
+shows no activity (no output, no progress, no open tool) for this long. A turn
+that keeps working is never cut by total length, so nothing outside the
+engine runtime derives a cap from it any more: the supervisor ``wait_for`` is
+gone and the WS ``ping_timeout`` is a fixed keepalive (``resolve_ping_timeout``).
 
 A per-agent leg (``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC``, engine-agnostic) takes
 precedence over the per-engine env (#493). The machine spawner injects it into
@@ -35,14 +33,10 @@ _ENGINE_DEFAULTS: dict[str, float] = {
     "codex": 600.0,
 }
 
-# Slack added on top of the turn timeout when deriving the outer layers.
-PING_SLACK = 60.0
-SUP_SLACK = 300.0
-
-# Floors preserve today's behaviour for the common (small-turn) case:
-# ping_timeout never drops below 600s, supervisor never below 900s.
-_PING_FLOOR = 600.0
-_SUP_FLOOR = 900.0
+# #892 — fixed WS keepalive timeout, the value the default (600s) turn
+# already derived. Overridable for unusual networks.
+_PING_TIMEOUT = 660.0
+_PING_ENV = "ANYGARDEN_AGENT_WS_PING_TIMEOUT_SEC"
 
 
 def resolve_turn_timeout(engine: str) -> float:
@@ -67,22 +61,16 @@ def resolve_turn_timeout(engine: str) -> float:
         raise ValueError(f"unknown engine for turn timeout: {engine!r}") from None
 
 
-def resolve_supervisor_timeout(turn_timeout: float) -> float:
-    """Supervisor ``engine_timeout`` ≥ turn + SUP_SLACK, env floor, and 900s.
+def resolve_ping_timeout() -> float:
+    """WS ``ping_timeout`` for the agent's room sockets.
 
-    The supervisor is the last-resort coroutine cancel; it must stay strictly
-    above the adapter's turn timeout so the engine-side cancellation + room
-    notice runs first.
+    It used to be derived from the turn timeout (#190/#492) because the old
+    SDK codex engine blocked the event loop for the whole turn, so pongs went
+    unanswered and the socket dropped mid-turn. #506 removed that engine; the
+    runtime now runs the CLI as an async subprocess and answers pings during
+    a turn, so the keepalive no longer depends on how long a turn runs.
     """
-    env_floor = float(os.environ.get("ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC", "900"))
-    return max(turn_timeout + SUP_SLACK, env_floor, _SUP_FLOOR)
-
-
-def resolve_ping_timeout(turn_timeout: float) -> float:
-    """WS ``ping_timeout`` ≥ turn + PING_SLACK and 600s.
-
-    If the ping timeout is below the turn timeout the socket closes mid-turn and
-    the response is silently dropped (#190); deriving it from the turn timeout
-    keeps it safely above.
-    """
-    return max(turn_timeout + PING_SLACK, _PING_FLOOR)
+    value = os.environ.get(_PING_ENV)
+    if value:
+        return float(value)
+    return _PING_TIMEOUT

@@ -119,6 +119,8 @@ class Invocation:
     provider: str | None = None
     reasoning_effort: str | None = None
     permission_level: str = "restricted"
+    # #892 — idle limit: the runtime stops a turn with no output, progress or
+    # open tool for this long (``turn_clock.TurnClock``); never a total cap.
     timeout_seconds: float = 600
     # Caller is the trusted local policy/materialization layer, never a wire payload.
     environment: dict[str, str] = field(default_factory=dict, repr=False)

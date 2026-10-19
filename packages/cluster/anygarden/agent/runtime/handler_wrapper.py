@@ -18,10 +18,12 @@ end-to-end request tracing:
     engine_call_finished  (with outcome: ok | failed | timeout | cancelled)
     handler_finished      (with the terminal outcome)
 
-Every engine call is wrapped in ``asyncio.wait_for(..., engine_timeout)``
-so a stuck subprocess surfaces as ``outcome=timeout`` rather than
-leaving the handler hung forever (the failure mode that swamped
-the production agent with typing pings in #204).
+The supervisor puts no time limit on an engine call (#892). A turn ends
+when the engine finishes or fails, when the engine runtime's idle clock
+fires (surfaced as ``EngineTimeoutError`` -> ``outcome=timeout``), or when
+the user stops it. A wall-clock cap here used to cut long but active turns;
+a stuck subprocess with no activity is still caught by the idle clock, and
+a stuck open tool by Stop.
 
 Design reference: docs/plans/2026-04-20-agent-observability-design.md
 §4 "Agent-side concurrency and timeout".
@@ -161,11 +163,10 @@ class EngineError(Exception):
 
 
 class EngineTimeoutError(EngineError):
-    """An adapter-level turn timeout (e.g. codex ``_CODEX_TURN_TIMEOUT``).
+    """An adapter-level turn timeout -- the engine went idle (#892).
 
-    Mapped to ``outcome=timeout`` rather than ``failed`` so adapter
-    timeouts are indistinguishable from the supervisor's own
-    ``wait_for`` timeout in the event log.
+    Mapped to ``outcome=timeout`` rather than ``failed`` so the event log
+    and the room notice tell a silent turn apart from a crashed one.
     """
 
 
@@ -297,13 +298,11 @@ class RoomHandlerSupervisor:
         self,
         client: Any,
         engine_name: str,
-        engine_timeout: float,
         *,
         outbox_dir: Path | None = None,
     ) -> None:
         self._client = client
         self._engine = engine_name
-        self._timeout = engine_timeout
         # #854 — ``memory/outbox``; files written there during a turn are
         # attached to its reply. ``None`` disables attachments.
         self._outbox_dir = outbox_dir
@@ -525,9 +524,8 @@ class RoomHandlerSupervisor:
                 if turn_key in self._cancelled_turns:
                     # A stop raced the lifecycle awaits above.
                     engine_task.cancel()
-                raw = await asyncio.wait_for(
-                    engine_task, timeout=self._timeout
-                )
+                # #892 — no wall-clock cap; see the module docstring.
+                raw = await engine_task
                 response, prompt = _normalize_engine_result(raw)
                 io_capture = isinstance(raw, EngineTurn)
                 if io_capture:
@@ -539,9 +537,6 @@ class RoomHandlerSupervisor:
                     cost_usd = raw.cost_usd
                     usage_metadata = raw.usage_metadata
                     execution_trace = raw.execution_trace
-            except asyncio.TimeoutError:
-                outcome = "timeout"
-                error = f"engine exceeded {self._timeout}s"
             except EngineTimeoutError as exc:
                 if exc.turn is not None:
                     native_proof = exc.turn.native_proof()

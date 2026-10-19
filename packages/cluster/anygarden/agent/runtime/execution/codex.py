@@ -18,6 +18,7 @@ import structlog
 from .contracts import Capabilities, Invocation, RuntimeResult
 from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
 from .failure_feedback import CodexFailureTracker, stderr_tail
+from .turn_clock import TurnClock
 from .usage import SOURCE, TOKEN_KEYS, counters
 
 logger = structlog.get_logger(__name__)
@@ -29,6 +30,8 @@ _FAILURES: ContextVar[CodexFailureTracker | None] = ContextVar("codex_failures",
 # Bounded stderr tail of the running CLI — local diagnosis only.
 _STDERR_TAIL: ContextVar[bytearray | None] = ContextVar("stderr_tail", default=None)
 _STDERR_KEEP = 2048
+# #892 — the turn's idle clock; every stdout line from the CLI is activity.
+_TURN_CLOCK: ContextVar[TurnClock | None] = ContextVar("codex_turn_clock", default=None)
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
@@ -132,6 +135,9 @@ def _emit_activity(emit, kind: str, activity: str, item: dict) -> None:
     if activity == "file_change":
         # A failed patch changed nothing; a completed one counts its files.
         if item.get("status") == "failed":
+            # Still the end of the tool for the idle clock (#892).
+            if (clock := _TURN_CLOCK.get()) is not None:
+                clock.tool_ended()
             return
         changes = item.get("changes")
         count = len(changes) if isinstance(changes, list) and changes else 1
@@ -292,6 +298,11 @@ class CodexRuntime:
 
             stderr_task = asyncio.create_task(drain_stderr())
             failures = CodexFailureTracker()
+            # #892 — ``timeout_seconds`` is an idle limit, not a turn cap.
+            clock = TurnClock(
+                invocation.timeout_seconds, asyncio.get_running_loop().time
+            )
+            emit = clock.wrap(emit)
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
                 launched(proc.pid)
@@ -301,23 +312,29 @@ class CodexRuntime:
                     token = _MEASURED_USAGE.set(measured)
                     tail_token = _STDERR_TAIL.set(errors)
                     failures_token = _FAILURES.set(failures)
+                    clock_token = _TURN_CLOCK.set(clock)
                     try:
                         return await self._collect(
                             proc, invocation, session_handle, output, emit, authorized
                         )
                     finally:
+                        _TURN_CLOCK.reset(clock_token)
                         _FAILURES.reset(failures_token)
                         _STDERR_TAIL.reset(tail_token)
                         _MEASURED_USAGE.reset(token)
 
                 stream = asyncio.create_task(collect())
-                deadline = (
-                    asyncio.get_running_loop().time() + invocation.timeout_seconds
-                )
                 while not stream.done():
                     tree.observe()
-                    remaining = deadline - asyncio.get_running_loop().time()
+                    remaining = clock.remaining()
                     if remaining <= 0:
+                        logger.warning(
+                            "execution.idle_timeout",
+                            engine=ENGINE,
+                            idle=invocation.timeout_seconds,
+                            elapsed=round(clock.elapsed(), 1),
+                            open_tools=clock.open_tools,
+                        )
                         raise TimeoutError
                     await asyncio.wait({stream}, timeout=min(0.05, remaining))
                 result = stream.result()
@@ -408,7 +425,10 @@ class CodexRuntime:
         failures = _FAILURES.get() or CodexFailureTracker()
         measured = _MEASURED_USAGE.get()
         usage = measured if measured is not None else {}
+        clock = _TURN_CLOCK.get()
         while line := await proc.stdout.readline():
+            if clock is not None:
+                clock.touch()
             try:
                 event = json.loads(line)
             except (ValueError, UnicodeDecodeError):

@@ -500,6 +500,58 @@ async def test_expired_lease_retries_once_then_fails_with_one_notice(turn_env) -
         assert turn.terminal_reason == "retry_exhausted"
 
 
+async def _expire_lease(env, request_id, now):
+    async with env["factory"]() as db:
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )
+        attempt.lease_expires_at = now - timedelta(seconds=1)
+        await db.commit()
+
+
+@pytest.mark.req("ENG-03")
+@pytest.mark.asyncio
+async def test_expired_lease_of_a_live_turn_is_renewed_not_retried(turn_env) -> None:
+    """#892 — a turn whose agent is still typing in the room is long, not
+    stuck: its lease is renewed instead of redispatching the turn."""
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    now = datetime.now(timezone.utc)
+    await _expire_lease(turn_env, request_id, now)
+    seen = []
+
+    async def is_alive(agent_id, room_id):
+        seen.append((agent_id, room_id))
+        return True
+
+    result = await recover_stalled_turns(
+        turn_env["factory"], manager, now=now, is_alive=is_alive
+    )
+    assert (result.redispatched, result.failed, result.cancelled) == (0, 0, 0)
+    assert seen == [(turn_env["agent"], turn_env["room"])]
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )
+        assert turn.retry_count == 0 and turn.state not in {"failed", "retrying"}
+        assert attempt.state == "leased"
+        expires = attempt.lease_expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        assert expires > now
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_retries_once_the_agent_goes_quiet(turn_env) -> None:
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    now = datetime.now(timezone.utc)
+    await _expire_lease(turn_env, request_id, now)
+    result = await recover_stalled_turns(
+        turn_env["factory"], manager, now=now, is_alive=lambda *_: False
+    )
+    assert result.redispatched == 1
+
+
 @pytest.mark.asyncio
 async def test_old_attempt_completion_is_fenced_after_redispatch(turn_env) -> None:
     request_id, _, manager = await _create_and_deliver(turn_env)

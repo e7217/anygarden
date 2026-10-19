@@ -104,6 +104,34 @@ if prompt == "safe-stall":
     event({"type": "message_start", "message": {"role": "assistant", "content": []}})
     event({"type": "message_update", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": "Work"}]}})
     time.sleep(60)
+def finish():
+    usage = {"input": 3, "output": 1, "totalTokens": 4}
+    event({"type": "message_start", "message": {"role": "assistant", "content": [{"type": "text", "text": "answer"}], "usage": usage}})
+    event({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "answer"}], "usage": usage, "stopReason": "stop"}})
+    event({"type": "turn_end"})
+    event({"type": "agent_settled"})
+    sys.exit(0)
+if prompt == "chatty":
+    # #892 — keeps reporting progress for longer than the idle limit.
+    for _ in range(12):
+        event({"type": "message_update", "message": {"role": "assistant", "content": []}, "assistantMessageEvent": {"type": "text_delta", "delta": "x"}})
+        time.sleep(0.1)
+    finish()
+if prompt == "tool-silent":
+    # #892 — a long command prints nothing while it runs.
+    event({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {}})
+    time.sleep(1.0)
+    event({"type": "tool_execution_end", "toolCallId": "t1", "toolName": "bash", "result": "", "isError": False})
+    finish()
+if prompt == "failed-edit-stall":
+    # A failed edit emits no "completed" activity; it must not pin the turn.
+    event({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "edit", "args": {}})
+    event({"type": "tool_execution_end", "toolCallId": "t1", "toolName": "edit", "result": "", "isError": True})
+    time.sleep(60)
+if prompt == "tool-done-stall":
+    event({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {}})
+    event({"type": "tool_execution_end", "toolCallId": "t1", "toolName": "bash", "result": "", "isError": False})
+    time.sleep(60)
 if prompt in {"tool-stall", "toolcall-stall"}:
     if prompt == "tool-stall":
         event({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {}})
@@ -495,7 +523,10 @@ def test_unsupported_detail_without_observed_version(tmp_path):
     ("prompt", "reason", "transient"),
     [
         ("stall", "TIMEOUT_STOPPED", True),
-        ("tool-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
+        # #892 — a tool that ran (even a failed edit) and then silence.
+        ("tool-done-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
+        ("failed-edit-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
+        # A tool call the engine never started is not an open tool.
         ("toolcall-stall", "TIMEOUT_AFTER_SIDE_EFFECT", False),
         # Fail closed (EXE-10): only known side-effect-free events keep a
         # timeout transient; any unrecognised event type may be an effect.
@@ -516,6 +547,36 @@ async def test_timeout_is_transient_only_before_any_tool(
         receipt, _ = await done(m)
         assert (receipt.outcome, receipt.reason) == ("failed", reason)
         assert terminal_failure_category(receipt.outcome, receipt.reason)[1] is transient
+    finally:
+        await m.close()
+
+
+@pytest.mark.req("ENG-04")
+@pytest.mark.parametrize("prompt", ["chatty", "tool-silent"])
+async def test_active_turn_outlives_the_idle_limit(
+    tmp_path, invocation, executable, prompt
+):
+    """#892 — progress or an open tool keeps a turn past its idle limit."""
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt=prompt, timeout_seconds=0.5))
+        receipt, _ = await done(m)
+        assert (receipt.outcome, receipt.reason) == ("succeeded", "completed")
+        assert receipt.text == "answer"
+    finally:
+        await m.close()
+
+
+async def test_stalled_open_tool_waits_for_stop(tmp_path, invocation, executable):
+    """#892 — a silent open tool never idles out; Stop cleans it up."""
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt="tool-stall", timeout_seconds=0.3))
+        await asyncio.sleep(1.0)
+        assert m._store.get(invocation.execution_id).outcome is None
+        await m.cancel(invocation.execution_id)
+        receipt, _ = await done(m)
+        assert (receipt.outcome, receipt.process_state) == ("cancelled", "stopped")
     finally:
         await m.close()
 
