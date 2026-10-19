@@ -5,6 +5,7 @@ import { EntityAvatar, type AvatarKind, type EntityKind } from '@/components/Ent
 import type { PresenceMap } from '@/hooks/useParticipantPresence'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import { Select } from '@/components/ui/select'
 
 interface Props {
   participants: Record<string, Participant>
@@ -30,6 +31,13 @@ interface Props {
    *  own confirmation flow).
    */
   onRemove?: (participantId: string) => Promise<void> | void
+  /** #897 — the room's representative agent. Every viewer sees it as
+   *  a badge on that agent's row. */
+  representativeAgentId?: string | null
+  /** #897 — when provided (admins), a labelled picker above the list
+   *  sets or clears the representative. Moved here from the room
+   *  header: it is a role of one participant, like owner/admin. */
+  onSetRepresentative?: (agentId: string | null) => Promise<void> | void
 }
 
 /**
@@ -49,6 +57,8 @@ export default function ParticipantListPopover({
   myParticipantId,
   anchorRight = true,
   onRemove,
+  representativeAgentId,
+  onSetRepresentative,
 }: Props) {
   const { t } = useLocale()
   const { confirm } = useFeedback()
@@ -71,6 +81,11 @@ export default function ParticipantListPopover({
       return a.display_name.localeCompare(b.display_name)
     })
   }, [participants])
+
+  const agents = useMemo(
+    () => sorted.filter((p) => p.kind === 'agent' && p.agent_id),
+    [sorted],
+  )
 
   useEffect(() => {
     if (!open) return
@@ -95,12 +110,13 @@ export default function ParticipantListPopover({
     <div
       ref={rootRef}
       className={
-        'absolute top-12 z-40 w-64 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg [--presence-ring:var(--color-surface-elevated)] ' +
+        'absolute top-12 z-40 w-72 max-w-[calc(100vw-2rem)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg [--presence-ring:var(--color-surface-elevated)] ' +
         (anchorRight ? 'right-4' : 'left-4')
       }
       // ``role="dialog"`` would contract us into the APG-specified
       // focus-trap territory. The popover is a simple one-shot list
-      // with no interactive descendants, so ``role="group"`` is the
+      // whose few controls (representative picker, remove) close on
+      // Escape like the rest, so ``role="group"`` is the
       // honest semantic — screen readers announce it as a labelled
       // group and keyboard users can Tab through without getting
       // trapped.
@@ -110,6 +126,24 @@ export default function ParticipantListPopover({
       <div className="border-b border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-foreground-muted)]">
         {t(sorted.length === 1 ? 'participants.countOne' : 'participants.countMany', { count: sorted.length })}
       </div>
+      {onSetRepresentative && agents.length > 0 && (
+        <label className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 text-caption text-[var(--color-foreground-muted)]">
+          <span className="shrink-0">{t('participants.representativeLabel')}</span>
+          <Select
+            value={representativeAgentId ?? ''}
+            onChange={(e) => void onSetRepresentative(e.target.value || null)}
+            className="h-[var(--control-icon-size)] flex-1 px-2 text-sm"
+          >
+            <option value="">{t('chat.noRepresentative')}</option>
+            {agents.map((p) => (
+              <option key={p.agent_id} value={p.agent_id!}>
+                {p.display_name}
+                {(presence?.[p.id]?.online ?? Boolean(p.online)) ? '' : t('chat.offlineSuffix')}
+              </option>
+            ))}
+          </Select>
+        </label>
+      )}
       <ul className="max-h-80 overflow-y-auto py-1">
         {sorted.map((p) => {
           const isMe = p.id === myParticipantId
@@ -176,6 +210,14 @@ export default function ParticipantListPopover({
                 ) : null}
               </span>
               <span className="ml-auto flex shrink-0 items-center gap-1">
+                {p.kind === 'agent' && !!representativeAgentId && p.agent_id === representativeAgentId && (
+                  <span
+                    className="rounded-[var(--radius-sm)] bg-[var(--color-brand-tint-bg)] px-1.5 py-0 text-badge font-normal uppercase tracking-wide text-[var(--color-brand-tint-text)]"
+                    data-testid={`participant-representative-${p.id}`}
+                  >
+                    {t('participants.representative')}
+                  </span>
+                )}
                 {p.kind === 'agent' && (
                   <span className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0 text-badge font-normal uppercase tracking-wide text-[var(--color-foreground-muted)]">
                     {t('participants.agent')}

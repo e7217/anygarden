@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Select } from '@/components/ui/select'
 import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -32,36 +32,27 @@ interface DmAgent {
   avatar_value?: string | null
 }
 
-interface AgentParticipant {
-  id: string
-  agent_id: string
-  display_name: string
-  /** #54 — surfaced so the representative dropdown can append
-   *  "(offline)" for agents that don't currently have a WS
-   *  subscription. Optional: legacy callers that omit it keep
-   *  working; the label simply reads the bare name. */
-  online?: boolean
-}
+/** #897 — how long the socket may be down before the header says so.
+ *  Every room switch starts disconnected and the first reconnect waits
+ *  1s, so a shorter window would flash the badge on ordinary use. */
+const DISCONNECT_GRACE_MS = 2000
 
 interface RoomHeaderProps {
   roomName: string
   connected: boolean
   participantCount?: number
-  /** #54 — "n/N agents online". Rendered next to the Connected
-   *  badge when both are supplied. ``agentsOnline`` can exceed
-   *  ``agentsTotal`` briefly during reconnects; we clamp on display. */
+  /** #54/#897 — agent liveness. Only offline agents surface, as a
+   *  mark on the participants button. ``agentsOnline`` can exceed
+   *  ``agentsTotal`` briefly during reconnects; we clamp. */
   agentsOnline?: number
   agentsTotal?: number
   parentBreadcrumb?: ParentBreadcrumb[]
-  representativeAgentId?: string | null
-  agentParticipants?: AgentParticipant[]
   /** True when the current room is a 1:1 DM with an agent. Drives
    *  the left-glyph swap from #-hash to an engine avatar. */
   isDm?: boolean
   /** The agent whose identity the DM carries. Only consulted when
    *  ``isDm`` is true. */
   dmAgent?: DmAgent
-  onSetRepresentative?: (agentId: string | null) => void
   onManageAgents?: () => void
   onManageWorkspaces?: () => void
   onCreateSubRoom?: () => void
@@ -105,15 +96,14 @@ interface RoomHeaderProps {
 /**
  * Room header.
  *
- * Layout is split into three zones:
+ * Layout is one row with two zones (#897):
  * - Left: breadcrumb + room name. Always visible.
- * - Right-status: participant count (toggles the list popover) and
- *   the connection badge. Always visible so a user can tell at a
- *   glance "who's here" and "am I connected" without a click.
- * - Right-controls: representative agent select (when available —
- *   it doubles as a read-out of the current representative) and a
- *   single ``…`` overflow menu that holds the admin mutation
- *   actions: Sub-room / Edit / Invites / Manage agents / Stop All.
+ * - Right: participant count (toggles the list popover, which also
+ *   shows and sets the representative agent), the DM ephemeral toggle,
+ *   search, a single ``…`` overflow menu for the admin mutation
+ *   actions, and the context-rail toggle. Status is shown only when it
+ *   needs attention: a warning mark on the participant count while an
+ *   agent is offline, and a badge once the socket stays disconnected.
  *
  * The overflow menu replaces the five inline icon-buttons we had
  * before. See ``RoomSettingsMenu`` for the grouping rationale — in
@@ -128,11 +118,8 @@ export default function RoomHeader({
   agentsOnline,
   agentsTotal,
   parentBreadcrumb,
-  representativeAgentId,
-  agentParticipants,
   isDm,
   dmAgent,
-  onSetRepresentative,
   onManageAgents,
   onManageWorkspaces,
   onCreateSubRoom,
@@ -157,15 +144,34 @@ export default function RoomHeader({
     ? parentBreadcrumb![parentBreadcrumb!.length - 1]
     : null
 
+  const agentsOffline =
+    agentsTotal !== undefined && agentsOnline !== undefined
+      ? Math.max(0, agentsTotal - Math.min(agentsOnline, agentsTotal))
+      : 0
+  const agentsOfflineLabel = agentsOffline > 0
+    ? t(agentsOffline === 1 ? 'chat.agentsOfflineOne' : 'chat.agentsOfflineMany', { count: agentsOffline })
+    : null
+
+  const [showDisconnected, setShowDisconnected] = useState(false)
+  useEffect(() => {
+    if (connected) {
+      setShowDisconnected(false)
+      return
+    }
+    const timer = setTimeout(() => setShowDisconnected(true), DISCONNECT_GRACE_MS)
+    return () => clearTimeout(timer)
+  }, [connected])
+  const disconnectedBadge = !connected && showDisconnected
+
   return (
     // Container query, not a viewport breakpoint: opening the thread
     // panel narrows this column while the viewport is unchanged, so
     // ``sm:``/``lg:`` cannot see the squeeze that collapsed the title.
     <div data-testid="room-header" className="@container/header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-      {/* Use the chat column's width, which also changes when the context
-          rail or thread panel opens. On narrow columns, controls keep the
-          first row and status moves below the room title. */}
-      <div className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1 gap-y-1 px-2 py-1.5 md:px-4 @[54rem]/header:grid-cols-[minmax(0,1fr)_auto_auto]">
+      {/* #897 — one row: title on the left, everything else on the
+          right. Status only appears when it needs attention, so it no
+          longer needs a second row on narrow columns. */}
+      <div className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1 px-2 py-1.5 md:px-4">
       <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
         {onOpenSidebar && (
           <Button
@@ -209,7 +215,7 @@ export default function RoomHeader({
         )}
         <h1 className="min-w-0 truncate text-base font-semibold tracking-[-0.015em] text-[var(--color-foreground)]" title={roomName}>{roomName}</h1>
       </div>
-      <div className="col-span-2 row-start-2 flex min-w-0 items-center gap-2 overflow-hidden pl-1 @[54rem]/header:col-span-1 @[54rem]/header:col-start-2 @[54rem]/header:row-start-1 @[54rem]/header:pl-0">
+      <div className="col-start-2 row-start-1 flex shrink-0 items-center gap-1">
         {participantCount !== undefined && (
           onToggleParticipants ? (
             <button
@@ -218,13 +224,26 @@ export default function RoomHeader({
               // ``hover:bg-[var(--color-surface-hover)] cursor-pointer`` matches the
               // project-wide ghost-button convention recorded in
               // docs/history/STATUS.md (PR #31/#32).
-              className="text-caption text-[var(--color-foreground-muted)] flex h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] shrink-0 items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer"
-              aria-label={t('chat.showParticipants', { count: participantCount })}
-              title={t('chat.showParticipantsTitle')}
+              className="relative text-caption text-[var(--color-foreground-muted)] flex h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] shrink-0 items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer"
+              aria-label={
+                agentsOfflineLabel
+                  ? `${t('chat.showParticipants', { count: participantCount })}, ${agentsOfflineLabel}`
+                  : t('chat.showParticipants', { count: participantCount })
+              }
+              title={agentsOfflineLabel ?? t('chat.showParticipantsTitle')}
               data-testid="room-header-participants-toggle"
             >
               <Users className="h-4 w-4" />
               <span>{participantCount}</span>
+              {agentsOfflineLabel && (
+                /* #897 — the shape (a ringed dot on the icon) and the
+                   accessible name carry the signal, not the amber alone. */
+                <span
+                  aria-hidden="true"
+                  data-testid="room-header-agents-offline"
+                  className="absolute right-0.5 top-0.5 size-2 rounded-full bg-[var(--color-warning)] ring-2 ring-[var(--color-surface)]"
+                />
+              )}
             </button>
           ) : (
             <div className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1 whitespace-nowrap">
@@ -232,27 +251,6 @@ export default function RoomHeader({
               <span>{participantCount}</span>
             </div>
           )
-        )}
-        {/* Representative agent stays inline — it's a combined
-            read-out + control, and users scanning the header want
-            to know the current representative without opening a
-            menu. */}
-        {onSetRepresentative && agentParticipants && agentParticipants.length > 0 && (
-          <Select
-            value={representativeAgentId ?? ''}
-            onChange={(e) => onSetRepresentative(e.target.value || null)}
-            className="h-[var(--control-icon-size)] max-w-40 flex-1 border-[var(--color-border)] px-2 text-sm @[54rem]/header:w-36 @[54rem]/header:flex-none"
-            title={t('chat.setRepresentative')}
-            aria-label={t('chat.setRepresentative')}
-          >
-            <option value="">{t('chat.noRepresentative')}</option>
-            {agentParticipants.map((ap) => (
-              <option key={ap.agent_id} value={ap.agent_id}>
-                {ap.display_name}
-                {ap.online === false ? t('chat.offlineSuffix') : ''}
-              </option>
-            ))}
-          </Select>
         )}
         {isDm && onToggleEphemeral !== undefined && (
           /* #237 — active uses the design system's teal action token;
@@ -280,24 +278,11 @@ export default function RoomHeader({
             )}
           </button>
         )}
-        <Badge variant={connected ? 'success' : 'destructive'} aria-label={connected ? t('chat.connected') : t('chat.disconnected')}>
-          <span className="hidden sm:inline">{connected ? t('chat.connected') : t('chat.disconnected')}</span>
-          <span className="sm:hidden">{connected ? '●' : '○'}</span>
-        </Badge>
-        {agentsTotal !== undefined && agentsTotal > 0 && agentsOnline !== undefined && (
-          /* #54 — surface agent liveness count alongside the server
-             connection badge. Clamped in case of brief
-             online>total reconnection races. */
-          <span
-            className="text-caption shrink-0 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0.5 text-[var(--color-foreground-muted)]"
-            title={t('chat.agentsOnlineTitle', { online: agentsOnline, total: agentsTotal })}
-            data-testid="room-header-agent-liveness"
-          >
-            {t('chat.agentsOnline', { online: Math.min(agentsOnline, agentsTotal), total: agentsTotal })}
-          </span>
+        {disconnectedBadge && (
+          <Badge variant="destructive" data-testid="room-header-connection" role="status">
+            {t('chat.disconnected')}
+          </Badge>
         )}
-      </div>
-      <div className="col-start-2 row-start-1 flex shrink-0 items-center gap-0.5 @[54rem]/header:col-start-3">
         {onSearch && (
           /* #329 Phase 4 — direct search icon hidden below sm so the
              header strip stays uncluttered on phones. The same

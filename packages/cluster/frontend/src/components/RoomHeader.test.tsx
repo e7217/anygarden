@@ -7,7 +7,7 @@
 // either component surfaces a failure instead of silently re-enabling
 // hidden controls.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
 import RoomHeader from './RoomHeader'
@@ -19,7 +19,10 @@ vi.mock('@/components/EntityAvatar', () => ({
   EntityAvatar: () => null,
 }))
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 function renderHeader(
   overrides: Partial<React.ComponentProps<typeof RoomHeader>> = {},
@@ -30,13 +33,7 @@ function renderHeader(
     participantCount: 3,
     agentsOnline: 1,
     agentsTotal: 2,
-    representativeAgentId: 'a1',
-    agentParticipants: [
-      { id: 'p1', agent_id: 'a1', display_name: 'Agent 1', online: true },
-      { id: 'p2', agent_id: 'a2', display_name: 'Agent 2', online: false },
-    ],
     isDm: false,
-    onSetRepresentative: vi.fn(),
     onManageAgents: vi.fn(),
     onCreateSubRoom: vi.fn(),
     onEditRoom: vi.fn(),
@@ -61,9 +58,6 @@ describe('RoomHeader — full controls baseline', () => {
   it('renders every control when all handlers are provided', () => {
     renderHeader()
     expect(screen.getByTestId('room-header-participants-toggle')).toBeInTheDocument()
-    expect(screen.getByTestId('room-header-agent-liveness')).toBeInTheDocument()
-    // representative select is the only <select> in the header
-    expect(screen.getByTitle('Set representative agent')).toBeInTheDocument()
     // overflow trigger is always rendered as long as at least one
     // action handler is supplied — verify by opening it below.
     openSettingsMenu()
@@ -81,20 +75,57 @@ describe('RoomHeader — undefined-prop hides the corresponding control', () => 
     renderHeader({ participantCount: undefined, onToggleParticipants: undefined })
     expect(screen.queryByTestId('room-header-participants-toggle')).toBeNull()
   })
+})
 
-  it('hides the agents N/N badge when agentsTotal or agentsOnline is undefined', () => {
-    renderHeader({ agentsTotal: undefined, agentsOnline: undefined })
+describe('RoomHeader — only signals that need attention (#897)', () => {
+  it('[ROOM-10] keeps the representative pick and the agent count out of the header', () => {
+    renderHeader()
     expect(screen.queryByTestId('room-header-agent-liveness')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
   })
 
-  it('hides the representative select when onSetRepresentative is undefined', () => {
-    renderHeader({ onSetRepresentative: undefined })
-    expect(screen.queryByTitle('Set representative agent')).toBeNull()
+  it('[ROOM-10] shows no connection badge while connected', () => {
+    renderHeader({ connected: true })
+    expect(screen.queryByTestId('room-header-connection')).toBeNull()
   })
 
-  it('hides the representative select when agentParticipants is empty', () => {
-    renderHeader({ agentParticipants: [] })
-    expect(screen.queryByTitle('Set representative agent')).toBeNull()
+  it('[ROOM-10] shows the disconnected badge only once the outage outlasts the grace period', () => {
+    vi.useFakeTimers()
+    renderHeader({ connected: false })
+    expect(screen.queryByTestId('room-header-connection')).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    expect(screen.getByTestId('room-header-connection')).toHaveTextContent('Disconnected')
+  })
+
+  it('hides the badge again when the connection comes back', () => {
+    vi.useFakeTimers()
+    const { rerender } = renderHeader({ connected: false })
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    expect(screen.getByTestId('room-header-connection')).toBeInTheDocument()
+    rerender(
+      <MemoryRouter>
+        <RoomHeader roomName="general" connected participantCount={3} />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('room-header-connection')).toBeNull()
+  })
+
+  it('[ROOM-10] marks the participants button when an agent is offline', () => {
+    renderHeader({ agentsOnline: 1, agentsTotal: 2 })
+    const toggle = screen.getByTestId('room-header-participants-toggle')
+    expect(toggle).toHaveAccessibleName(/1 agent offline/)
+    expect(screen.getByTestId('room-header-agents-offline')).toBeInTheDocument()
+  })
+
+  it('leaves the participants button plain when every agent is online', () => {
+    renderHeader({ agentsOnline: 2, agentsTotal: 2 })
+    const toggle = screen.getByTestId('room-header-participants-toggle')
+    expect(toggle).not.toHaveAccessibleName(/offline/)
+    expect(screen.queryByTestId('room-header-agents-offline')).toBeNull()
   })
 })
 

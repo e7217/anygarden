@@ -176,13 +176,15 @@ test.describe('right slot geometry', () => {
     })
   }
 
-  test('the line holds when the room header wraps onto two rows', async ({ page }) => {
-    // 1280px with both sidebars open leaves the chat column under the
-    // header's 54rem single-row threshold.
+  test('the room header stays on one row when both sidebars squeeze the chat column', async ({ page }) => {
+    // 1280px with both sidebars open leaves the chat column narrow. Until
+    // #897 the header wrapped its status onto a second row here; status
+    // now appears only when it needs attention, so the header keeps one
+    // row and the rail line still holds.
     await page.setViewportSize({ width: 1280, height: 800 })
     await openRoom(page)
     const headerBox = await roomHeader(page).boundingBox()
-    expect(headerBox!.height).toBeGreaterThan(60)
+    expect(headerBox!.height).toBeLessThanOrEqual(60)
     expect(Math.abs((await bottom(railHeader(page))) - headerBox!.y - headerBox!.height))
       .toBeLessThanOrEqual(0.5)
   })
