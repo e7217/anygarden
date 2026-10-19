@@ -28,7 +28,8 @@ Base URL: `/api/v1`
 | POST | `/agents` | 에이전트 생성 |
 | PUT | `/agents/{id}` | 에이전트 수정 |
 | DELETE | `/agents/{id}` | 에이전트 삭제 |
-| POST | `/agents/{id}/start` | 에이전트 시작 |
+| POST | `/agents/{id}/start` | 에이전트 시작 (배치된 머신 유지, 머신이 삭제된 에이전트는 409) |
+| PUT | `/agents/{id}/machine` | 실행 머신 변경. 서버는 배치된 에이전트를 스스로 옮기지 않으므로 유일한 이동 경로 (#907) |
 | POST | `/agents/{id}/stop` | 에이전트 중지 |
 | PUT | `/agents/{id}/files` | 에이전트 파일(manifest) 업데이트 |
 

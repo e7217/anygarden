@@ -25,9 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from anygarden.agent_availability import (
+    CRASH_LOOP,
     CRASHED,
     ENGINE_MISMATCH,
     INVALID_PROVIDER,
+    MACHINE_BUSY,
+    MACHINE_REMOVED,
     NO_MACHINE_FOR_ENGINE,
     NO_ROOM,
     SPAWN_FAILED,
@@ -352,7 +355,8 @@ class AgentLifecycle:
                     )
                     agent.actual_state = "pending"
                     agent.desired_state = "running"
-                    agent.placed_on_machine_id = None
+                    # #907 — keep any placement: adding a room later must
+                    # restart on the same machine, not wherever is free.
                     agent.pid = None
                     agent.lifecycle_lease_token = None
                     agent.lifecycle_lease_expires_at = None
@@ -363,6 +367,18 @@ class AgentLifecycle:
                     )
                     _mark_unavailable(agent, NO_ROOM, None)
                     await db.commit()
+                    return
+
+                if (
+                    agent.placed_on_machine_id is None
+                    and agent.unavailable_code == MACHINE_REMOVED
+                ):
+                    # #907 — its machine was deleted. Picking another one is
+                    # an explicit admin move, never an automatic placement.
+                    logger.info(
+                        "lifecycle.start_waiting_for_machine_choice",
+                        agent_id=agent_id,
+                    )
                     return
 
                 retry_same_generation = bool(
@@ -442,6 +458,26 @@ class AgentLifecycle:
                     # already placed this same agent. Never erase that winner.
                     await db.refresh(agent)
                     if agent.placed_on_machine_id and agent.actual_state in CAPACITY_STATES:
+                        return
+                    if agent.placed_on_machine_id:
+                        # #907 — the placed machine is connected but cannot
+                        # take the agent (capacity). Wait on it; releasing
+                        # the placement would let any machine adopt it.
+                        logger.warning(
+                            "lifecycle.placed_machine_busy",
+                            agent_id=agent_id,
+                            machine_id=agent.placed_on_machine_id,
+                        )
+                        agent.actual_state = "pending"
+                        agent.last_crash_reason = (
+                            "the agent's machine has no capacity left"
+                        )
+                        _mark_unavailable(
+                            agent,
+                            MACHINE_BUSY,
+                            {"machine_id": agent.placed_on_machine_id},
+                        )
+                        await db.commit()
                         return
                     logger.warning(
                         "lifecycle.no_machine",
@@ -1180,7 +1216,12 @@ class AgentLifecycle:
         reason: str,
         generation: int | None = None,
     ) -> None:
-        """Machine relinquishes one fenced generation before replacement."""
+        """Stop a crash-looping agent on the machine that gave up on it (#907).
+
+        Older daemons send this frame when their crash budget for a
+        ``restart_anywhere`` agent is spent. The placement is kept: the
+        server never picks another machine on its own.
+        """
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
@@ -1222,7 +1263,7 @@ class AgentLifecycle:
                 return
 
             current_generation = int(agent.generation or 0)
-            released = await db.execute(
+            stopped = await db.execute(
                 update(Agent)
                 .where(
                     Agent.id == agent_id,
@@ -1230,23 +1271,28 @@ class AgentLifecycle:
                     Agent.generation == current_generation,
                 )
                 .values(
-                    placed_on_machine_id=None,
+                    # #907 — the machine gave up after its crash budget. Stay
+                    # on this machine and stop; moving is an admin decision.
+                    desired_state="stopped",
+                    actual_state="crashed",
                     pid=None,
-                    actual_state="pending",
                     last_crash_reason=reason,
                     lifecycle_lease_token=None,
                     lifecycle_lease_expires_at=None,
-                    lifecycle_delivery_state="released",
+                    lifecycle_delivery_state="stopped",
+                    unavailable_code=CRASH_LOOP,
+                    unavailable_detail={"reason": reason, "machine_id": machine_id},
+                    unavailable_since=datetime.now(timezone.utc),
                 )
                 .execution_options(synchronize_session=False)
             )
-            if released.rowcount != 1:
+            if stopped.rowcount != 1:
                 await db.rollback()
                 return
             db.add(
                 ActivityLog(
                     agent_id=agent_id,
-                    event_type="replacement_requested",
+                    event_type="agent_crash_loop_stopped",
                     details={
                         "machine_id": machine_id,
                         "generation": current_generation,
@@ -1257,13 +1303,11 @@ class AgentLifecycle:
             await db.commit()
 
         logger.info(
-            "lifecycle.replacement_requested",
+            "lifecycle.crash_loop_stopped",
             agent_id=agent_id,
             machine_id=machine_id,
             reason=reason,
         )
-        # Re-place on a (possibly different) machine.
-        await self.request_start(agent_id)
 
     async def send_sync_batch(self, machine_id: str) -> None:
         """Send a ``sync_batch`` containing all agents placed on *machine_id*."""

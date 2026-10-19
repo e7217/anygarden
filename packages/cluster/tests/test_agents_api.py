@@ -2539,3 +2539,176 @@ class TestAgentEngineChange:
     async def test_unknown_agent_404(self, agents_env):
         response = await self._change(agents_env, "missing", {"engine": "codex-cli"})
         assert response.status_code == 404
+
+
+class TestAgentMachineChange:
+    """#907 — moving an agent to another machine is an explicit admin action."""
+
+    @pytest_asyncio.fixture
+    async def two_machines(self, agents_env):
+        env = agents_env
+
+        class FakeWS:
+            async def send_text(self, data: str) -> None:
+                pass
+
+        async with env["factory"]() as db:
+            target = Machine(
+                name="target-machine", hostname="host-target",
+                owner_user_id=env["admin"].id, status="online", max_agents=10,
+            )
+            offline = Machine(
+                name="offline-machine", hostname="host-offline",
+                owner_user_id=env["admin"].id, status="offline", max_agents=10,
+            )
+            db.add_all([target, offline])
+            await db.flush()
+            db.add_all([
+                MachineEngine(machine_id=target.id, engine="echo"),
+                MachineEngine(machine_id=offline.id, engine="echo"),
+            ])
+            agent = Agent(
+                name="mover", engine="echo", placed_on_machine_id=env["machine"].id,
+                desired_state="running", actual_state="running", pid=77, generation=4,
+            )
+            db.add(agent)
+            await db.commit()
+            ids = {"target": target.id, "offline": offline.id, "agent": agent.id}
+        await env["bus"].register(ids["target"], FakeWS())
+        return ids
+
+    async def _move(self, env, agent_id, machine_id, token=None):
+        return await env["client"].put(
+            f"/api/v1/agents/{agent_id}/machine",
+            json={"machine_id": machine_id},
+            headers={"Authorization": f"Bearer {token or env['token']}"},
+        )
+
+    @pytest.mark.req("AGT-10")
+    @pytest.mark.asyncio
+    async def test_move_running_agent_restarts_on_target(self, agents_env, two_machines):
+        env = agents_env
+        env["lifecycle"].request_stop = AsyncMock()
+        env["lifecycle"].request_start = AsyncMock()
+
+        response = await self._move(env, two_machines["agent"], two_machines["target"])
+
+        assert response.status_code == 200, response.text
+        assert response.json()["placed_on_machine_id"] == two_machines["target"]
+        env["lifecycle"].request_stop.assert_awaited_once_with(two_machines["agent"])
+        env["lifecycle"].request_start.assert_awaited_once_with(two_machines["agent"])
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, two_machines["agent"])
+            assert agent.placed_on_machine_id == two_machines["target"]
+            log = (await db.scalars(select(ActivityLog).where(
+                ActivityLog.agent_id == agent.id,
+                ActivityLog.event_type == "agent_machine_changed",
+            ))).one()
+            assert log.details["from"] == env["machine"].id
+            assert log.details["to"] == two_machines["target"]
+
+    @pytest.mark.req("AGT-10")
+    @pytest.mark.asyncio
+    async def test_move_stopped_agent_does_not_start_it(self, agents_env, two_machines):
+        env = agents_env
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, two_machines["agent"])
+            agent.desired_state = "stopped"
+            agent.actual_state = "stopped"
+            agent.pid = None
+            await db.commit()
+        env["lifecycle"].request_start = AsyncMock()
+
+        response = await self._move(env, two_machines["agent"], two_machines["target"])
+
+        assert response.status_code == 200, response.text
+        env["lifecycle"].request_start.assert_not_awaited()
+
+    @pytest.mark.req("AGT-10")
+    @pytest.mark.asyncio
+    async def test_move_clears_machine_removed(self, agents_env, two_machines):
+        env = agents_env
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, two_machines["agent"])
+            agent.placed_on_machine_id = None
+            agent.desired_state = "stopped"
+            agent.actual_state = "stopped"
+            agent.unavailable_code = "machine_removed"
+            await db.commit()
+
+        response = await self._move(env, two_machines["agent"], two_machines["target"])
+
+        assert response.status_code == 200, response.text
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, two_machines["agent"])
+            assert agent.unavailable_code is None
+            assert agent.placed_on_machine_id == two_machines["target"]
+
+    @pytest.mark.req("AGT-10")
+    @pytest.mark.asyncio
+    async def test_move_rejections(self, agents_env, two_machines):
+        env = agents_env
+        agent_id = two_machines["agent"]
+        same = await self._move(env, agent_id, env["machine"].id)
+        assert same.status_code == 422
+        offline = await self._move(env, agent_id, two_machines["offline"])
+        assert offline.status_code == 409
+        missing = await self._move(env, agent_id, "no-such-machine")
+        assert missing.status_code == 404
+        forbidden = await self._move(
+            env, agent_id, two_machines["target"], token=env["regular_token"]
+        )
+        assert forbidden.status_code == 403
+        async with env["factory"]() as db:
+            db.add(Machine(
+                name="no-echo", hostname="h", owner_user_id=env["admin"].id,
+                status="online", max_agents=10,
+            ))
+            await db.commit()
+            no_echo = (await db.scalars(select(Machine).where(Machine.name == "no-echo"))).one()
+
+        class FakeWS:
+            async def send_text(self, data: str) -> None:
+                pass
+
+        await env["bus"].register(no_echo.id, FakeWS())
+        unsupported = await self._move(env, agent_id, no_echo.id)
+        assert unsupported.status_code == 409
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, agent_id)
+            assert agent.placed_on_machine_id == env["machine"].id
+
+    @pytest.mark.req("AGT-10")
+    @pytest.mark.asyncio
+    async def test_start_keeps_placement_and_refuses_removed_machine(
+        self, agents_env, two_machines
+    ):
+        env = agents_env
+        agent_id = two_machines["agent"]
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, agent_id)
+            room = Room(project_id=(await db.scalars(select(Project))).first().id, name="r")
+            db.add(room)
+            await db.flush()
+            db.add(Participant(room_id=room.id, agent_id=agent_id, role="member"))
+            agent.placed_on_machine_id = two_machines["target"]
+            agent.actual_state = "stopped"
+            agent.desired_state = "stopped"
+            await db.commit()
+        env["lifecycle"].request_start = AsyncMock()
+        started = await env["client"].post(
+            f"/api/v1/agents/{agent_id}/start",
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert started.status_code == 200, started.text
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, agent_id)
+            assert agent.placed_on_machine_id == two_machines["target"]
+            agent.placed_on_machine_id = None
+            agent.unavailable_code = "machine_removed"
+            await db.commit()
+        refused = await env["client"].post(
+            f"/api/v1/agents/{agent_id}/start",
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert refused.status_code == 409

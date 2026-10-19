@@ -378,3 +378,49 @@ describe('OverviewPanel engine change (#769)', () => {
     await waitFor(() => expect(changeAgentEngine).toHaveBeenCalledWith('agent_abc123', { engine: 'codex-cli', provider: null, model: null }))
   })
 })
+
+describe('OverviewPanel machine row (#907)', () => {
+  const placed = (overrides: Partial<Agent> = {}) => makeAgent({
+    placed_on_machine_id: 'm1',
+    machine_online: true,
+    placement: { machine_id: 'm1', machine_name: 'iac-agent-machine', machine_hostname: 'h', is_local: false },
+    ...overrides,
+  })
+
+  function renderPanel(agent: Agent, props: Record<string, unknown> = {}) {
+    render(<OverviewPanel agent={agent} updateAgent={vi.fn()} {...props} />)
+  }
+
+  it('shows where the agent runs and offers the move [AGT-10]', () => {
+    renderPanel(placed(), { changeAgentMachine: vi.fn() })
+    expect(screen.getByTestId('overview-machine')).toHaveTextContent('iac-agent-machine')
+    expect(screen.getByTestId('overview-change-machine')).toBeInTheDocument()
+  })
+
+  it('hides the move without a handler', () => {
+    renderPanel(placed())
+    expect(screen.getByTestId('overview-machine')).toHaveTextContent('iac-agent-machine')
+    expect(screen.queryByTestId('overview-change-machine')).not.toBeInTheDocument()
+  })
+
+  it('asks for a machine after its machine was removed [AGT-10]', () => {
+    renderPanel(makeAgent({
+      actual_state: 'stopped',
+      unavailable_reason: { code: 'machine_removed', message: 'The machine was deleted.' },
+    }), { changeAgentMachine: vi.fn() })
+    expect(screen.getByTestId('overview-unavailable-reason')).toHaveTextContent('The machine was deleted.')
+    expect(screen.getByTestId('overview-reason-move')).toBeInTheDocument()
+    expect(screen.getByTestId('overview-change-machine')).toBeInTheDocument()
+  })
+
+  it('restarts a crash-looped agent in place [AGT-10]', () => {
+    const startAgent = vi.fn().mockResolvedValue(undefined)
+    renderPanel(placed({
+      actual_state: 'crashed',
+      unavailable_reason: { code: 'crash_loop', message: 'Stopped after repeated crashes.' },
+    }), { changeAgentMachine: vi.fn(), startAgent })
+    expect(screen.queryByTestId('overview-reason-move')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('overview-reason-start'))
+    expect(startAgent).toHaveBeenCalledWith('agent_abc123')
+  })
+})

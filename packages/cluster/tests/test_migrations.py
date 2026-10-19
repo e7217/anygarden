@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -742,7 +742,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -923,7 +923,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -1025,7 +1025,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1065,7 +1065,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
             sync_engine.dispose()
         finally:
             try:
@@ -1099,7 +1099,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "093_turn_attempt_transient_retry"
+            assert head == "094_sticky_agent_placement"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1201,7 +1201,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "093_turn_attempt_transient_retry"
+                assert version == "094_sticky_agent_placement"
             sync_engine.dispose()
         finally:
             try:
@@ -1794,4 +1794,43 @@ def test_093_marks_only_redispatched_transient_fences_and_downgrades(tmp_path) -
     with engine.connect() as conn:
         columns = {row[1] for row in conn.execute(text("PRAGMA table_info(agent_turn_attempts)"))}
         assert "transient_retry" not in columns
+    engine.dispose()
+
+
+def _insert_agent(conn, agent_id: str, **values) -> None:
+    """Insert a minimal agents row, filling every NOT NULL column without a default."""
+    row: dict[str, object] = {"id": agent_id, **values}
+    for _cid, name, col_type, notnull, default, _pk in conn.execute(
+        text("PRAGMA table_info(agents)")
+    ):
+        if name in row or not notnull or default is not None:
+            continue
+        upper = (col_type or "").upper()
+        row[name] = (
+            0 if "INT" in upper or "BOOL" in upper
+            else "2026-10-19 00:00:00" if "DATE" in upper or "TIME" in upper
+            else f"{name}-{agent_id}"
+        )
+    columns = ", ".join(row)
+    params = ", ".join(f":{key}" for key in row)
+    conn.execute(text(f"INSERT INTO agents ({columns}) VALUES ({params})"), row)
+
+
+@pytest.mark.req("AGT-10")
+def test_094_moves_agents_off_restart_anywhere(tmp_path) -> None:
+    path = str(tmp_path / "sticky.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "093_turn_attempt_transient_retry")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.begin() as conn:
+        _insert_agent(conn, "a1", restart_policy="restart_anywhere")
+        _insert_agent(conn, "a2", restart_policy="stop")
+    command.upgrade(cfg, "094_sticky_agent_placement")
+    with engine.begin() as conn:
+        rows = dict(conn.execute(text("SELECT id, restart_policy FROM agents")).all())
+        assert rows == {"a1": "restart_on_same_machine", "a2": "stop"}
+        _insert_agent(conn, "a3")
+        fresh = conn.execute(text("SELECT restart_policy FROM agents WHERE id='a3'")).scalar_one()
+        assert fresh == "restart_on_same_machine"
+    command.downgrade(cfg, "093_turn_attempt_transient_retry")
     engine.dispose()

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.agent_availability import MACHINE_REMOVED
 from anygarden.api.v1.errors import make_api_error
 from anygarden.auth.dependencies import Identity
 from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
@@ -252,7 +253,6 @@ async def delete_machine(
 
     # Detach remaining agents (placed_on_machine_id has ondelete=SET NULL,
     # but doing it explicitly keeps the operation deterministic).
-    await db.execute(select(Agent).where(Agent.placed_on_machine_id == machine_id))
     for agent in active_agents:
         agent.placed_on_machine_id = None
         agent.actual_state = "stopped"
@@ -260,6 +260,14 @@ async def delete_machine(
         agent.lifecycle_lease_token = None
         agent.lifecycle_lease_expires_at = None
         agent.lifecycle_delivery_state = "released"
+    # #907 — every agent that lived here (active or not) must wait for an
+    # explicit machine choice instead of being adopted by any machine.
+    placed = await db.execute(select(Agent).where(Agent.placed_on_machine_id == machine_id))
+    for agent in {*active_agents, *placed.scalars().all()}:
+        agent.placed_on_machine_id = None
+        agent.unavailable_code = MACHINE_REMOVED
+        agent.unavailable_detail = {"machine_name": machine.name}
+        agent.unavailable_since = datetime.now(timezone.utc)
 
     # Delete tokens, then the machine
     result = await db.execute(

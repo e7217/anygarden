@@ -127,7 +127,7 @@ export default function AdminMachines() {
     pendingIds,
     deleteAgent, updateAgent, fetchAgentFiles, upsertAgentFile, deleteAgentFile,
     fetchAttachedSkills, fetchSkillPreview,
-    availableEngines, changeAgentEngine,
+    availableEngines, changeAgentEngine, changeAgentMachine,
   } = useAgents()
   const { projects, rooms: roomsByProject, fetchAgentDMs, status: roomsStatus, refetch: refetchRooms } = useRooms()
 
@@ -1030,6 +1030,12 @@ export default function AdminMachines() {
         fetchEngineCatalog={fetchEngineCatalog}
         changeAgentEngine={changeAgentEngine}
         availableEngines={availableEngines.map(e => e.engine)}
+        changeAgentMachine={async (id, machineId) => {
+          const updated = await changeAgentMachine(id, machineId)
+          if (selectedId) void fetchDetail(selectedId)
+          return updated
+        }}
+        startAgent={startAgent}
         onRoomsChange={() => selectedId && fetchDetail(selectedId)}
         onDelete={
           settingsAgent

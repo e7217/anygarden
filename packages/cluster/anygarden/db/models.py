@@ -335,7 +335,11 @@ class Agent(Base):
     turn_timeout_sec: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True, default=None
     )
-    restart_policy: Mapped[str] = mapped_column(String(64), default="restart_anywhere")
+    # #907 — ``restart_anywhere`` is legacy; the server never moves a placed
+    # agent to another machine on its own.
+    restart_policy: Mapped[str] = mapped_column(
+        String(64), default="restart_on_same_machine"
+    )
     generation: Mapped[int] = mapped_column(Integer, default=0)
     # PR #581 — durable cross-worker lifecycle ownership. A start/recovery
     # caller must win a compare-and-swap on this opaque token before it may

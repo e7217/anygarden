@@ -140,8 +140,9 @@ class SyncDesiredStateFrame(BaseModel):
     workspace_attachment: dict[str, str | int] | None = None
 
     # Restart policy
+    # ``restart_anywhere`` stays accepted for older servers (#907).
     restart_policy: Literal["stop", "restart_on_same_machine", "restart_anywhere"] = (
-        "restart_anywhere"
+        "restart_on_same_machine"
     )
     max_restarts: int = 3
     restart_window_seconds: int = 300

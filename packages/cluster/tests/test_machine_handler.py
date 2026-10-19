@@ -398,8 +398,8 @@ class TestMachineHandler:
         await bus.unregister(machine.id)
 
     @pytest.mark.asyncio
-    async def test_request_replacement_triggers_restart(self, handler_env) -> None:
-        """handle_request_replacement should reset agent and attempt re-placement."""
+    async def test_request_replacement_stops_on_same_machine(self, handler_env) -> None:
+        """#907 — handle_request_replacement stops the agent in place."""
         factory = handler_env["factory"]
         machine = handler_env["machine"]
         agent = handler_env["agent"]
@@ -428,17 +428,17 @@ class TestMachineHandler:
         finally:
             lifecycle.request_start = original_request_start
 
-        # Agent should have been reset
         async with factory() as db:
             result = await db.execute(select(Agent).where(Agent.id == agent.id))
-            replaced = result.scalar_one()
-            assert replaced.actual_state == "pending"
-            assert replaced.pid is None
-            assert replaced.placed_on_machine_id is None
-            assert replaced.last_crash_reason == "engine OOM"
+            stopped = result.scalar_one()
+            assert stopped.actual_state == "crashed"
+            assert stopped.desired_state == "stopped"
+            assert stopped.pid is None
+            assert stopped.placed_on_machine_id == machine.id
+            assert stopped.last_crash_reason == "engine OOM"
 
-        # request_start should have been called for re-placement
-        assert started_ids == [agent.id]
+        # Never re-placed on another machine.
+        assert started_ids == []
 
     @pytest.mark.asyncio
     async def test_request_replacement_is_generation_fenced(self, handler_env) -> None:
@@ -485,12 +485,13 @@ class TestMachineHandler:
             lifecycle.request_start = original_request_start
 
         async with factory() as db:
-            released = await db.get(Agent, agent.id)
-            assert released is not None
-            assert released.placed_on_machine_id is None
-            assert released.actual_state == "pending"
-            assert released.last_crash_reason == "current crash"
-        assert started_ids == [agent.id]
+            stopped = await db.get(Agent, agent.id)
+            assert stopped is not None
+            assert stopped.placed_on_machine_id == machine.id
+            assert stopped.actual_state == "crashed"
+            assert stopped.desired_state == "stopped"
+            assert stopped.last_crash_reason == "current crash"
+        assert started_ids == []
 
     @pytest.mark.asyncio
     async def test_bus_send_delivers_spawn_frame(self, handler_env) -> None:
