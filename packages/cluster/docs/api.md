@@ -32,6 +32,9 @@ Base URL: `/api/v1`
 | PUT | `/agents/{id}/machine` | 실행 머신 변경. 서버는 배치된 에이전트를 스스로 옮기지 않으므로 유일한 이동 경로 (#907) |
 | POST | `/agents/{id}/stop` | 에이전트 중지 |
 | PUT | `/agents/{id}/files` | 에이전트 파일(manifest) 업데이트. `skills/` 경로는 지침으로 취급되어 실행 머신 디스크에 쓰고 리비전을 남긴다 (#908) |
+| GET | `/agents/{id}/workspace/download?path=` | 작업 파일 내려받기(768 KiB 이하, 초과 시 413) (#908) |
+| POST | `/agents/{id}/workspace/delete` | 작업 파일·폴더 삭제(폴더는 1,000개 항목 이하) (#908) |
+| POST | `/agents/{id}/workspace/rename` | 같은 폴더 안에서 이름 변경. 이름이 겹치면 409 (#908) |
 | GET | `/agents/{id}/instructions/revisions` | 지침(AGENTS.md·스킬) 리비전 목록, 최신 순. 수정 주체(`user`/`agent`/`system`) 포함 (#908) |
 | POST | `/agents/{id}/instructions/revisions/{n}/restore` | 리비전 n을 새 리비전으로 되돌리고 에이전트 재시작. 머신이 오프라인이면 409 (#908) |
 

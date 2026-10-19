@@ -27,9 +27,12 @@ type Props = {
   fileData: ManagedWorkspaceResult | null
   reloadFolder: () => Promise<void>
   reloadFile: (path: string) => Promise<void>
+  /** #908 — when given, the upload button takes several files and hands
+   *  them to the panel (which also handles drag-and-drop and replace). */
+  onUploadFiles?: (files: File[]) => void
 }
 
-export default function ManagedWorkspaceEditor({ agentId, folder, filePath, folderData, fileData, reloadFolder, reloadFile }: Props) {
+export default function ManagedWorkspaceEditor({ agentId, folder, filePath, folderData, fileData, reloadFolder, reloadFile, onUploadFiles }: Props) {
   const { t } = useLocale()
   const [mode, setMode] = useState<'folder' | 'file' | null>(null)
   const [name, setName] = useState('')
@@ -113,10 +116,11 @@ export default function ManagedWorkspaceEditor({ agentId, folder, filePath, fold
         <Button variant="outline" size="sm" className="min-h-11 sm:min-h-8" disabled={busy} onClick={() => { setMode('folder'); setName(''); setError(null) }}><FolderPlus />{t('workspace.managed.newFolder')}</Button>
         <Button variant="outline" size="sm" className="min-h-11 sm:min-h-8" disabled={busy} onClick={() => { setMode('file'); setName(''); setDraft(''); setError(null) }}><FilePlus2 />{t('workspace.managed.newFile')}</Button>
         <Button variant="outline" size="sm" className="min-h-11 sm:min-h-8" disabled={busy} onClick={() => uploadRef.current?.click()}><Upload />{t('workspace.managed.upload')}</Button>
-        <input ref={uploadRef} className="sr-only" type="file" aria-label={t('workspace.managed.upload')} onChange={(event) => {
-          const file = event.target.files?.[0]
+        <input ref={uploadRef} className="sr-only" type="file" multiple={Boolean(onUploadFiles)} aria-label={t('workspace.managed.upload')} onChange={(event) => {
+          const files = Array.from(event.target.files ?? [])
           event.target.value = ''
-          if (file) void upload(file)
+          if (onUploadFiles) onUploadFiles(files)
+          else if (files[0]) void upload(files[0])
         }} />
       </div>
       {mode && <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">

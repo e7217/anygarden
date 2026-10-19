@@ -25,12 +25,23 @@ from anygarden.machine.agent_dir import AgentFilePathError, validate_agent_id
 
 CAPABILITY = "managed_workspace_browse_v1"
 EDIT_CAPABILITY = "managed_workspace_edit_v1"
+# #908 — download, delete and rename; instruction files hidden from the root.
+FILES_CAPABILITY = "managed_workspace_files_v2"
 RECEIPT_NAME = ".anygarden-workspace.json"
 PAGE_SIZE = 200
 SCAN_LIMIT = 10_000
 PREVIEW_BYTES = 64 * 1024
 MAX_UPLOAD_BYTES = 1024 * 1024
 MAX_UPLOAD_ENCODED = 4 * ((MAX_UPLOAD_BYTES + 2) // 3)
+# A download travels back in one machine frame; keep it under the 1 MiB
+# WebSocket envelope after base64 (same bound as room artifacts).
+MAX_DOWNLOAD_BYTES = 768 * 1024
+MAX_DOWNLOAD_ENCODED = 4 * ((MAX_DOWNLOAD_BYTES + 2) // 3)
+MAX_DELETE_ENTRIES = 1000
+# #908 — the agent's instructions are managed in their own section (and
+# synced as instructions), so the work-file browser never shows or touches
+# them at the workspace root.
+INSTRUCTION_NAMES = frozenset({"AGENTS.md", "CLAUDE.md", "skills"})
 SAFE_DOTFILES = frozenset({".gitignore", ".gitattributes", ".editorconfig"})
 PRIVATE_NAMES = frozenset(
     {
@@ -91,6 +102,7 @@ class WorkspaceSnapshot(BaseModel):
     entries: list[WorkspaceEntry] = Field(default_factory=list, max_length=PAGE_SIZE)
     next_cursor: str | None = Field(default=None, max_length=255)
     text: str | None = Field(default=None, max_length=PREVIEW_BYTES)
+    content_base64: str | None = Field(default=None, max_length=MAX_DOWNLOAD_ENCODED)
     preview_status: Literal["text", "binary", "too_large"] | None = None
     sha256: str | None = Field(default=None, min_length=64, max_length=64)
     edit_token: str | None = Field(default=None, min_length=64, max_length=64)
@@ -135,6 +147,8 @@ def path_parts(path: str) -> list[str]:
         for part in parts
     ):
         raise ValueError("unavailable path")
+    if parts[0] in INSTRUCTION_NAMES:
+        raise ValueError("instructions are managed separately")
     return parts
 
 
@@ -195,7 +209,7 @@ def browse(
     agent_id: str,
     generation: int,
     *,
-    operation: Literal["list", "read"] = "list",
+    operation: Literal["list", "read", "fetch"] = "list",
     path: str = "",
     cursor: str | None = None,
     running_generation: int | None = None,
@@ -256,7 +270,16 @@ def browse(
                     path=path,
                     edit_token=_edit_token(receipt),
                 )
-                if operation == "read":
+                if operation == "fetch":
+                    if not parts:
+                        raise ValueError("file required")
+                    with _directory(workspace_fd, parts[:-1]) as parent:
+                        content, _ = _regular_bytes(parent, parts[-1], MAX_DOWNLOAD_BYTES)
+                    if content is None:
+                        result.preview_status = "too_large"
+                    else:
+                        result.content_base64 = base64.b64encode(content).decode("ascii")
+                elif operation == "read":
                     if not parts:
                         raise ValueError("file required")
                     with _directory(workspace_fd, parts[:-1]) as parent:
@@ -283,6 +306,8 @@ def browse(
                                 if private_name(entry.name) or any(
                                     ord(c) < 32 or ord(c) == 127 for c in entry.name
                                 ):
+                                    continue
+                                if not parts and entry.name in INSTRUCTION_NAMES:
                                     continue
                                 if cursor is not None and entry.name <= cursor:
                                     continue
@@ -371,17 +396,60 @@ def _write_atomic(parent: int, name: str, content: bytes, *, create: bool) -> No
             pass
 
 
+def _remove_tree(parent: int, name: str) -> None:
+    """Delete directory ``name`` under ``parent`` without following links.
+
+    Counts first so a huge tree is refused before anything is removed.
+    """
+    def count(directory: int, budget: int) -> int:
+        with os.scandir(directory) as iterator:
+            for entry in iterator:
+                budget -= 1
+                if budget < 0:
+                    raise ValueError("too many entries to delete")
+                if entry.is_dir(follow_symlinks=False):
+                    child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                    try:
+                        budget = count(child, budget)
+                    finally:
+                        os.close(child)
+        return budget
+
+    def remove(directory: int) -> None:
+        with os.scandir(directory) as iterator:
+            entries = list(iterator)
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                try:
+                    remove(child)
+                finally:
+                    os.close(child)
+                os.rmdir(entry.name, dir_fd=directory)
+            else:
+                os.unlink(entry.name, dir_fd=directory)
+
+    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        count(fd, MAX_DELETE_ENTRIES)
+        remove(fd)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=parent)
+
+
 def mutate(
     agents_root: Path,
     agent_id: str,
     generation: int,
     *,
-    operation: Literal["mkdir", "upload", "write"],
+    operation: Literal["mkdir", "upload", "write", "delete", "rename"],
     path: str,
     edit_token: str,
     content_base64: str | None = None,
     text: str | None = None,
     expected_sha256: str | None = None,
+    new_name: str | None = None,
     running_generation: int | None = None,
     running_pid: int | None = None,
     running_started_at: float | None = None,
@@ -416,6 +484,15 @@ def mutate(
             content = base64.b64decode(content_base64, validate=True)
             if len(content) > MAX_UPLOAD_BYTES:
                 result.status = "too_large"
+                return result
+        elif operation in ("delete", "rename"):
+            if content_base64 is not None or text is not None or expected_sha256 is not None:
+                return result
+            if operation == "rename":
+                if new_name is None or "/" in new_name:
+                    return result
+                path_parts(new_name)
+            elif new_name is not None:
                 return result
         elif operation == "write":
             if content_base64 is not None or text is None or expected_sha256 is None:
@@ -468,6 +545,33 @@ def mutate(
             ):
                 name = parts[-1]
                 kind = _existing_kind(parent, name)
+                if operation in ("delete", "rename"):
+                    if kind is None:
+                        result.status = "not_found"
+                        return result
+                    if kind == "blocked":
+                        return result
+                    if operation == "delete":
+                        if kind == "directory":
+                            _remove_tree(parent, name)
+                        else:
+                            os.unlink(name, dir_fd=parent)
+                    else:
+                        if _existing_kind(parent, new_name) is not None:
+                            result.status = "conflict"
+                            return result
+                        os.rename(name, new_name, src_dir_fd=parent, dst_dir_fd=parent)
+                    os.fsync(parent)
+                    return browse(
+                        agents_root,
+                        agent_id,
+                        generation,
+                        operation="list",
+                        path="/".join(parts[:-1]),
+                        running_generation=running_generation,
+                        running_pid=running_pid,
+                        running_started_at=running_started_at,
+                    )
                 if kind == "blocked" or (
                     kind is not None
                     and kind != ("directory" if operation == "mkdir" else "file")

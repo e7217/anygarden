@@ -109,7 +109,7 @@ class MachineBus:
         operation: str, path: str, cursor: str | None = None,
         edit_token: str | None = None, content_base64: str | None = None,
         text: str | None = None, expected_sha256: str | None = None,
-        timeout: float = 5,
+        new_name: str | None = None, timeout: float = 5,
     ) -> dict[str, Any]:
         """Correlate a bounded read query over either owned transport."""
         if len(self._pending) >= 32:
@@ -128,6 +128,7 @@ class MachineBus:
                         "content_base64": content_base64,
                         "text": text,
                         "expected_sha256": expected_sha256,
+                        "new_name": new_name,
                     })
                     if not sent:
                         raise MachineRequestError("offline")

@@ -430,3 +430,83 @@ def test_respawn_materialization_preserves_receipt_and_agent_output(
     )
     assert result.text == "survives"
     assert result.live is False
+
+
+def _token(roots, agent_id="agent-a"):
+    return workspace.browse(roots, agent_id, 2).edit_token
+
+
+@pytest.mark.req("WS-02")
+def test_fetch_returns_bytes_up_to_the_download_limit(managed, monkeypatch):
+    roots, agent = managed
+    (agent / "chart.png").write_bytes(b"\x89PNG\x00data")
+    fetched = workspace.browse(roots, "agent-a", 2, operation="fetch", path="chart.png")
+    assert base64.b64decode(fetched.content_base64) == b"\x89PNG\x00data"
+    monkeypatch.setattr(workspace, "MAX_DOWNLOAD_BYTES", 4)
+    big = workspace.browse(roots, "agent-a", 2, operation="fetch", path="chart.png")
+    assert big.content_base64 is None and big.preview_status == "too_large"
+
+
+@pytest.mark.req("WS-02")
+def test_delete_and_rename(managed):
+    roots, agent = managed
+    (agent / "out").mkdir()
+    (agent / "out" / "a.md").write_text("a")
+    (agent / "out" / "deep").mkdir()
+    (agent / "out" / "deep" / "b.md").write_text("b")
+    (agent / "keep.md").write_text("k")
+
+    renamed = workspace.mutate(roots, "agent-a", 2, operation="rename", path="keep.md",
+                               new_name="kept.md", edit_token=_token(roots))
+    assert renamed.status == "ready"
+    assert (agent / "kept.md").read_text() == "k"
+    clash = workspace.mutate(roots, "agent-a", 2, operation="rename", path="kept.md",
+                             new_name="out", edit_token=_token(roots))
+    assert clash.status == "conflict"
+
+    deleted = workspace.mutate(roots, "agent-a", 2, operation="delete", path="out",
+                               edit_token=_token(roots))
+    assert deleted.status == "ready"
+    assert not (agent / "out").exists()
+    missing = workspace.mutate(roots, "agent-a", 2, operation="delete", path="out",
+                               edit_token=_token(roots))
+    assert missing.status == "not_found"
+
+
+def test_delete_refuses_huge_trees_and_links(managed, monkeypatch, tmp_path):
+    roots, agent = managed
+    (agent / "many").mkdir()
+    for index in range(5):
+        (agent / "many" / f"{index}.txt").write_text("x")
+    monkeypatch.setattr(workspace, "MAX_DELETE_ENTRIES", 3)
+    refused = workspace.mutate(roots, "agent-a", 2, operation="delete", path="many",
+                               edit_token=_token(roots))
+    assert refused.status == "blocked"
+    assert len(list((agent / "many").iterdir())) == 5
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("p")
+    (agent / "link").symlink_to(outside)
+    linked = workspace.mutate(roots, "agent-a", 2, operation="delete", path="link",
+                              edit_token=_token(roots))
+    assert linked.status == "blocked"
+    assert (outside / "precious.txt").exists()
+    bad_name = workspace.mutate(roots, "agent-a", 2, operation="rename", path="many",
+                                new_name="../escape", edit_token=_token(roots))
+    assert bad_name.status == "blocked"
+
+
+@pytest.mark.req("WS-02")
+def test_instruction_files_are_hidden_from_the_work_files(managed):
+    roots, agent = managed
+    (agent / "AGENTS.md").write_text("rules")
+    (agent / "skills").mkdir()
+    (agent / "result.md").write_text("r")
+    listing = workspace.browse(roots, "agent-a", 2)
+    assert [entry.name for entry in listing.entries] == ["result.md"]
+    for path in ("AGENTS.md", "skills/x/SKILL.md"):
+        assert workspace.browse(roots, "agent-a", 2, operation="read", path=path).status == "blocked"
+    write = workspace.mutate(roots, "agent-a", 2, operation="write", path="AGENTS.md",
+                             text="x", expected_sha256="absent", edit_token=_token(roots))
+    assert write.status == "blocked"
+    assert (agent / "AGENTS.md").read_text() == "rules"
