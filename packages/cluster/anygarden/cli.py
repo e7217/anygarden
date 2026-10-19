@@ -351,6 +351,18 @@ class _NodeExitError(click.ClickException):
         settle_standard_streams()
 
 
+_LOOPBACK_OR_ANY = {"127.0.0.1", "0.0.0.0", "::", "::1", "localhost", ""}
+
+
+def _browser_url(host: str, port: int) -> str:
+    """Where a person on this computer opens the UI for a bind address."""
+    if host in _LOOPBACK_OR_ANY:
+        host = "localhost"
+    elif ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
 @dispatch.command(name="start")
 @click.option(
     "--data-dir",
@@ -505,7 +517,17 @@ def start_node(
         config.port = port
     _apply_runtime_env(config.host, config.port, config.db_url, config.log_level)
     app = create_app(config)
-    server = uvicorn.Server(
+    browser_url = _browser_url(config.host, config.port)
+
+    class _NodeServer(uvicorn.Server):
+        async def startup(self, sockets=None) -> None:
+            await super().startup(sockets=sockets)
+            # #902 — right under uvicorn's "running on" line, so a new user
+            # sees where to go instead of a bind address and JSON logs.
+            if self.started:
+                click.echo(f"Open {browser_url} in your browser.")
+
+    server = _NodeServer(
         uvicorn.Config(
             app,
             host=config.host,
