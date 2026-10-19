@@ -5,6 +5,17 @@
 
 ### Fixed
 
+- The server no longer moves an agent to another machine on its own (#907).
+  A crash loop stops the agent on its machine (`crash_loop`), a full machine
+  makes it wait (`machine_busy`), and a restart or a roomless start keeps the
+  placement. Agents of a deleted machine wait for the admin to pick one
+  (`machine_removed`; `POST /agents/{id}/start` answers 409). Moving is now an
+  explicit action: `PUT /agents/{id}/machine` and **Machine → Change** in agent
+  settings, which warns that workspace files and memory stay on the old machine.
+  The default restart policy is `restart_on_same_machine`; migration 094
+  switches existing agents, and `restart_anywhere` is no longer accepted on
+  create.
+
 - An expired peer certificate no longer stops the whole node (#842). `anygarden
   start --peer-port` warns and starts without the federation listener; the node
   APIs answer `CERTIFICATE_EXPIRED` and the connection tab explains how to renew.
