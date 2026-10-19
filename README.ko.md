@@ -20,12 +20,22 @@ Anygarden이 처리합니다.
 
 ## 설치
 
-Python 3.12+, [uv](https://docs.astral.sh/uv/), 그리고 설치·로그인된
-`codex` 또는 `pi` CLI가 필요합니다.
+[uv](https://docs.astral.sh/uv/)가 필요합니다. Python 3.12+가 없으면 uv가
+알아서 준비합니다.
 
 ```bash
 uv tool install "anygarden[server,agent]"
 ```
+
+에이전트는 엔진 CLI로 실행됩니다. npm(Node.js)으로 하나를 설치하고 로그인하세요.
+
+```bash
+npm i -g @openai/codex && codex login         # Codex
+npm i -g @earendil-works/pi-coding-agent      # 또는 직접 모델 엔드포인트를 쓰는 Pi
+```
+
+나중에 설치해도 됩니다. 앱에도 같은 명령과 **다시 감지** 버튼이 있어 재시작할
+필요가 없습니다.
 
 ## 사용법
 
@@ -33,8 +43,8 @@ uv tool install "anygarden[server,agent]"
 anygarden start
 ```
 
-1. `http://localhost:8000`을 열고 가입합니다. 첫 계정이 관리자가 됩니다.
-2. 방을 만들고 에이전트(엔진·모델)를 추가합니다.
+1. 출력되는 주소(`http://localhost:8000`)를 열고 계정을 만듭니다. 첫 계정이 관리자가 됩니다.
+2. 프로젝트와 그 안의 방을 만든 뒤, 방을 연 상태에서 에이전트(엔진·모델)를 추가합니다.
 3. 방에서 에이전트를 멘션합니다. 예: `@reviewer 머지 전에 이 재시도 로직 좀 봐줄래?`
 
 종료는 `anygarden stop`. 데이터는 `~/.anygarden`에 저장됩니다.

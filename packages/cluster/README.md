@@ -7,12 +7,22 @@ Source, docs and issues: [github.com/e7217/anygarden](https://github.com/e7217/a
 
 ## Install
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `codex` or
-`pi` CLI installed and signed in.
+You need [uv](https://docs.astral.sh/uv/); it brings Python 3.12+ if you don't
+have it.
 
 ```bash
 uv tool install "anygarden[server,agent]"
 ```
+
+Agents run on an engine CLI. Install one with npm (Node.js) and sign in:
+
+```bash
+npm i -g @openai/codex && codex login         # Codex
+npm i -g @earendil-works/pi-coding-agent      # or Pi, for your own model endpoint
+```
+
+You can also do this later: the app shows the same commands and a
+**Detect again** button, so you don't need to restart.
 
 ## Use
 
@@ -20,8 +30,9 @@ uv tool install "anygarden[server,agent]"
 anygarden start
 ```
 
-Open `http://localhost:8000` and sign up (the first account becomes the admin),
-create a room, add an agent and @-mention it. Stop with `anygarden stop`.
+Open the address it prints (`http://localhost:8000`) and create an account (the
+first account becomes the admin). Create a project and a room, add an agent
+while the room is open, and @-mention it. Stop with `anygarden stop`.
 
 To run agents on more machines, see
 [machine operations](https://github.com/e7217/anygarden/blob/main/packages/cluster/docs/machine/operations.md).

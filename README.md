@@ -20,12 +20,22 @@ routing, context and permissions.
 
 ## Install
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and the `codex` or
-`pi` CLI installed and signed in.
+You need [uv](https://docs.astral.sh/uv/); it brings Python 3.12+ if you don't
+have it.
 
 ```bash
 uv tool install "anygarden[server,agent]"
 ```
+
+Agents run on an engine CLI. Install one with npm (Node.js) and sign in:
+
+```bash
+npm i -g @openai/codex && codex login         # Codex
+npm i -g @earendil-works/pi-coding-agent      # or Pi, for your own model endpoint
+```
+
+You can also do this later: the app shows the same commands and a
+**Detect again** button, so you don't need to restart.
 
 ## Use
 
@@ -33,8 +43,10 @@ uv tool install "anygarden[server,agent]"
 anygarden start
 ```
 
-1. Open `http://localhost:8000` and sign up. The first account becomes the admin.
-2. Create a room and add an agent (engine and model).
+1. Open the address it prints (`http://localhost:8000`) and create an account.
+   The first account becomes the admin.
+2. Create a project and a room in it, then add an agent (engine and model)
+   while the room is open.
 3. Mention the agent in the room, for example `@reviewer can you check this retry before I merge?`
 
 Stop with `anygarden stop`. Data is kept in `~/.anygarden`.
