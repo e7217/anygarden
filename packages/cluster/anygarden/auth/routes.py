@@ -101,7 +101,24 @@ class MeResponse(BaseModel):
     is_admin: bool
 
 
+class SetupStatusResponse(BaseModel):
+    needs_first_account: bool
+
+
 # ── Endpoints ────────────────────────────────────────────────────────
+
+
+@router.get("/setup", response_model=SetupStatusResponse)
+async def setup_status(db: AsyncSession = Depends(get_db)):
+    """Whether this node still waits for its first (admin) account (#902).
+
+    Public so the login page can open on "Create account" for a fresh node.
+    It reveals nothing new: while no account exists, anyone who can reach
+    the page can already register and become the admin.
+    """
+    has_user = (await db.execute(select(exists(select(User.id))))).scalar()
+    return SetupStatusResponse(needs_first_account=not has_user)
+
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=RegisterResponse)

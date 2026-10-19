@@ -29,6 +29,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | AUTH-07 | 게스트 토큰으로 다른 룸에 접근하면 403. 게스트 JWT는 초대 만료 시각을 넘지 않는다 | pytest |
 | AUTH-08 | 초대를 회수하면 그 초대로 들어온 게스트 세션이 거부된다 | pytest |
 | AUTH-09 | 비멤버가 초대를 만들려 하면 룸 존재 여부와 무관하게 403 (존재 노출 없음) | pytest |
+| AUTH-10 | 계정이 하나도 없는 노드는 공개 `GET /auth/setup`이 `needs_first_account: true`를 반환하고, 로그인 화면이 "계정 만들기" 탭으로 열린다 | pytest, vitest |
 
 ## 프로젝트·룸 (ROOM)
 
