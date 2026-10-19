@@ -16,6 +16,7 @@
     "begin_project_execution",
     "complete_project_execution",
     "delegate_project_task",
+    "delegate_to_subroom",
     "execute_approved_project_action",
     "get_project_execution",
     "publish_project_artifact",

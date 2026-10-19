@@ -61,6 +61,27 @@ PROJECT_TOOL_SCHEMAS = [
         }, [],
     ),
     _tool(
+        "delegate_to_subroom",
+        "Hand ONE task to ONE subroom agent in a single call: begins the execution for "
+        "the request you are answering, delegates the task and seals the plan. Use it "
+        "when one subroom can do the whole job. For several tasks, dependencies, QA, "
+        "approvals or an external release use begin/delegate/seal_project_plan instead. "
+        "subroom (room ID or exact name) and assignee (participant ID or agent name) may "
+        "be omitted only when there is a single candidate; otherwise the call is refused "
+        "with the candidates so you can call again. Repeating the same call returns the "
+        "same task. The result wakes you: end this turn, then report with "
+        "complete_project_execution.",
+        {
+            "spec": {**_string, "maxLength": 100000, "description":
+                     "Concrete assignment: goal, constraints, expected output, completion "
+                     "criteria."},
+            "subroom": {**_string, "description": "Subroom ID or exact name"},
+            "assignee": {**_string, "description": "Participant ID or agent name"},
+            "title": {**_string, "maxLength": 500},
+            "objective": _string,
+        }, ["spec"],
+    ),
+    _tool(
         "delegate_project_task",
         "Create and actually dispatch one task in a descendant subroom of this execution. "
         "Include goal, constraints, expected output and completion criteria in spec. "
@@ -286,6 +307,122 @@ async def _eligible_rooms(db, execution) -> list[dict]:
     return rooms
 
 
+SINGLE_DELEGATION_NOTE = (
+    "Delegated. The result wakes you in the operating room: end this turn now, then "
+    "review the result and report with complete_project_execution."
+)
+
+
+def _choice_conflict(code: str, detail: str, *, subrooms: list, assignees: list):
+    """A refusal the model can retry: it names the candidates to pick from."""
+    from anygarden.project_executions.service import ExecutionConflict
+
+    exc = ExecutionConflict(code, detail)
+    exc.candidates = {"subrooms": subrooms, "assignees": assignees}
+    return exc
+
+
+def _pick(candidates: list[dict], wanted: str | None, keys: tuple[str, ...]) -> list[dict]:
+    if wanted is None:
+        return candidates
+    for key in keys:
+        matches = [item for item in candidates if item[key] == wanted]
+        if matches:
+            return matches
+    return []
+
+
+async def _single_delegation_target(db, execution, *, subroom: str | None,
+                                    assignee: str | None) -> tuple[dict, dict]:
+    """Resolve one subroom and one running assignee, or refuse with candidates."""
+    from anygarden.db.models import Agent
+
+    rooms = await _eligible_rooms(db, execution)
+    agent_ids = {a["agent_id"] for room in rooms for a in room["assignees"]}
+    running = set(await db.scalars(select(Agent.id).where(
+        Agent.id.in_(agent_ids), Agent.desired_state == "running",
+    ))) if agent_ids else set()
+    for room in rooms:
+        room["assignees"] = [a for a in room["assignees"] if a["agent_id"] in running]
+    if subroom is None:
+        matches = [room for room in rooms if room["assignees"]]
+    else:
+        matches = _pick(rooms, subroom, ("room_id", "name"))
+    if len(matches) != 1:
+        if subroom is not None and not matches:
+            code, detail = "SUBROOM_NOT_FOUND", f"No subroom of this operating room is {subroom!r}"
+        elif not matches:
+            code, detail = "SUBROOM_NOT_FOUND", "No subroom has a running agent to take the task"
+        else:
+            code, detail = ("SUBROOM_CHOICE_REQUIRED",
+                            "Several subrooms match; call again with subroom set to one room_id")
+        raise _choice_conflict(code, detail, subrooms=rooms, assignees=[])
+    room = matches[0]
+    picked = _pick(room["assignees"], assignee, ("participant_id", "agent_id", "name"))
+    if len(picked) != 1:
+        if not picked:
+            code = "ASSIGNEE_NOT_FOUND"
+            detail = (f"{assignee!r} is not a running agent of {room['name']}" if assignee
+                      else f"{room['name']} has no running agent to take the task")
+        else:
+            code = "ASSIGNEE_CHOICE_REQUIRED"
+            detail = (f"{room['name']} has several running agents; call again with "
+                      "assignee set to one participant_id")
+        raise _choice_conflict(code, detail, subrooms=rooms, assignees=room["assignees"])
+    return room, picked[0]
+
+
+async def delegate_to_subroom(db, *, agent_id: str, proof, input_files: list[dict], spec: str,
+                              subroom: str | None = None, assignee: str | None = None,
+                              title: str | None = None, objective: str | None = None) -> dict:
+    """Begin, delegate one work task and seal it as the whole plan (#901).
+
+    Runs the same service steps the step-by-step tools do, in the caller's
+    transaction, so a refusal at any step leaves nothing behind.
+    """
+    from anygarden.db.models import Task
+    from anygarden.project_executions import service
+
+    execution = await service.begin_execution(
+        db, agent_id=agent_id, proof=proof, objective=objective,
+        input_files=input_files, requires_qa=False,
+    )
+    single_only = (
+        "This execution already plans several tasks or QA; use delegate_project_task "
+        "and seal_project_plan for it"
+    )
+    if execution.requires_qa or (execution.plan_sealed and len(execution.required_task_ids or []) != 1):
+        raise service.ExecutionConflict("SINGLE_DELEGATION_ONLY", single_only)
+    room, person = await _single_delegation_target(db, execution, subroom=subroom, assignee=assignee)
+    key = "single:" + sha256(
+        f"{execution.id}:{room['room_id']}:{person['participant_id']}".encode()
+    ).hexdigest()[:32]
+    others = await db.scalar(select(Task.id).where(
+        Task.execution_id == execution.id, Task.input_revision == execution.input_revision,
+        Task.id != execution.root_task_id,
+        (Task.delegation_key.is_(None)) | (Task.delegation_key != key),
+    ).limit(1))
+    if others is not None:
+        raise service.ExecutionConflict("SINGLE_DELEGATION_ONLY", single_only)
+    child = await service.delegate_task(
+        db, agent_id=agent_id, proof=proof, execution_id=execution.id,
+        parent_task_id=execution.root_task_id, target_room_id=room["room_id"],
+        assignee_participant_id=person["participant_id"], delegation_key=key,
+        title=(title or " ".join(spec.split())[:80]).strip(), spec=spec, role="work",
+    )
+    if not (execution.plan_sealed and list(execution.required_task_ids or []) == [child.id]):
+        execution = await service.seal_plan(
+            db, agent_id=agent_id, proof=proof, execution_id=execution.id,
+            required_task_ids=[child.id],
+        )
+    return {
+        **execution_payload(execution), "task_id": child.id, "task_status": child.status,
+        "subroom": {"room_id": room["room_id"], "name": room["name"]},
+        "assignee": {"participant_id": person["participant_id"], "name": person["name"]},
+        "note": SINGLE_DELEGATION_NOTE,
+    }
+
+
 def execution_payload(execution) -> dict:
     return {
         "execution_id": execution.id, "root_task_id": execution.root_task_id,
@@ -351,6 +488,11 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
                 )
                 payload = {**execution_payload(execution), "subrooms": await _eligible_rooms(db, execution),
                            "action_targets": action_target_payload(request.app.state.config)}
+            elif name == "delegate_to_subroom":
+                inputs = await _input_files(db, turn.room_id, Path(request.app.state.config.room_files_dir))
+                payload = await delegate_to_subroom(
+                    db, agent_id=agent_id, proof=proof, input_files=inputs, **arguments,
+                )
             elif name == "delegate_project_task":
                 task = await service.delegate_task(db, agent_id=agent_id, proof=proof, **arguments)
                 payload = {
@@ -439,14 +581,18 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
             from anygarden.db.models import Room, Task
             from anygarden.messages.service import fanout_task_event
 
-            task_id = payload.get("task_id") or payload.get("root_task_id")
-            task = await db.get(Task, task_id) if task_id else None
-            if task is not None and name != "read_project_artifact":
-                room = await db.get(Room, task.room_id)
-                await fanout_task_event(
-                    db, manager=getattr(request.app.state, "connection_manager", None),
-                    event="updated", task=task, room_name=room.name if room else "",
-                )
+            task_ids = [payload.get("task_id") or payload.get("root_task_id")]
+            if name == "delegate_to_subroom":
+                # One call changed both the lead's root and the new child.
+                task_ids.insert(0, payload["root_task_id"])
+            for task_id in task_ids:
+                task = await db.get(Task, task_id) if task_id else None
+                if task is not None and name != "read_project_artifact":
+                    room = await db.get(Room, task.room_id)
+                    await fanout_task_event(
+                        db, manager=getattr(request.app.state, "connection_manager", None),
+                        event="updated", task=task, room_name=room.name if room else "",
+                    )
         return {"content": [{"type": "text", "text": str(payload)}], "structuredContent": payload, "isError": False}
     except HTTPException as exc:
         return {"content": [{"type": "text", "text": str(exc.detail)}], "isError": True}
@@ -459,10 +605,12 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
 
             await apply_queued_usage_denials(request.app,
                 denials=dict(db.info.pop("project_execution_usage_denials", {})))
-        if name in {"read_project_artifact", "resume_project_task"} and isinstance(
+        if name in {"read_project_artifact", "resume_project_task", "delegate_to_subroom"} and isinstance(
                 exc, service.ExecutionConflict):
             return {"content": [{"type": "text", "text": f"{exc.code}: {exc.detail}"}],
-                    "structuredContent": {"code": exc.code, "detail": exc.detail}, "isError": True}
+                    "structuredContent": {"code": exc.code, "detail": exc.detail,
+                                          **getattr(exc, "candidates", {})},
+                    "isError": True}
         return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
 
 
