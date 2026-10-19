@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -742,7 +742,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -923,7 +923,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -1025,7 +1025,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1065,7 +1065,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
             sync_engine.dispose()
         finally:
             try:
@@ -1099,7 +1099,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "094_sticky_agent_placement"
+            assert head == "095_agent_instruction_revisions"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1201,7 +1201,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "094_sticky_agent_placement"
+                assert version == "095_agent_instruction_revisions"
             sync_engine.dispose()
         finally:
             try:
@@ -1833,4 +1833,33 @@ def test_094_moves_agents_off_restart_anywhere(tmp_path) -> None:
         fresh = conn.execute(text("SELECT restart_policy FROM agents WHERE id='a3'")).scalar_one()
         assert fresh == "restart_on_same_machine"
     command.downgrade(cfg, "093_turn_attempt_transient_retry")
+    engine.dispose()
+
+
+@pytest.mark.req("AGT-11")
+def test_095_adds_instruction_revisions(tmp_path) -> None:
+    path = str(tmp_path / "instructions.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "094_sticky_agent_placement")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.begin() as conn:
+        _insert_agent(conn, "a1", agents_md="kept")
+    command.upgrade(cfg, "095_agent_instruction_revisions")
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT agents_md, instructions_revision, instructions_synced_at FROM agents"
+        )).one()
+        assert tuple(row) == ("kept", 0, None)
+        conn.execute(text(
+            "INSERT INTO agent_instruction_revisions (id, agent_id, revision, source,"
+            " agents_md, skills, created_at) VALUES ('r1', 'a1', 1, 'agent', 'x', '{}',"
+            " '2026-10-19 00:00:00')"
+        ))
+    command.downgrade(cfg, "094_sticky_agent_placement")
+    with engine.connect() as conn:
+        columns = {r[1] for r in conn.execute(text("PRAGMA table_info(agents)"))}
+        assert "instructions_revision" not in columns
+        assert conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE name='agent_instruction_revisions'"
+        )).first() is None
     engine.dispose()

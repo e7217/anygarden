@@ -153,6 +153,51 @@ class MachineBus:
         future.set_result(data["snapshot"])
         return True
 
+    async def request_instructions(
+        self, machine_id: str, *, agent_id: str, base_revision: int, operation: str,
+        path: str | None = None, text: str | None = None,
+        snapshot: dict[str, Any] | None = None, timeout: float = 10,
+    ) -> dict[str, Any]:
+        """#908 — ask the machine to change an agent's instructions on disk."""
+        if len(self._pending) >= 32:
+            raise MachineRequestError("busy")
+        request_id = str(uuid4())
+        future = asyncio.get_running_loop().create_future()
+        # Generation -1 keeps these replies apart from workspace replies.
+        self._pending[request_id] = (machine_id, agent_id, -1, future)
+        try:
+            try:
+                async with asyncio.timeout(timeout):
+                    sent = await self.send(machine_id, {
+                        "type": "agent_instructions_request", "request_id": request_id,
+                        "agent_id": agent_id, "base_revision": base_revision,
+                        "operation": operation, "path": path, "text": text,
+                        "snapshot": snapshot,
+                    })
+                    if not sent:
+                        raise MachineRequestError("offline")
+                    return await future
+            except TimeoutError as exc:
+                raise MachineRequestError("timeout") from exc
+        finally:
+            self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
+            elif not future.cancelled():
+                future.exception()
+
+    def resolve_instructions(self, machine_id: str, data: dict[str, Any]) -> bool:
+        pending = self._pending.get(data.get("request_id", ""))
+        if pending is None:
+            return False
+        owner, agent_id, generation, future = pending
+        if future.done() or generation != -1 or (owner, agent_id) != (
+            machine_id, data.get("agent_id")
+        ):
+            return False
+        future.set_result(data)
+        return True
+
     def connected_ids(self) -> set[str]:
         """Return the set of currently connected machine IDs."""
         return set(self._connections) | set(self._local)

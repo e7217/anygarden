@@ -217,6 +217,21 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
             lifecycle=lifecycle,
         )
 
+    elif frame_type == "agent_instructions_result":
+        # #908 — reply to a server-initiated instructions write.
+        machine_bus.resolve_instructions(machine_id, data)
+
+    elif frame_type == "agent_instructions_update":
+        # #908 — the agent's instructions changed on its machine's disk.
+        from anygarden.instructions.service import apply_machine_update
+
+        async with session_factory() as db:
+            ack = await apply_machine_update(db, machine_id=machine_id, data=data)
+            if ack is not None and ack["status"] == "accepted":
+                await db.commit()
+        if ack is not None:
+            await machine_bus.send(machine_id, ack)
+
     elif frame_type == "agent_memory_update":
         from anygarden.memory.service import (
             apply_machine_memory_update,

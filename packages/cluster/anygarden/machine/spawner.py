@@ -74,6 +74,8 @@ class SpawnManifest:
     name: str = ""
     agents_md: str | None = None
     files: dict[str, str] = field(default_factory=dict)
+    # #908 — see ``SyncDesiredStateFrame.instructions_revision``.
+    instructions_revision: int | None = None
     engine_secrets: dict[str, str] = field(default_factory=dict)
     endpoint_configured: bool = False
     pi_auth_configured: bool = False
@@ -278,13 +280,41 @@ class Spawner:
         """
         base = (msg.agents_md or "").rstrip()
         sections: list[str] = [base] if base else []
-
-        # ── Skills auto-inline ──────────────────────────────────
-        skill_paths = sorted(
-            path
-            for path in msg.files
+        skill_bodies = {
+            path: body
+            for path, body in msg.files.items()
             if path.startswith("skills/") and path.endswith("/SKILL.md")
-        )
+        }
+        sections.extend(Spawner.platform_section_lines(skill_bodies))
+        sections.append("")
+        return "\n".join(sections).lstrip("\n")
+
+    @staticmethod
+    def render_managed_block(skill_bodies: dict[str, str]) -> str:
+        """#908 — the generated part of a disk-sourced ``AGENTS.md``."""
+        lines = [
+            "## Your instructions file",
+            "",
+            "The text above this block is your own instructions. You may edit "
+            "it, and the files under `skills/`, to record how you should work. "
+            "Your changes are kept across restarts and synced to the server, "
+            "where an admin can see every version and restore an earlier one. "
+            "Do not edit inside this generated block: it is rewritten on every "
+            "start.",
+            *Spawner.platform_section_lines(skill_bodies),
+        ]
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def platform_section_lines(skill_bodies: dict[str, str]) -> list[str]:
+        """Platform sections appended after the instructions.
+
+        ``skill_bodies`` maps ``skills/<name>/SKILL.md`` to its body; they
+        are inlined for engines that cannot discover skills themselves.
+        """
+        sections: list[str] = []
+        # ── Skills auto-inline ──────────────────────────────────
+        skill_paths = sorted(skill_bodies)
         if skill_paths:
             sections.append("")
             sections.append("## Available skills")
@@ -295,7 +325,7 @@ class Spawner:
                 "read them from this section)"
             )
             for path in skill_paths:
-                body = msg.files[path]
+                body = skill_bodies[path]
                 sections.append("")
                 sections.append(f"### `{path}`")
                 sections.append("")
@@ -374,10 +404,7 @@ class Spawner:
             "Same-content re-writes are deduped server-side."
         )
 
-        # Only add trailing newline if we appended extra sections.
-        if len(sections) > 1:
-            sections.append("")
-        return "\n".join(sections).lstrip("\n")
+        return sections
 
     @staticmethod
     def _remove_tree_entry(path: Path) -> None:
@@ -433,6 +460,7 @@ class Spawner:
         cls,
         agent_root: Path,
         managed_session_dir_relpaths: frozenset[str] = frozenset(),
+        keep: frozenset[str] = frozenset(),
     ) -> None:
         """Drop stale managed entries while preserving agent-created output.
 
@@ -446,7 +474,7 @@ class Spawner:
         state, and history survive respawn. All other managed entries keep
         the original whole-entry prune.
         """
-        for name in cls._MATERIALIZER_MANAGED_TOP_LEVEL:
+        for name in cls._MATERIALIZER_MANAGED_TOP_LEVEL - keep:
             entry = agent_root / name
             if (
                 name in cls._SESSION_BEARING_MANAGED
@@ -558,6 +586,62 @@ class Spawner:
             secure_chmod(target.parent, 0o700)
             safe_write_text(target, content, mode=0o600)
 
+    @classmethod
+    def _materialize_instructions(cls, agent_root: Path, msg: SpawnManifest) -> None:
+        """#908 — reconcile the disk-sourced instructions with the snapshot.
+
+        The disk wins unless it was never seeded, or the server holds a
+        newer revision than the one the disk was last synced with (a
+        restore, or a move back to a machine with stale files). Local
+        edits that would be replaced are archived first.
+        """
+        from anygarden.machine import instructions as ins
+
+        revision = msg.instructions_revision or 0
+        snapshot = ins.InstructionSnapshot.of(
+            msg.agents_md,
+            {path: body for path, body in msg.files.items() if path.startswith("skills/")},
+        )
+        agents_path = agent_root / ins.AGENTS_MD
+        if agents_path.is_symlink():
+            agents_path.unlink()
+        receipt = ins.read_receipt(agent_root)
+        user_area: str
+        if not agents_path.exists():
+            # Fresh directory, or a machine the agent was just moved to.
+            if any((agent_root / ins.SKILLS_DIR).iterdir()):
+                ins.archive(agent_root, "seed")
+            ins.write_skills(agent_root, snapshot.skills)
+            user_area = snapshot.agents_md
+            receipt = ins.Receipt(revision, snapshot.digest())
+        elif receipt is None:
+            # First start after the upgrade: AGENTS.md was rendered from the
+            # server copy, and skills were already disk-first.
+            ins.archive(agent_root, "upgrade")
+            cls._seed_manifest_skill_files(agent_root, msg.files)
+            user_area = snapshot.agents_md
+            receipt = ins.Receipt(revision, snapshot.digest())
+        elif receipt.revision < revision:
+            try:
+                modified = ins.collect(agent_root).digest() != receipt.digest
+            except (ins.SnapshotTooLarge, UnicodeDecodeError):
+                modified = True
+            if modified:
+                ins.archive(agent_root, "superseded")
+            ins.write_skills(agent_root, snapshot.skills)
+            user_area = snapshot.agents_md
+            receipt = ins.Receipt(revision, snapshot.digest())
+        else:
+            cls._seed_manifest_skill_files(agent_root, msg.files)
+            try:
+                user_area = ins.split_user_area(ins.read_agents_md(agent_root) or "")
+            except (ins.SnapshotTooLarge, UnicodeDecodeError):
+                log.warning("instructions_unreadable_kept", agent_id=msg.agent_id)
+                return
+        managed = cls.render_managed_block(ins.read_skill_bodies(agent_root))
+        safe_write_text(agents_path, ins.compose(user_area, managed), mode=0o600)
+        ins.write_receipt(agent_root, receipt)
+
     def _materialize_agent_dir(self, msg: SpawnManifest) -> Path:
         """Reconcile the on-disk agent directory with the spawn manifest.
 
@@ -628,7 +712,13 @@ class Spawner:
             {p for p in msg.files if p.startswith(".codex/")}
             | {".codex/config.toml", ".codex/auth.json"}
         )
-        self._prune_materializer_managed_entries(agent_root, managed_codex_relpaths)
+        # #908 — a disk-sourced AGENTS.md is the agent's own file, not a
+        # regenerated control-plane copy.
+        self._prune_materializer_managed_entries(
+            agent_root,
+            managed_codex_relpaths,
+            keep=frozenset() if msg.instructions_revision is None else frozenset({"AGENTS.md"}),
+        )
 
         # --- Write AGENTS.md from manifest -----------------------------
         #
@@ -637,8 +727,12 @@ class Spawner:
         # carrying every skills/*/SKILL.md body. See the helper's
         # docstring for why codex needs this and why claude-code /
         # gemini-cli tolerate the extra content.
-        agents_md = agent_root / "AGENTS.md"
-        safe_write_text(agents_md, self._compose_agents_md(msg), mode=0o600)
+        # #908 — a disk-sourced machine keeps AGENTS.md as the source of
+        # truth and only refreshes its managed block, after the skills
+        # below are in place (see ``_materialize_instructions``).
+        if msg.instructions_revision is None:
+            agents_md = agent_root / "AGENTS.md"
+            safe_write_text(agents_md, self._compose_agents_md(msg), mode=0o600)
 
         # --- Write memory/notes.md (#237) ------------------------------
         #
@@ -700,7 +794,10 @@ class Spawner:
             target.parent.mkdir(parents=True, exist_ok=True)
             secure_chmod(target.parent, 0o700)
             safe_write_text(target, content, mode=0o600)
-        self._seed_manifest_skill_files(agent_root, msg.files)
+        if msg.instructions_revision is None:
+            self._seed_manifest_skill_files(agent_root, msg.files)
+        else:
+            self._materialize_instructions(agent_root, msg)
 
         # --- Synthetic symlinks (engine convention aliases) -----------
         # CLAUDE.md → AGENTS.md (Claude Code auto-discovers CLAUDE.md).

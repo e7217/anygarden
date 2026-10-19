@@ -51,6 +51,46 @@ class AgentMemoryUpdateAckFrame(BaseModel):
     room_memory: RoomMemorySnapshot | None = None
 
 
+class InstructionSnapshotPayload(BaseModel):
+    """#908 — the user area of AGENTS.md and the text files under skills/."""
+
+    agents_md: str = Field(default="", max_length=655360)
+    skills: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentInstructionsAckFrame(BaseModel):
+    """#908 — server answer to a disk instructions snapshot.
+
+    ``accepted`` records ``revision``/``digest`` as the synced state.
+    ``rejected`` carries the server snapshot, which the machine installs
+    after archiving its local copy.
+    """
+
+    type: Literal["agent_instructions_ack"] = "agent_instructions_ack"
+    agent_id: str
+    status: Literal["accepted", "rejected"]
+    revision: int = Field(ge=0)
+    digest: str = Field(max_length=64)
+    snapshot: InstructionSnapshotPayload | None = None
+
+
+class AgentInstructionsRequestFrame(BaseModel):
+    """#908 — server asks the machine to change the instructions on disk.
+
+    ``base_revision`` is the server snapshot the change was made against;
+    the machine refuses (``conflict``) when its disk has moved on.
+    """
+
+    type: Literal["agent_instructions_request"] = "agent_instructions_request"
+    request_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    base_revision: int = Field(ge=0)
+    operation: Literal["write_agents_md", "write_skill", "delete_skill", "replace"]
+    path: str | None = Field(default=None, max_length=512)
+    text: str | None = Field(default=None, max_length=655360)
+    snapshot: InstructionSnapshotPayload | None = None
+
+
 class AgentRoomMemorySnapshotFrame(BaseModel):
     type: Literal["agent_room_memory_snapshot"] = "agent_room_memory_snapshot"
     agent_id: str
@@ -82,6 +122,12 @@ class SyncDesiredStateFrame(BaseModel):
     # Per-agent directory manifest
     agents_md: str | None = None
     files: dict[str, str] = Field(default_factory=dict)
+    # #908 — server revision of the instructions snapshot (``agents_md`` and
+    # the ``skills/`` entries of ``files``). Set only for machines that
+    # advertise ``agent_instructions_disk_v1``: their disk is the source of
+    # truth and the snapshot only seeds or restores it. None keeps the
+    # pre-#908 behaviour where ``agents_md`` overwrites AGENTS.md.
+    instructions_revision: int | None = Field(default=None, ge=0)
     engine_secrets: dict[str, str] = Field(default_factory=dict)
     # Durable fail-closed marker; configuration and credentials remain stdin-only.
     endpoint_configured: bool = False
@@ -346,6 +392,8 @@ class ManagedWorkspaceResultFrame(BaseModel):
 
 
 ServerFrame = Union[
+    AgentInstructionsAckFrame,
+    AgentInstructionsRequestFrame,
     AgentMemoryUpdateAckFrame,
     AgentRoomMemorySnapshotFrame,
     ManagedWorkspaceRequestFrame,
@@ -482,6 +530,34 @@ class AgentMemoryUpdateFrame(BaseModel):
     memory_md: str
 
 
+class AgentInstructionsUpdateFrame(BaseModel):
+    """#908 — the instructions on disk changed (agent or person edited them).
+
+    ``base_revision`` is the server revision the disk was last synced with;
+    the server accepts the snapshot only on top of that revision.
+    """
+
+    type: Literal["agent_instructions_update"] = "agent_instructions_update"
+    agent_id: str
+    generation: int = Field(ge=0)
+    base_revision: int = Field(ge=0)
+    digest: str = Field(max_length=64)
+    snapshot: InstructionSnapshotPayload
+
+
+class AgentInstructionsResultFrame(BaseModel):
+    """#908 — reply to :class:`AgentInstructionsRequestFrame`."""
+
+    type: Literal["agent_instructions_result"] = "agent_instructions_result"
+    request_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    status: Literal["ok", "conflict", "no_receipt", "invalid", "error"]
+    base_revision: int | None = Field(default=None, ge=0)
+    digest: str | None = Field(default=None, max_length=64)
+    snapshot: InstructionSnapshotPayload | None = None
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class RoomArtifactProducedFrame(BaseModel):
     """Machine ships a file the agent dropped under
     ``<agent_root>/memory/outbox/`` to the cluster (#290 Phase B).
@@ -603,6 +679,8 @@ MachineFrame = Union[
     TokenRequestFrame,
     RequestReplacementFrame,
     AgentMemoryUpdateFrame,
+    AgentInstructionsUpdateFrame,
+    AgentInstructionsResultFrame,
     RoomArtifactProducedFrame,
     SelfUpdateResultFrame,
     EngineCheckResultFrame,
@@ -616,6 +694,8 @@ MachineFrame = Union[
 # ── Frame parsing ─────────────────────────────────────────────────────
 
 _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
+    "agent_instructions_ack": AgentInstructionsAckFrame,
+    "agent_instructions_request": AgentInstructionsRequestFrame,
     "agent_memory_update_ack": AgentMemoryUpdateAckFrame,
     "agent_room_memory_snapshot": AgentRoomMemorySnapshotFrame,
     "managed_workspace_request": ManagedWorkspaceRequestFrame,

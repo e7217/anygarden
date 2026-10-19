@@ -273,6 +273,18 @@ class Agent(Base):
     # materializes this into ~/.anygarden/agents/<id>/AGENTS.md on spawn.
     # See docs/plans/2026-04-11-per-agent-directory-skills.md
     agents_md: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # #908 — on machines that advertise ``agent_instructions_disk_v1`` the
+    # disk is the source of truth and ``agents_md`` plus the ``skills/`` rows
+    # of ``agent_files`` are its last synced snapshot. The revision advances
+    # on every accepted snapshot (see ``AgentInstructionRevision``).
+    # No Python-side default (read ``or 0``) so ORM inserts against an older
+    # schema in migration tests do not name the column.
+    instructions_revision: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, server_default="0"
+    )
+    instructions_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
     started_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
@@ -1118,6 +1130,34 @@ class AgentFile(Base):
     )
 
     agent: Mapped["Agent"] = relationship("Agent", back_populates="files")
+
+
+class AgentInstructionRevision(Base):
+    """#908 — one accepted version of an agent's instructions.
+
+    Agents may edit their own AGENTS.md and skills, so every change keeps
+    who made it (``user``, ``agent``, ``system``) and the full content,
+    which an admin can restore. Only the latest
+    ``INSTRUCTION_REVISIONS_KEPT`` rows per agent are kept.
+    """
+
+    __tablename__ = "agent_instruction_revisions"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "revision", name="uq_agent_instruction_revision"),
+        Index("ix_agent_instruction_revisions_agent", "agent_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    by_user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    restored_from: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    agents_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    skills: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class SkillLibraryEntry(Base):

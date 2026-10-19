@@ -15,6 +15,7 @@ import websockets
 from websockets.asyncio.client import connect
 
 from anygarden.machine import __version__, managed_workspace
+from anygarden.machine import instructions as disk_instructions
 from anygarden.machine.config import save_token
 from anygarden.machine.crash_budget import CrashBudget
 from anygarden.machine.detector import detect_engines
@@ -24,6 +25,10 @@ from anygarden.machine.engines.updater import run_engine_update
 from anygarden.machine.manifest_store import ManifestStore
 from anygarden.machine.protocol.frames import (
     AgentActual,
+    AgentInstructionsAckFrame,
+    AgentInstructionsRequestFrame,
+    AgentInstructionsResultFrame,
+    AgentInstructionsUpdateFrame,
     AgentMemorySharedFileDeleteFrame,
     AgentMemorySharedFileWriteFrame,
     AgentMemoryUpdateAckFrame,
@@ -238,6 +243,10 @@ class MachineDaemon:
         self._memory_last_hash: dict[tuple[str, str, int], str] = {}
         self._memory_pending: dict[tuple[str, str, int], dict] = {}
         self._memory_rejected: set[tuple[str, str, int]] = set()
+        # #908 — disk instructions sent to the server and not acknowledged
+        # yet: agent_id -> (digest, monotonic send time).
+        self._instructions_pending: dict[str, tuple[str, float]] = {}
+        self._instructions_too_large: set[str] = set()
 
         # Issue #290 — per-(agent_id, filename) sha256 cache for the
         # ``memory/outbox/`` watcher. Same idea as the notes hash but
@@ -367,6 +376,7 @@ class MachineDaemon:
                     if managed_workspace.supported() else []
                 ),
                 "agent_generation_reports_v1",
+                disk_instructions.CAPABILITY,
                 "direct_endpoint_v1",
                 "pi_native_auth_v1",
                 "workspace_attach_v1",
@@ -481,6 +491,10 @@ class MachineDaemon:
                 await self._handle_agent_memory_shared_file_delete(frame)
             case "agent_memory_update_ack":
                 await self._handle_memory_update_ack(frame)
+            case "agent_instructions_ack":
+                await self._handle_instructions_ack(frame)
+            case "agent_instructions_request":
+                await self._handle_instructions_request(frame)
             case "agent_room_memory_snapshot":
                 await self._handle_room_memory_snapshot(frame)
             case "self_update":
@@ -881,6 +895,7 @@ class MachineDaemon:
             name=manifest.name,
             agents_md=manifest.agents_md,
             files=dict(manifest.files),
+            instructions_revision=manifest.instructions_revision,
             # ``manifest`` came from ``ManifestStore.load`` which returns
             # engine_secrets={} by design (disk storage strips secrets).
             # The freshest frame's secrets live in the in-memory cache.
@@ -1188,6 +1203,10 @@ class MachineDaemon:
             await self._flush_memory_updates()
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("memory_flush_failed", error=str(exc))
+        try:
+            await self._flush_instruction_updates()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("instructions_flush_failed", error=str(exc))
 
         # Issue #290 — same cadence for the room-artifact outbox.
         try:
@@ -1265,6 +1284,191 @@ class MachineDaemon:
                 return
             if frame.status == "rejected":
                 self._memory_rejected.add(key)
+
+    # ── #908 disk-sourced instructions ────────────────────────────────
+
+    #: Resend an unacknowledged snapshot after this many seconds.
+    INSTRUCTIONS_RESEND_AFTER = 60.0
+
+    def _instructions_root(self, agent_id: str) -> Path:
+        from anygarden.machine.agent_dir import validate_agent_id
+
+        validate_agent_id(agent_id)
+        return self._spawner.get_agent_root(agent_id)
+
+    def _write_instructions_file(self, root: Path, user_area: str) -> None:
+        managed = Spawner.render_managed_block(disk_instructions.read_skill_bodies(root))
+        safe_write_text(
+            root / disk_instructions.AGENTS_MD,
+            disk_instructions.compose(user_area, managed),
+            mode=0o600,
+        )
+
+    @staticmethod
+    def _snapshot_payload(snapshot: disk_instructions.InstructionSnapshot) -> dict:
+        return {"agents_md": snapshot.agents_md, "skills": dict(snapshot.skills)}
+
+    async def _flush_instruction_updates(self) -> None:
+        """Report instructions that changed on disk since the last sync."""
+        now = time.monotonic()
+        for info in self._spawner.list_running():
+            agent_id = info["agent_id"]
+            manifest = self._manifest_store.load(agent_id)
+            if (manifest is None or manifest.instructions_revision is None
+                    or manifest.desired_state != "running"):
+                continue
+            async with self._lock_for(agent_id):
+                root = self._instructions_root(agent_id)
+                receipt = disk_instructions.read_receipt(root)
+                if receipt is None:
+                    continue
+                try:
+                    snapshot = await asyncio.to_thread(disk_instructions.collect, root)
+                except (disk_instructions.SnapshotTooLarge, UnicodeDecodeError, OSError) as exc:
+                    if agent_id not in self._instructions_too_large:
+                        self._instructions_too_large.add(agent_id)
+                        log.warning("instructions_sync_skipped", agent_id=agent_id, error=str(exc))
+                    continue
+                self._instructions_too_large.discard(agent_id)
+                digest = snapshot.digest()
+                if digest == receipt.digest:
+                    self._instructions_pending.pop(agent_id, None)
+                    continue
+                pending = self._instructions_pending.get(agent_id)
+                if (pending is not None and pending[0] == digest
+                        and now - pending[1] < self.INSTRUCTIONS_RESEND_AFTER):
+                    continue
+                self._instructions_pending[agent_id] = (digest, now)
+                frame = AgentInstructionsUpdateFrame(
+                    agent_id=agent_id,
+                    generation=manifest.generation,
+                    base_revision=receipt.revision,
+                    digest=digest,
+                    snapshot=self._snapshot_payload(snapshot),
+                )
+            await self._send(frame.model_dump())
+
+    async def _handle_instructions_ack(self, frame: AgentInstructionsAckFrame) -> None:
+        async with self._lock_for(frame.agent_id):
+            try:
+                root = self._instructions_root(frame.agent_id)
+            except ValueError:
+                return
+            if frame.status == "accepted":
+                disk_instructions.write_receipt(
+                    root, disk_instructions.Receipt(frame.revision, frame.digest)
+                )
+                pending = self._instructions_pending.get(frame.agent_id)
+                if pending is not None and pending[0] == frame.digest:
+                    self._instructions_pending.pop(frame.agent_id, None)
+                return
+            # Rejected: the server moved on (a restore, or another machine's
+            # report). Install its snapshot and keep the local copy.
+            if frame.snapshot is None:
+                return
+            snapshot = disk_instructions.InstructionSnapshot.of(
+                frame.snapshot.agents_md, frame.snapshot.skills
+            )
+            try:
+                await asyncio.to_thread(disk_instructions.archive, root, "conflict")
+                await asyncio.to_thread(disk_instructions.write_skills, root, snapshot.skills)
+                self._write_instructions_file(root, snapshot.agents_md)
+            except (OSError, ValueError) as exc:
+                log.warning("instructions_conflict_install_failed", agent_id=frame.agent_id, error=str(exc))
+                return
+            disk_instructions.write_receipt(
+                root, disk_instructions.Receipt(frame.revision, snapshot.digest())
+            )
+            self._instructions_pending.pop(frame.agent_id, None)
+
+    async def _handle_instructions_request(self, frame: AgentInstructionsRequestFrame) -> None:
+        result = await self._apply_instructions_request(frame)
+        await self._send(result.model_dump())
+
+    async def _apply_instructions_request(
+        self, frame: AgentInstructionsRequestFrame
+    ) -> AgentInstructionsResultFrame:
+        def reply(status, **values) -> AgentInstructionsResultFrame:
+            return AgentInstructionsResultFrame(
+                request_id=frame.request_id, agent_id=frame.agent_id, status=status, **values
+            )
+
+        async with self._lock_for(frame.agent_id):
+            try:
+                root = self._instructions_root(frame.agent_id)
+            except ValueError:
+                return reply("invalid", reason="invalid agent id")
+            receipt = disk_instructions.read_receipt(root)
+            if receipt is None or not (root / disk_instructions.AGENTS_MD).is_file():
+                return reply("no_receipt")
+            try:
+                current = await asyncio.to_thread(disk_instructions.collect, root)
+            except (disk_instructions.SnapshotTooLarge, UnicodeDecodeError, OSError) as exc:
+                return reply("error", reason=str(exc)[:500])
+            if receipt.revision != frame.base_revision or current.digest() != receipt.digest:
+                # The agent changed its instructions since the snapshot the
+                # person edited; the next sync brings that change up first.
+                return reply("conflict", base_revision=receipt.revision)
+            try:
+                await asyncio.to_thread(self._apply_instructions_change, root, frame, current)
+            except (ValueError, OSError) as exc:
+                return reply("invalid", reason=str(exc)[:500])
+            try:
+                updated = await asyncio.to_thread(disk_instructions.collect, root)
+            except (disk_instructions.SnapshotTooLarge, UnicodeDecodeError, OSError) as exc:
+                return reply("error", reason=str(exc)[:500])
+            digest = updated.digest()
+            # The server records this change from the reply; do not report
+            # it a second time from the flush loop.
+            self._instructions_pending[frame.agent_id] = (digest, time.monotonic())
+            return reply(
+                "ok", base_revision=receipt.revision, digest=digest,
+                snapshot=self._snapshot_payload(updated),
+            )
+
+    def _apply_instructions_change(
+        self,
+        root: Path,
+        frame: AgentInstructionsRequestFrame,
+        current: disk_instructions.InstructionSnapshot,
+    ) -> None:
+        from anygarden.machine.agent_dir import validate_agent_file_path
+
+        user_area = current.agents_md
+        if frame.operation == "write_agents_md":
+            user_area = frame.text or ""
+        elif frame.operation == "replace":
+            if frame.snapshot is None:
+                raise ValueError("replace needs a snapshot")
+            target = disk_instructions.InstructionSnapshot.of(
+                frame.snapshot.agents_md, frame.snapshot.skills
+            )
+            disk_instructions.write_skills(root, target.skills)
+            user_area = target.agents_md
+        else:
+            path = frame.path or ""
+            validate_agent_file_path(path)
+            if not path.startswith(f"{disk_instructions.SKILLS_DIR}/"):
+                raise ValueError("only skills/ files are instructions")
+            target_path = root / path
+            skills_root = root / disk_instructions.SKILLS_DIR
+            parent = target_path.parent
+            while parent != root:
+                if parent.is_symlink():
+                    raise ValueError("skills path crosses a symlink")
+                parent = parent.parent
+            if frame.operation == "write_skill":
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                secure_chmod(target_path.parent, 0o700)
+                safe_write_text(target_path, frame.text or "", mode=0o600)
+            else:
+                if target_path.is_file() or target_path.is_symlink():
+                    target_path.unlink()
+                directory = target_path.parent
+                while directory != skills_root and directory.is_dir() and not any(directory.iterdir()):
+                    directory.rmdir()
+                    directory = directory.parent
+        self._write_instructions_file(root, user_area)
 
     async def _flush_memory_updates(self) -> None:
         """Sync only active room notes; hashes/revisions advance after server ack."""

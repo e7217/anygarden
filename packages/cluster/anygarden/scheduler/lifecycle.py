@@ -1877,6 +1877,20 @@ class AgentLifecycle:
         from anygarden.memory.service import get_room_memories
 
         room_memories = await get_room_memories(db, agent.id, rooms, generation=agent.generation)
+        # #908 — only a machine that keeps instructions on disk gets the
+        # snapshot revision; older daemons keep rendering AGENTS.md from it.
+        from anygarden.instructions.service import machine_supports
+
+        placed_machine = (
+            await db.get(Machine, agent.placed_on_machine_id)
+            if agent.placed_on_machine_id
+            else None
+        )
+        instructions_revision = (
+            int(agent.instructions_revision or 0)
+            if machine_supports(placed_machine)
+            else None
+        )
         return {
             "type": "sync_desired_state",
             "agent_id": agent.id,
@@ -1887,6 +1901,7 @@ class AgentLifecycle:
             "profile_yaml": agent.profile_yaml or "",
             "rooms": rooms,
             "agents_md": agent.agents_md,
+            "instructions_revision": instructions_revision,
             # Issue #237 — DB snapshot of the long-term memory file. The
             # machine seeds ``memory/notes.md`` from this on materialize;
             # subsequent file writes by the agent flow back via

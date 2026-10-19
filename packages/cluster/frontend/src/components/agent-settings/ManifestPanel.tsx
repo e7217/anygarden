@@ -44,8 +44,9 @@ import {
 } from 'lucide-react'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
-import type { Agent, AgentFile, AttachedSkill, SkillPreview } from '@/hooks/useAgents'
-import { BookOpen, ExternalLink, Lock } from 'lucide-react'
+import type { Agent, AgentFile, AttachedSkill, InstructionRevision, SkillPreview } from '@/hooks/useAgents'
+import { BookOpen, ExternalLink, History, Lock, WifiOff } from 'lucide-react'
+import InstructionHistoryDialog from '@/components/agent-settings/InstructionHistoryDialog'
 import { useNavigate } from 'react-router-dom'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
@@ -501,6 +502,14 @@ interface Props {
    *  skill row — the parent closes the settings dialog before
    *  navigating. */
   onNavigateAway?: () => void
+  /** #908 — instruction history; the History button needs both. */
+  fetchInstructionRevisions?: (id: string) => Promise<InstructionRevision[]>
+  restoreInstructionRevision?: (id: string, revision: number) => Promise<unknown>
+}
+
+/** #908 — AGENTS.md and skills are instructions; other files are engine settings. */
+function isInstructionPath(path: string): boolean {
+  return path === AGENTS_MD_PATH || path.startsWith('skills/')
 }
 
 export default function ManifestPanel({
@@ -512,8 +521,15 @@ export default function ManifestPanel({
   fetchAttachedSkills,
   fetchSkillPreview,
   onNavigateAway,
+  fetchInstructionRevisions,
+  restoreInstructionRevision,
 }: Props) {
-  const { t } = useLocale()
+  const { t, formatDate } = useLocale()
+  const [historyOpen, setHistoryOpen] = useState(false)
+  // #908 — while the agent's machine is offline its instructions are a
+  // read-only snapshot; engine settings stay editable.
+  const instructionsReadOnly = agent?.instructions_mode === 'disk_offline'
+  const machineName = agent?.placement?.machine_name ?? agent?.placed_on_machine_id ?? ''
   const { confirm: confirmAction } = useFeedback()
   const navigate = useNavigate()
   const [files, setFiles] = useState<WorkingFile[]>([])
@@ -1116,9 +1132,33 @@ export default function ManifestPanel({
 
   return (
     <div className="flex h-full flex-col" data-testid="manifest-panel">
-      <p className="text-caption text-[var(--color-foreground-muted)] pb-2">
-        {t('admin.manifest.description')}
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-2 pb-2">
+        <p className="min-w-0 flex-1 text-caption text-[var(--color-foreground-muted)]">
+          {t('admin.manifest.description')}
+          {agent?.instructions_mode === 'disk' && (
+            <> {t('admin.manifest.diskSource', { machine: machineName })}</>
+          )}
+        </p>
+        {agent && fetchInstructionRevisions && restoreInstructionRevision ? (
+          <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)} data-testid="manifest-history">
+            <History className="mr-1 h-4 w-4" />
+            {t('admin.manifest.history')}
+          </Button>
+        ) : null}
+      </div>
+      {instructionsReadOnly ? (
+        <div role="status" className="mb-2 flex gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3 text-sm text-[var(--color-foreground)]" data-testid="manifest-offline">
+          <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
+          <span className="min-w-0">
+            {t('admin.manifest.offlineReadOnly', {
+              machine: machineName,
+              time: agent?.instructions_synced_at
+                ? formatDate(new Date(agent.instructions_synced_at), { dateStyle: 'medium', timeStyle: 'short' })
+                : t('admin.manifest.offlineNeverSynced'),
+            })}
+          </span>
+        </div>
+      ) : null}
       {loading ? (
           <div className="py-8 text-center text-caption text-[var(--color-foreground-muted)]">
             {t('common.loading')}
@@ -1168,6 +1208,7 @@ export default function ManifestPanel({
                         setShowNewSkillForm(true)
                       }
                     }}
+                    disabled={instructionsReadOnly}
                     data-testid="agent-edit-toggle-new-skill"
                   >
                     <FolderPlus className="mr-1 h-4 w-4" />
@@ -1350,6 +1391,7 @@ export default function ManifestPanel({
                         className="font-mono text-sm flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
                         value={selectedFile.content}
                         onChange={e => handleFileContentChange(e.target.value)}
+                        readOnly={instructionsReadOnly && isInstructionPath(selectedFile.path)}
                         spellCheck={false}
                         aria-label={t('admin.manifest.fileContent', { path: selectedFile.path })}
                         placeholder={
@@ -1445,6 +1487,20 @@ export default function ManifestPanel({
           {saving ? t('admin.manifest.saving') : t('common.save')}
         </Button>
       </div>
+      {agent && fetchInstructionRevisions && restoreInstructionRevision ? (
+        <InstructionHistoryDialog
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          agentId={agent.id}
+          currentRevision={agent.instructions_revision ?? 0}
+          readOnly={instructionsReadOnly}
+          fetchRevisions={fetchInstructionRevisions}
+          restoreRevision={async (id, revision) => {
+            await restoreInstructionRevision(id, revision)
+            await loadInitial()
+          }}
+        />
+      ) : null}
     </div>
   )
 }
