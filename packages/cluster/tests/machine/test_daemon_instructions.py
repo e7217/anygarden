@@ -157,3 +157,33 @@ async def test_register_advertises_the_capability(daemon: MachineDaemon) -> None
     await daemon._register()
     register = next(f for f in frames if f["type"] == "register")
     assert ins.CAPABILITY in register["control_capabilities"]
+
+
+@pytest.mark.req("AGT-11")
+@pytest.mark.asyncio
+async def test_a_second_edit_waits_for_the_first_ack(daemon: MachineDaemon) -> None:
+    """Two updates on the same base would make the server reject the newer
+    one and the machine install the older copy over the agent's edit."""
+    frames = _sent(daemon)
+    root = _root(daemon)
+    (root / "AGENTS.md").write_text(ins.compose("first", ""))
+    await daemon._flush_instruction_updates()
+    (root / "AGENTS.md").write_text(ins.compose("second", ""))
+    await daemon._flush_instruction_updates()
+    assert [f["snapshot"]["agents_md"] for f in frames] == ["first"]
+
+    await daemon._handle_instructions_ack(AgentInstructionsAckFrame(
+        agent_id=AGENT, status="accepted", revision=2, digest=frames[0]["digest"]))
+    await daemon._flush_instruction_updates()
+    assert [(f["snapshot"]["agents_md"], f["base_revision"]) for f in frames] == [("first", 1), ("second", 2)]
+
+
+@pytest.mark.asyncio
+async def test_rejection_matching_the_disk_only_updates_the_receipt(daemon: MachineDaemon) -> None:
+    root = _root(daemon)
+    (root / "AGENTS.md").write_text(ins.compose("same", ""))
+    await daemon._handle_instructions_ack(AgentInstructionsAckFrame(
+        agent_id=AGENT, status="rejected", revision=7, digest="",
+        snapshot={"agents_md": "same", "skills": {"skills/a/SKILL.md": "A"}}))
+    assert ins.read_receipt(root).revision == 7
+    assert not (root / ins.ARCHIVE_DIR).exists()

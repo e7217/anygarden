@@ -12,6 +12,7 @@ _DEFAULT_DB_DIR = Path.home() / ".anygarden"
 _DEFAULT_DB_URL = f"sqlite+aiosqlite:///{_DEFAULT_DB_DIR / 'anygarden.db'}"
 _DEFAULT_ROOM_FILES_DIR = _DEFAULT_DB_DIR / "room_files"
 _DEFAULT_ARTIFACT_FILES_DIR = _DEFAULT_DB_DIR / "artifact_files"
+_DEFAULT_TRANSFER_SPOOL_DIR = _DEFAULT_DB_DIR / "transfer_spool"
 
 # Bind addresses that listen on every interface aren't valid dial targets.
 # When we build a URL for an agent to connect back to us, map these to a
@@ -75,6 +76,12 @@ class AnygardenSettings(BaseSettings):
     # reply. The daemon's outbox WS frame stays at 768 KiB; this path has
     # no frame envelope to fit under.
     artifact_upload_max_bytes: int = 20 * 1024 * 1024
+    # #914 — work files larger than one machine frame go over HTTP with a
+    # one-time ticket and pass through this spool directory on the server.
+    transfer_spool_dir: Path = _DEFAULT_TRANSFER_SPOOL_DIR
+    workspace_transfer_max_bytes: int = 20 * 1024 * 1024
+    workspace_archive_max_bytes: int = 200 * 1024 * 1024
+    workspace_archive_max_entries: int = 10_000
     # #277 — Public URL agents use to reach this cluster's MCP / REST
     # endpoints. Empty string falls back to
     # ``http://{reachable_host()}:{port}`` so loopback / single-host

@@ -505,3 +505,126 @@ async def test_file_management_needs_the_machine_capability(workspace_env, tmp_p
     assert response.json()["status"] == "unsupported"
     download = await env["client"].get(base + "/download", params={"path": "folder/result.md"}, headers=headers)
     assert download.status_code == 409
+
+
+class _AppTransport:
+    """Sync httpx transport that forwards the daemon's HTTP calls to the
+    in-process ASGI app running on the test's event loop (#914)."""
+
+    def __init__(self, client, loop):
+        self.client = client
+        self.loop = loop
+
+    def factory(self):
+        import httpx
+
+        outer = self
+
+        class Transport(httpx.BaseTransport):
+            def handle_request(self, request):
+                body = request.read()
+                future = asyncio.run_coroutine_threadsafe(
+                    outer.client.request(
+                        request.method, request.url.path,
+                        content=body, headers={k: v for k, v in request.headers.items() if k.lower() != "host"},
+                    ),
+                    outer.loop,
+                )
+                response = future.result(30)
+                return httpx.Response(response.status_code, headers=response.headers, content=response.content)
+
+        return httpx.Client(transport=Transport(), base_url="http://fixture")
+
+
+@pytest.mark.req("WS-07")
+# Machine frames and API calls run concurrent sessions; use a file database
+# rather than the shared in-memory connection (#726/#758).
+@pytest.mark.parametrize("workspace_env", ["file"], indirect=True)
+async def test_large_files_and_folder_zip_over_the_integrated_node(workspace_env, tmp_path):
+    """#914 — 5 MiB up and down and a folder zip through the real daemon."""
+    import hashlib
+    import io
+    import zipfile
+
+    from anygarden.machine.managed_workspace import FILES_CAPABILITY
+    from anygarden.machine.workspace_transfer import CAPABILITY as TRANSFER_CAPABILITY
+
+    env = workspace_env
+    env["app"].state.config.transfer_spool_dir = tmp_path / "spool"
+    machine_id, root = await seed(env, tmp_path)
+    async with env["factory"]() as db:
+        machine = await db.get(Machine, machine_id)
+        machine.control_capabilities = [CAPABILITY, EDIT_CAPABILITY, FILES_CAPABILITY, TRANSFER_CAPABILITY]
+        await db.commit()
+    big = bytes(range(256)) * (5 * 4096)  # 5 MiB
+    (root / "folder" / "big.bin").write_bytes(big)
+    bus = env["bus"]
+    await bus.unregister(machine_id)
+    owner = SimpleNamespace(identity={"machine_id": machine_id}, data_dir=tmp_path)
+    backend = LocalExecutionBackend(env["app"], owner)
+    backend.daemon._transfer_client_factory = _AppTransport(env["client"], asyncio.get_running_loop()).factory
+    await bus.register_local(machine_id, backend)
+    receiver = asyncio.create_task(backend._consume())
+    headers = {"Authorization": f"Bearer {env['token']}"}
+    base = "/api/v1/agents/workspace-agent/workspace"
+    try:
+        listing = (await env["client"].get(base, headers=headers)).json()
+        assert listing["can_transfer"] is True
+        assert listing["transfer_max_bytes"] == 20 * 1024 * 1024
+        token = listing["snapshot"]["edit_token"]
+
+        down = await env["client"].get(base + "/download-stream", params={"path": "folder/big.bin"}, headers=headers)
+        assert down.status_code == 200, down.text
+        assert hashlib.sha256(down.content).hexdigest() == hashlib.sha256(big).hexdigest()
+        assert "attachment" in down.headers["content-disposition"]
+
+        upload = bytes(reversed(big))
+        up = await env["client"].put(base + "/upload-stream", params={"path": "folder/copy.bin", "edit_token": token},
+                                     content=upload, headers=headers)
+        assert up.status_code == 200, up.text
+        assert (root / "folder" / "copy.bin").read_bytes() == upload
+        again = await env["client"].put(base + "/upload-stream", params={"path": "folder/copy.bin", "edit_token": token},
+                                        content=b"x", headers=headers)
+        assert again.status_code == 409
+
+        archive = await env["client"].get(base + "/archive", params={"path": "folder"}, headers=headers)
+        assert archive.status_code == 200, archive.text
+        assert archive.headers["content-type"] == "application/zip"
+        names = sorted(zipfile.ZipFile(io.BytesIO(archive.content)).namelist())
+        assert names == ["big.bin", "copy.bin", "result.md"]
+
+        missing = await env["client"].get(base + "/download-stream", params={"path": "folder/none"}, headers=headers)
+        assert missing.status_code == 404
+        hidden = await env["client"].get(base + "/download-stream", params={"path": ".env"}, headers=headers)
+        assert hidden.status_code == 422
+        assert list((tmp_path / "spool").iterdir()) == []
+    finally:
+        await backend.queue.put(None)
+        await receiver
+        await bus.unregister_local(machine_id, backend)
+
+
+async def test_large_transfer_limits(workspace_env, tmp_path):
+    from anygarden.machine.workspace_transfer import CAPABILITY as TRANSFER_CAPABILITY
+
+    env = workspace_env
+    env["app"].state.config.transfer_spool_dir = tmp_path / "spool"
+    env["app"].state.config.workspace_transfer_max_bytes = 10
+    machine_id, _root = await seed(env, tmp_path)
+    async with env["factory"]() as db:
+        machine = await db.get(Machine, machine_id)
+        machine.control_capabilities = [CAPABILITY, EDIT_CAPABILITY]
+        await db.commit()
+    headers = {"Authorization": f"Bearer {env['token']}"}
+    base = "/api/v1/agents/workspace-agent/workspace"
+    old_machine = await env["client"].get(base + "/download-stream", params={"path": "folder/result.md"}, headers=headers)
+    assert old_machine.status_code == 409
+    async with env["factory"]() as db:
+        machine = await db.get(Machine, machine_id)
+        machine.control_capabilities = [CAPABILITY, EDIT_CAPABILITY, TRANSFER_CAPABILITY]
+        await db.commit()
+    too_big = await env["client"].put(base + "/upload-stream", params={"path": "x.bin", "edit_token": "a" * 64},
+                                      content=b"0123456789ABC", headers=headers)
+    assert too_big.status_code == 413
+    forbidden = await env["client"].get(base + "/archive", headers={"Authorization": f"Bearer {env['regular_token']}"})
+    assert forbidden.status_code == 403

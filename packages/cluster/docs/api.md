@@ -35,6 +35,10 @@ Base URL: `/api/v1`
 | GET | `/agents/{id}/workspace/download?path=` | 작업 파일 내려받기(768 KiB 이하, 초과 시 413) (#908) |
 | POST | `/agents/{id}/workspace/delete` | 작업 파일·폴더 삭제(폴더는 1,000개 항목 이하) (#908) |
 | POST | `/agents/{id}/workspace/rename` | 같은 폴더 안에서 이름 변경. 이름이 겹치면 409 (#908) |
+| GET | `/agents/{id}/workspace/download-stream?path=` | 큰 작업 파일 내려받기(기본 20 MiB). 머신이 HTTP로 올린 뒤 서버가 내려준다 (#914) |
+| GET | `/agents/{id}/workspace/archive?path=` | 폴더(빈 경로 = 전체)를 zip으로 내려받기(기본 200 MiB, 1만 개) (#914) |
+| PUT | `/agents/{id}/workspace/upload-stream?path=&edit_token=` | 큰 작업 파일 올리기(원시 본문). 같은 이름이 있으면 409 (#914) |
+| PUT·GET | `/machine-transfers/{id}` | 머신 전용. `Authorization: Ticket <token>`의 일회용 티켓으로만 인증 (#914) |
 | GET | `/agents/{id}/instructions/revisions` | 지침(AGENTS.md·스킬) 리비전 목록, 최신 순. 수정 주체(`user`/`agent`/`system`) 포함 (#908) |
 | POST | `/agents/{id}/instructions/revisions/{n}/restore` | 리비전 n을 새 리비전으로 되돌리고 에이전트 재시작. 머신이 오프라인이면 409 (#908) |
 

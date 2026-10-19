@@ -42,6 +42,10 @@ async def _until(predicate, timeout: float = 3.0):
 
 @pytest.mark.req("AGT-11")
 @pytest.mark.asyncio
+# Several sessions run concurrently here (machine frames, API calls); the
+# in-memory StaticPool shares one connection, so one session's rollback
+# could undo another's flushed write (#726/#758). Use a file database.
+@pytest.mark.parametrize("instructions_env", ["file"], indirect=True)
 async def test_disk_instructions_round_trip(instructions_env, tmp_path):
     env = instructions_env
     machine_id = env["machine"].id
@@ -130,10 +134,19 @@ async def test_disk_instructions_round_trip(instructions_env, tmp_path):
         (root / "AGENTS.md").write_text(ins.compose("agent rule", "stale"))
         (root / "skills" / "notes").mkdir()
         (root / "skills" / "notes" / "SKILL.md").write_text("# Notes")
-        await daemon._flush_instruction_updates()
-        await _until(lambda: _revision_is(agent_row, 1))
-        assert (await agent_row()).agents_md == "agent rule"
-        await _until(lambda: _receipt_is(root, 1))
+        # A report tick may read the files mid-edit and record that first;
+        # later ticks (one update in flight at a time) bring the rest up.
+
+        async def synced() -> bool:
+            await daemon._flush_instruction_updates()
+            row = await agent_row()
+            receipt = ins.read_receipt(root)
+            return (row.agents_md == "agent rule" and receipt is not None
+                    and receipt.revision == int(row.instructions_revision or 0)
+                    and receipt.digest == ins.collect(root).digest())
+
+        await _until(synced)
+        agent_revision = int((await agent_row()).instructions_revision)
         files = (await client.get(f"/api/v1/agents/{AGENT}/files", headers=headers)).json()
         assert {f["path"] for f in files} == {"skills/deploy/SKILL.md", "skills/notes/SKILL.md"}
 
@@ -144,20 +157,24 @@ async def test_disk_instructions_round_trip(instructions_env, tmp_path):
         assert response.status_code == 200, response.text
         assert response.json()["instructions_mode"] == "disk"
         assert ins.split_user_area((root / "AGENTS.md").read_text()) == "person rule"
-        await _until(lambda: _receipt_is(root, 2))
+        await _until(lambda: _receipt_is(root, agent_revision + 1))
         await daemon._flush_instruction_updates()
 
         # 3. Restoring the agent's version writes it back to disk.
-        restored = await client.post(f"/api/v1/agents/{AGENT}/instructions/revisions/1/restore",
-                                     headers=headers)
+        restored = await client.post(
+            f"/api/v1/agents/{AGENT}/instructions/revisions/{agent_revision}/restore", headers=headers)
         assert restored.status_code == 200, restored.text
         assert ins.split_user_area((root / "AGENTS.md").read_text()) == "agent rule"
-        await _until(lambda: _receipt_is(root, 3))
+        await _until(lambda: _receipt_is(root, agent_revision + 2))
 
         history = (await client.get(f"/api/v1/agents/{AGENT}/instructions/revisions",
                                     headers=headers)).json()
-        assert [(r["revision"], r["source"], r["restored_from"]) for r in history] == [
-            (3, "user", 1), (2, "user", None), (1, "agent", None)]
+        assert [(r["revision"], r["source"], r["restored_from"]) for r in history[:3]] == [
+            (agent_revision + 2, "user", agent_revision),
+            (agent_revision + 1, "user", None),
+            (agent_revision, "agent", None),
+        ]
+        assert {r["source"] for r in history[2:]} == {"agent"}
     finally:
         await incoming.put(None)
         await receiver
@@ -171,10 +188,6 @@ async def test_disk_instructions_round_trip(instructions_env, tmp_path):
     async with env["factory"]() as db:
         skills = (await db.scalars(select(AgentFile.path).where(AgentFile.agent_id == AGENT))).all()
     assert set(skills) == {"skills/deploy/SKILL.md", "skills/notes/SKILL.md"}
-
-
-async def _revision_is(agent_row, revision: int) -> bool:
-    return int((await agent_row()).instructions_revision or 0) == revision
 
 
 async def _receipt_is(root, revision: int) -> bool:

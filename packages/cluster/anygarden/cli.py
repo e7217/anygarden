@@ -452,6 +452,8 @@ def start_node(
         config.room_files_dir = data_dir / "room_files"
     if "artifact_files_dir" not in config.model_fields_set:
         config.artifact_files_dir = data_dir / "artifact_files"
+    if "transfer_spool_dir" not in config.model_fields_set:
+        config.transfer_spool_dir = data_dir / "transfer_spool"
     config.local_node_data_dir = data_dir
     if peer_public_url is not None:
         from anygarden.federation.endpoint import split_peer_url
