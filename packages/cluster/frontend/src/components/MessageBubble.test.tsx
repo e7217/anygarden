@@ -609,3 +609,25 @@ describe('MessageBubble — agent sender menu', () => {
     ])
   })
 })
+
+describe('[ENG-11] MessageBubble — work trace', () => {
+  const trace = {
+    execution_trace: { v: 1, steps: [{ activities: { commands: 2 } }], totals: { commands: 2 }, truncated: 0 },
+  }
+
+  it('shows the collapsed work trace under an agent reply', () => {
+    render(<MessageBubble message={baseMsg({ metadata: trace })} participants={participants} isMine={false} />)
+    expect(screen.getByTestId('execution-trace')).toBeInTheDocument()
+  })
+
+  it('never shows a trace on a person\'s message', () => {
+    render(
+      <MessageBubble
+        message={baseMsg({ participant_id: 'user-alice', metadata: trace })}
+        participants={participants}
+        isMine={false}
+      />,
+    )
+    expect(screen.queryByTestId('execution-trace')).toBeNull()
+  })
+})

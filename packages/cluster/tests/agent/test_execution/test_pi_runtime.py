@@ -128,6 +128,30 @@ if prompt == "mixed-failure":
 if prompt == "malformed":
     print("not json", flush=True)
     sys.exit(0)
+if prompt in {"multi-step", "ends-on-tool"}:
+    # Event shapes from pi-agent-core 0.85.1 (types.d.ts), raw values replaced.
+    def assistant(content, stop):
+        msg = {"role": "assistant", "content": content, "stopReason": stop}
+        event({"type": "message_start", "message": {"role": "assistant", "content": []}})
+        event({"type": "message_end", "message": msg})
+    def tool(name, is_error=False):
+        event({"type": "tool_execution_start", "toolCallId": "t", "toolName": name, "args": {"command": "DO-NOT-PUBLISH"}})
+        event({"type": "tool_execution_end", "toolCallId": "t", "toolName": name, "result": "DO-NOT-PUBLISH", "isError": is_error})
+    event({"type": "message_update", "message": {"role": "assistant", "content": []}, "assistantMessageEvent": {"type": "thinking_start", "contentIndex": 0}})
+    event({"type": "message_update", "message": {"role": "assistant", "content": []}, "assistantMessageEvent": {"type": "thinking_end", "contentIndex": 0, "content": "DO-NOT-PUBLISH"}})
+    assistant([{"type": "thinking", "thinking": "DO-NOT-PUBLISH"}, {"type": "text", "text": "I will list the files."}, {"type": "toolCall", "id": "t", "name": "ls", "arguments": {}}], "toolUse")
+    tool("ls")
+    assistant([{"type": "text", "text": "Now editing."}, {"type": "toolCall", "id": "t", "name": "edit", "arguments": {}}], "toolUse")
+    tool("edit")
+    tool("write", is_error=True)
+    tool("bash")
+    tool("read_room_messages")
+    tool("DO-NOT-PUBLISH")
+    if prompt == "multi-step":
+        assistant([{"type": "text", "text": "Done."}, {"type": "text", "text": "All good."}], "stop")
+    event({"type": "turn_end"})
+    event({"type": "agent_settled"})
+    sys.exit(0)
 usage = {"input": 3, "output": 1, "totalTokens": 4}
 event({"type": "message_start", "message": {"role": "assistant", "content": [{"type": "text", "text": "answer"}], "usage": usage}})
 event({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "answer"}], "usage": usage, "stopReason": "stop"}})
@@ -175,6 +199,57 @@ async def test_success_extracts_text_usage_and_events(tmp_path, invocation, exec
         ]
     finally:
         await m.close()
+
+
+@pytest.mark.req("ENG-10")
+async def test_multi_step_turn_emits_normalized_activity_and_narration(
+    tmp_path, invocation, executable
+):
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt="multi-step"))
+        final, events = await done(m)
+    finally:
+        await m.close()
+    assert final.outcome == "succeeded"
+    # The reply is the text after the last tool work, not every message joined.
+    assert final.text == "Done.\nAll good."
+    normalized = [
+        e.payload for e in events
+        if e.kind == "progress" and e.payload["event"] in {"activity", "narration"}
+    ]
+    assert normalized == [
+        {"event": "activity", "activity": "thinking", "phase": "started"},
+        {"event": "activity", "activity": "thinking", "phase": "completed", "count": 1},
+        {"event": "narration", "text": "I will list the files."},
+        {"event": "activity", "activity": "file_read", "phase": "started"},
+        {"event": "activity", "activity": "file_read", "phase": "completed", "count": 1},
+        {"event": "narration", "text": "Now editing."},
+        {"event": "activity", "activity": "file_change", "phase": "started"},
+        {"event": "activity", "activity": "file_change", "phase": "completed", "count": 1},
+        {"event": "activity", "activity": "file_change", "phase": "started"},
+        {"event": "activity", "activity": "command", "phase": "started"},
+        {"event": "activity", "activity": "command", "phase": "completed", "count": 1},
+        {"event": "activity", "activity": "anygarden_tool", "phase": "started"},
+        {"event": "activity", "activity": "anygarden_tool", "phase": "completed", "count": 1},
+        {"event": "activity", "activity": "tool", "phase": "started"},
+        {"event": "activity", "activity": "tool", "phase": "completed", "count": 1},
+    ]
+    assert "DO-NOT-PUBLISH" not in str(events)
+
+
+@pytest.mark.req("ENG-11")
+async def test_turn_ending_on_tool_work_replies_with_its_last_narration(
+    tmp_path, invocation, executable
+):
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt="ends-on-tool"))
+        final, _ = await done(m)
+    finally:
+        await m.close()
+    assert final.outcome == "succeeded"
+    assert final.text == "Now editing."
 
 
 async def test_second_execution_resumes_native_session(tmp_path, invocation, executable):

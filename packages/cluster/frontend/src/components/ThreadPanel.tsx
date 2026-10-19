@@ -20,6 +20,8 @@ export interface ThreadWorker {
   name: string
   /** Localized stage, e.g. "Writing a reply…". */
   stage?: string
+  /** #880 — the latest sentence the agent wrote before more work. */
+  narration?: string
   /** This agent's open turns in the thread. */
   requestIds: string[]
 }
@@ -186,8 +188,12 @@ export default function ThreadPanel({
                 {workers.map(worker => (
                   <li key={worker.participantId} className="flex min-h-[var(--control-icon-size)] items-center gap-2">
                     <BrailleSpinner />
-                    <span className="min-w-0 flex-1 truncate text-caption text-[var(--color-foreground-muted)]">
+                    <span
+                      className="min-w-0 flex-1 truncate text-caption text-[var(--color-foreground-muted)]"
+                      title={worker.narration}
+                    >
                       {worker.stage ? `${worker.name} · ${worker.stage}` : worker.name}
+                      {worker.narration && ` — ${worker.narration}`}
                     </span>
                     {onCancelTurns && (
                       <TurnCancelControl

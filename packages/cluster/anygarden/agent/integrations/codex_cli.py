@@ -700,7 +700,8 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
                     if stage is None:
                         await client.sendTyping(room_id, True)
                     else:
-                        await client.sendTyping(room_id, True, stage)
+                        detail = getattr(adapter, "progress_detail", lambda _room: {})(room_id)
+                        await client.sendTyping(room_id, True, stage, **detail)
                     await asyncio.sleep(2)
 
             typing_task = asyncio.create_task(_typing_loop())
@@ -715,6 +716,7 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
                     output_tokens=usage.get("output_tokens"),
                     cost_usd=usage.get("cost_usd"),
                     usage_metadata=usage.get("usage_metadata"),
+                    execution_trace=usage.get("execution_trace"),
                     local_execution_id=usage.get("local_execution_id"),
                     native_outcome=usage.get("native_outcome"),
                     native_process_state=usage.get("native_process_state"),

@@ -18,7 +18,7 @@ import RightContextRail from '@/components/RightContextRail'
 import ThreadPanel, { type ThreadWorker } from '@/components/ThreadPanel'
 import { useOpenTurns } from '@/hooks/useOpenTurns'
 import { activeTurnByParticipant, threadTurnIds } from '@/lib/openTurns'
-import { stageLabel } from '@/lib/typingStage'
+import { workLabel } from '@/lib/typingStage'
 import { indexThreads, canHostThread } from '@/lib/threads'
 import { clearDraft, threadDraftKey } from '@/lib/composerDrafts'
 import { useElementHeightVar } from '@/hooks/useElementHeightVar'
@@ -84,7 +84,7 @@ function LocalChatPage() {
     markRoomRead,
   } = useRooms()
   const { user } = useAuth()
-  const { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
+  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
   const { participants, refresh: refreshRoomParticipants } = useRoomParticipants(selectedRoom)
   const myParticipantId = user ? Object.values(participants).find(p => p.user_id === user.id)?.id ?? null : null
   // Thread grouping is derived once here so the timeline and the side
@@ -561,11 +561,11 @@ function LocalChatPage() {
     ? Array.from(typingUsers)
       .filter(pid => pid !== myParticipantId && activeTurns.get(pid)?.thread_root_id === threadRoot.id)
       .map(pid => {
-        const stage = typingStages[pid]
         return {
           participantId: pid,
           name: participants[pid]?.display_name ?? pid.slice(0, 8),
-          stage: stage ? stageLabel(t, stage, typingProgress[pid]) : undefined,
+          stage: workLabel(t, typingStages[pid], typingWork[pid], typingProgress[pid]),
+          narration: typingWork[pid]?.narration,
           requestIds: threadTurnIds(openTurns, threadRoot.id, pid),
         }
       })
@@ -729,6 +729,7 @@ function LocalChatPage() {
               typingUsers={typingUsers}
               typingStages={typingStages}
               typingProgress={typingProgress}
+              typingWork={typingWork}
               openTurns={openTurns}
               onCancelTurns={cancelTurns}
               threadIndex={threadIndex}

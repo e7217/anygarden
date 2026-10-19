@@ -36,6 +36,7 @@ from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
 from .failure_feedback import classify_failure
 from .pi_auth import INPUT_KEY as PI_INPUT_KEY
 from .pi_auth import materialize_native_auth
+from .pi_self_tools import ALLOWED_TOOL_NAMES as PI_SELF_TOOL_NAMES
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 # Whether this turn may have caused a side effect; shared with the timeout
@@ -59,6 +60,25 @@ _MESSAGE_EVENTS = frozenset({"message_start", "message_update", "message_end"})
 # a ``toolCall`` block, a ``toolResult`` message or anything unknown is not.
 _SAFE_MESSAGE_ROLES = frozenset({"user", "assistant"})
 _SAFE_CONTENT_BLOCKS = frozenset({"text", "thinking"})
+
+
+# #880 — Pi's built-in tools by the kind of work they do. The tool name never
+# leaves the runtime; only the closed kind does.
+_PI_TOOL_ACTIVITY = {
+    "bash": "command",
+    "edit": "file_change",
+    "write": "file_change",
+    "read": "file_read",
+    "grep": "file_read",
+    "find": "file_read",
+    "ls": "file_read",
+}
+
+
+def _tool_activity(name: object) -> str:
+    if name in PI_SELF_TOOL_NAMES:
+        return "anygarden_tool"
+    return _PI_TOOL_ACTIVITY.get(name, "tool") if isinstance(name, str) else "tool"
 
 
 def _may_have_side_effect(kind: object, event: dict) -> bool:
@@ -427,7 +447,10 @@ class PiRuntime:
         proc.stdin.write(prompt.encode())
         await proc.stdin.drain()
         proc.stdin.close()
-        texts: list[str] = []
+        # #880 — text in a message that calls tools is narration; the text
+        # after the last tool work is the reply.
+        reply: list[str] = []
+        narration: str | None = None
         text_size = 0
         measured = _MEASURED_USAGE.get()
         usage = measured if measured is not None else {}
@@ -473,6 +496,7 @@ class PiRuntime:
                             usage[target] = usage.get(target, 0) + value
                 content = message.get("content")
                 if isinstance(content, list):
+                    texts: list[str] = []
                     for block in content:
                         if (
                             isinstance(block, dict)
@@ -483,6 +507,17 @@ class PiRuntime:
                             if text_size > MAX_TEXT:
                                 raise ValueError("runtime output exceeds limit")
                             texts.append(block["text"])
+                    if any(
+                        isinstance(block, dict) and block.get("type") == "toolCall"
+                        for block in content
+                    ):
+                        for text in [*reply, *texts]:
+                            if text.strip():
+                                narration = text
+                                emit("progress", {"event": "narration", "text": text})
+                        reply = []
+                    else:
+                        reply.extend(texts)
                 if message.get("stopReason") == "error":
                     failed = True
                     failure_count += 1
@@ -496,6 +531,28 @@ class PiRuntime:
                     continue
             elif kind == "agent_settled":
                 settled = True
+            elif kind in {"tool_execution_start", "tool_execution_end"}:
+                activity = _tool_activity(event.get("toolName"))
+                if kind == "tool_execution_start":
+                    emit("progress", {
+                        "event": "activity", "activity": activity, "phase": "started",
+                    })
+                elif not (activity == "file_change" and event.get("isError") is True):
+                    # A failed edit changed nothing; other failed tools still ran.
+                    emit("progress", {
+                        "event": "activity", "activity": activity, "phase": "completed",
+                        "count": 1,
+                    })
+            elif kind == "message_update":
+                update = event.get("assistantMessageEvent")
+                phase = {"thinking_start": "started", "thinking_end": "completed"}.get(
+                    update.get("type") if isinstance(update, dict) else None
+                )
+                if phase is not None:
+                    emit("progress", {
+                        "event": "activity", "activity": "thinking", "phase": phase,
+                        **({"count": 1} if phase == "completed" else {}),
+                    })
             elif kind in {"agent_start", "turn_start", "message_start", "turn_end"}:
                 payload = {"event": kind}
                 if kind == "message_start":
@@ -510,7 +567,8 @@ class PiRuntime:
             return RuntimeResult("failed", "stopped", failure_code or "ENGINE_ERROR")
         if not settled:
             return RuntimeResult("unknown", "stopped", "missing_terminal_event")
-        text = "\n".join(texts)
+        # A turn that ended on tool work replies with its last narration.
+        text = "\n".join(reply) if any(t.strip() for t in reply) else narration or ""
         if output.exists():
             with output.open("rb") as file:
                 raw = file.read(MAX_TEXT + 1)

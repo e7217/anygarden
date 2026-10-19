@@ -122,10 +122,21 @@ class SendFrame(BaseModel):
     thread_root_id: Optional[str] = None
 
 
+AgentActivity = Literal[
+    "command", "file_change", "file_read", "anygarden_tool", "tool", "web_search", "thinking"
+]
+
+
 class TypingFrame(BaseModel):
     type: Literal["typing"] = "typing"
     is_typing: bool = True
     stage: Optional[Literal["preparing", "using_tool", "writing"]] = None
+    # #880 — separate optional fields, not new ``stage`` values: a server
+    # that predates them ignores them (no ``extra="forbid"`` here) and keeps
+    # the stage, where an unknown stage value would reject the whole frame.
+    activity: Optional[AgentActivity] = None
+    activity_seq: Optional[int] = Field(default=None, ge=1, le=10_000)
+    narration: Optional[str] = Field(default=None, max_length=280)
 
 
 class CreateRoomFrame(BaseModel):
@@ -379,6 +390,10 @@ class TypingOut(BaseModel):
     stage: Optional[
         Literal["preparing", "using_tool", "writing", "waiting_peers"]
     ] = None
+    # #880 — agent senders only; see TypingFrame.
+    activity: Optional[AgentActivity] = None
+    activity_seq: Optional[int] = None
+    narration: Optional[str] = None
     # #762 — ``waiting_peers`` only: the server keeps an ``ask_peer``
     # caller's indicator alive while its peers answer.
     waiting_done: Optional[int] = None

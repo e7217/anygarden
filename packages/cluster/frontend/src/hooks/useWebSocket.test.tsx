@@ -377,3 +377,36 @@ describe('useWebSocket peer-wait progress (#762)', () => {
     expect(state()).toEqual({ stages: {}, progress: {} })
   })
 })
+
+function WorkHarness({ roomId = 'room-1' }: { roomId?: string }) {
+  const { typingWork } = useWebSocket(roomId)
+  return <div data-testid="work">{JSON.stringify(typingWork)}</div>
+}
+
+describe('[ENG-10] useWebSocket typing work detail (#880)', () => {
+  it('follows each heartbeat and clears with the typing state', () => {
+    const view = render(<WorkHarness />)
+    const state = () => JSON.parse(screen.getByTestId('work').textContent || '{}')
+    receiveFrame(sockets[0], {
+      type: 'typing', participant_id: 'dev', is_typing: true, stage: 'using_tool',
+      activity: 'command', activity_seq: 2, narration: 'Checking the logs.',
+    })
+    expect(state()).toEqual({ dev: { activity: 'command', seq: 2, narration: 'Checking the logs.' } })
+
+    // A heartbeat without detail (an older agent, or work finished) drops it.
+    receiveFrame(sockets[0], { type: 'typing', participant_id: 'dev', is_typing: true, stage: 'writing' })
+    expect(state()).toEqual({})
+
+    receiveFrame(sockets[0], { type: 'typing', participant_id: 'dev', is_typing: true, narration: 'Next step.' })
+    receiveFrame(sockets[0], { type: 'typing', participant_id: 'dev', is_typing: false })
+    expect(state()).toEqual({})
+
+    receiveFrame(sockets[0], { type: 'typing', participant_id: 'dev', is_typing: true, activity: 'tool' })
+    act(() => vi.advanceTimersByTime(5000))
+    expect(state()).toEqual({})
+
+    receiveFrame(sockets[0], { type: 'typing', participant_id: 'dev', is_typing: true, activity: 'tool' })
+    view.rerender(<WorkHarness roomId="room-2" />)
+    expect(state()).toEqual({})
+  })
+})

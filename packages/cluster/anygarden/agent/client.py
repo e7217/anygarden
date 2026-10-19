@@ -26,6 +26,7 @@ from anygarden.agent.protocol.frames import (
     TurnCancelOut,
     TurnStartPermitOut,
     TurnStopOut,
+    TypingFrame,
     TurnStopResultFrame,
 )
 from anygarden.agent.protocol.versioning import build_subprotocols
@@ -397,7 +398,14 @@ class ChatClient:
         await ws.send(frame.model_dump_json())
 
     async def sendTyping(
-        self, room_id: str, is_typing: bool, stage: str | None = None
+        self,
+        room_id: str,
+        is_typing: bool,
+        stage: str | None = None,
+        *,
+        activity: str | None = None,
+        activity_seq: int | None = None,
+        narration: str | None = None,
     ) -> None:
         """Send a typing indicator to a room."""
         ws = self._connections.get(room_id)
@@ -407,6 +415,23 @@ class ChatClient:
             frame = {"type": "typing", "is_typing": is_typing}
             if is_typing and stage in {"preparing", "using_tool", "writing"}:
                 frame["stage"] = stage
+            if is_typing:
+                # #880 — validate against the frame model so an invalid value
+                # is dropped here rather than rejecting the whole frame.
+                detail = {
+                    key: value
+                    for key, value in (
+                        ("activity", activity),
+                        ("activity_seq", activity_seq),
+                        ("narration", narration),
+                    )
+                    if value is not None
+                }
+                try:
+                    TypingFrame(**detail)
+                except ValueError:
+                    detail = {}
+                frame.update(detail)
             await ws.send(json.dumps(frame))
         except Exception:
             pass

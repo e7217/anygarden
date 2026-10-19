@@ -32,6 +32,16 @@
 
 ### Added
 
+- While an agent works, the room now shows what kind of work runs and the
+  last sentence the agent wrote, e.g. `dev · running a shell command (#3)…`
+  next to "There are 4 new commits. Same procedure as before." (#880). Pi
+  agents now report tool use at all. A reply that followed tool work carries
+  a collapsed **Work** trace: each narration with the work after it
+  (`4 shell commands · 2 files changed`). Commands, paths, arguments, tool
+  output and reasoning still never leave the agent; only closed work kinds,
+  counts and the agent's own sentences do. Only agents can send this detail,
+  and peers reading the room do not see the trace.
+
 - Agents running on a machine other than this node's own now carry that
   machine's name as a badge in the sidebar and the agent settings header
   (#851). Hovering shows the host and whether the machine is online. Local and
@@ -93,6 +103,10 @@
   execution tasks (`TASK_TURN_SUPERSEDED`).
 
 ### Changed
+
+- A Pi reply now holds only the text after its last tool work; earlier
+  sentences move to the reply's work trace instead of being joined into the
+  answer (#880). Codex replies already held only the last message.
 
 - New federation peer certificates are valid for 2 years instead of 90 days
   (#842). `start` warns 30 days before expiry, and the connection tab shows the

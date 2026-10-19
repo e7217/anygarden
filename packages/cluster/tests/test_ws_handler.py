@@ -385,6 +385,24 @@ class TestWSEndpoint:
                 spoof = json.loads(ws.receive_text())
                 assert spoof["stage"] is None
 
+                # #880 — nor the agent's activity, ordinal or narration.
+                ws.send_text(json.dumps({
+                    "type": "typing", "is_typing": True, "activity": "command",
+                    "activity_seq": 2, "narration": "Deploying now.",
+                }))
+                spoof = json.loads(ws.receive_text())
+                assert (spoof["activity"], spoof["activity_seq"], spoof["narration"]) == (None, None, None)
+
+                # #880 — a human message cannot carry a forged work trace.
+                ws.send_text(json.dumps({
+                    "type": "send", "content": "hi",
+                    "metadata": {"execution_trace": {"v": 1, "steps": [], "totals": {"commands": 9}}},
+                }))
+                sent = _receive_skipping_roster(ws)
+                while sent["type"] != "message":
+                    sent = _receive_skipping_roster(ws)
+                assert "execution_trace" not in (sent.get("metadata") or {})
+
     @pytest.mark.asyncio
     async def test_ws_bad_frame_returns_error(self, ws_env) -> None:
         from starlette.testclient import TestClient
@@ -912,6 +930,70 @@ class TestWelcomeAgentId:
                 assert welcome["type"] == "welcome"
                 assert welcome.get("agent_id") == agent.id
 
+
+    @pytest.mark.req("ENG-10")
+    @pytest.mark.req("ENG-12")
+    @pytest.mark.asyncio
+    async def test_agent_activity_and_trace_are_relayed_and_normalized(self, ws_env) -> None:
+        """#880 — an agent's activity detail is broadcast; its trace is kept
+        only in the closed shape."""
+        from starlette.testclient import TestClient
+
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
+
+        app = ws_env["app"]
+        sf = ws_env["session_factory"]
+        room = ws_env["room"]
+        async with sf() as db:
+            agent = Agent(name="trace-bot", engine="codex", actual_state="running")
+            db.add(agent)
+            await db.flush()
+            db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
+            agent_token_plain = generate_token()
+            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+            db.add(AgentToken(agent_id=agent.id, token_hash=token_hash, lookup_hint=lookup_hint))
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "welcome"
+                ws.send_text(json.dumps({
+                    "type": "typing", "is_typing": True, "stage": "using_tool",
+                    "activity": "command", "activity_seq": 2, "narration": "Deploying now.",
+                }))
+                typing = json.loads(ws.receive_text())
+                while typing["type"] != "typing":
+                    typing = json.loads(ws.receive_text())
+                assert (typing["stage"], typing["activity"], typing["activity_seq"], typing["narration"]) == (
+                    "using_tool", "command", 2, "Deploying now.",
+                )
+                ws.send_text(json.dumps({
+                    "type": "send", "content": "done",
+                    "metadata": {"execution_trace": {
+                        "v": 1,
+                        "steps": [
+                            {"narration": "Deploying now.", "activities": {"commands": 2, "secrets": 1}},
+                            {"narration": 7, "activities": {"file_changes": -1}},
+                            "junk",
+                        ],
+                        "totals": {"commands": 2, "tools": "many"},
+                        "truncated": 0,
+                        "raw": "DO-NOT-PUBLISH",
+                    }},
+                }))
+                sent = _receive_skipping_roster(ws)
+                while sent["type"] != "message":
+                    sent = _receive_skipping_roster(ws)
+                assert sent["metadata"]["execution_trace"] == {
+                    "v": 1,
+                    "steps": [{"narration": "Deploying now.", "activities": {"commands": 2}}],
+                    "totals": {"commands": 2},
+                    "truncated": 0,
+                }
 
     @pytest.mark.req("MSG-02")
     @pytest.mark.asyncio

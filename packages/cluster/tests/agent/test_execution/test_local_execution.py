@@ -86,6 +86,28 @@ if prompt.startswith("noeffect-"):
     sys.exit(1)
 if prompt == "stall":
     time.sleep(60)  # times out before any side-effecting item started
+if prompt == "multi-step":
+    # Shapes observed from codex-cli 0.162.1 (#880), raw values replaced.
+    event({"type": "item.completed", "item": {"type": "agent_message", "text": "I will count the commits."}})
+    event({"type": "item.started", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH", "aggregated_output": "", "status": "in_progress"}})
+    event({"type": "item.completed", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH", "aggregated_output": "DO-NOT-PUBLISH", "exit_code": 0, "status": "completed"}})
+    event({"type": "item.completed", "item": {"type": "reasoning", "text": "DO-NOT-PUBLISH"}})
+    event({"type": "item.completed", "item": {"type": "agent_message", "text": "Now I will edit README."}})
+    event({"type": "item.completed", "item": {"type": "agent_message", "text": "Editing it in place."}})
+    event({"type": "item.started", "item": {"type": "file_change", "changes": [{"path": "DO-NOT-PUBLISH", "kind": "update"}], "status": "in_progress"}})
+    event({"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": "DO-NOT-PUBLISH", "kind": "update"}, {"path": "DO-NOT-PUBLISH-2", "kind": "add"}], "status": "completed"}})
+    event({"type": "item.started", "item": {"type": "file_change", "changes": [{"path": "DO-NOT-PUBLISH"}], "status": "in_progress"}})
+    event({"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": "DO-NOT-PUBLISH"}], "status": "failed"}})
+    event({"type": "item.started", "item": {"type": "mcp_tool_call", "server": "anygarden", "tool": "DO-NOT-PUBLISH", "arguments": {}}})
+    event({"type": "item.completed", "item": {"type": "mcp_tool_call", "server": "anygarden", "tool": "DO-NOT-PUBLISH", "result": "DO-NOT-PUBLISH"}})
+    event({"type": "item.started", "item": {"type": "mcp_tool_call", "server": "DO-NOT-PUBLISH", "tool": "DO-NOT-PUBLISH"}})
+    event({"type": "item.completed", "item": {"type": "mcp_tool_call", "server": "DO-NOT-PUBLISH", "tool": "DO-NOT-PUBLISH"}})
+    event({"type": "item.started", "item": {"type": "web_search", "query": "", "action": {"type": "other"}}})
+    event({"type": "item.completed", "item": {"type": "web_search", "query": "DO-NOT-PUBLISH", "results": []}})
+    event({"type": "item.completed", "item": {"type": "agent_message", "text": "Done: 1 commit, README edited."}})
+    event({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 1}})
+    Path(sys.argv[sys.argv.index("-o") + 1]).write_text("Done: 1 commit, README edited.")
+    sys.exit(0)
 event({"type": "item.started", "item": {"type": "command_execution", "command": "DO-NOT-PUBLISH"}})
 if prompt == "effect-500":
     event({"type": "turn.failed", "error": {"message": api_error(500, "server_error", "DO-NOT-PUBLISH")}})
@@ -169,6 +191,40 @@ async def test_progress_result_duplicate_and_restart(tmp_path, executable, invoc
         assert calls(invocation)[1]["argv"][1:3] == ["resume", "native-session"]
     finally:
         await m.close()
+
+
+@pytest.mark.req("ENG-10")
+async def test_multi_step_turn_emits_normalized_activity_and_narration(
+    tmp_path, executable, invocation
+):
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, prompt="multi-step"))
+        receipt, events = await done(m)
+    finally:
+        await m.close()
+    assert receipt.outcome == "succeeded"
+    assert receipt.text == "Done: 1 commit, README edited."
+    progress = [e.payload for e in events if e.kind == "progress"]
+    normalized = [p for p in progress if p["event"] in {"activity", "narration"}]
+    assert normalized == [
+        {"event": "narration", "text": "I will count the commits."},
+        {"event": "activity", "activity": "command", "phase": "started"},
+        {"event": "activity", "activity": "command", "phase": "completed", "count": 1},
+        {"event": "narration", "text": "Now I will edit README."},
+        {"event": "narration", "text": "Editing it in place."},
+        {"event": "activity", "activity": "file_change", "phase": "started"},
+        {"event": "activity", "activity": "file_change", "phase": "completed", "count": 2},
+        {"event": "activity", "activity": "file_change", "phase": "started"},
+        {"event": "activity", "activity": "anygarden_tool", "phase": "started"},
+        {"event": "activity", "activity": "anygarden_tool", "phase": "completed", "count": 1},
+        {"event": "activity", "activity": "tool", "phase": "started"},
+        {"event": "activity", "activity": "tool", "phase": "completed", "count": 1},
+        {"event": "activity", "activity": "web_search", "phase": "started"},
+        {"event": "activity", "activity": "web_search", "phase": "completed", "count": 1},
+    ]
+    # The final message is the reply; it never also appears as narration.
+    assert "DO-NOT-PUBLISH" not in str(events)
 
 
 async def test_partial_resume_failure_never_reexecutes(

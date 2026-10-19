@@ -18,7 +18,7 @@ from anygarden.db.engine import begin_write_transaction
 from anygarden.db.models import Message as MessageRow
 from anygarden.db.models import MessageReaction, Participant
 from anygarden.dependencies import get_current_identity, get_db
-from anygarden.messages.metadata import strip_turn_proof
+from anygarden.messages.metadata import sanitize_execution_trace, strip_turn_proof
 from anygarden.messages.references import (
     InvalidSharedFileReference,
     canonicalize_message_references,
@@ -181,6 +181,8 @@ async def _write_message(
     metadata = strip_turn_proof(metadata)
     metadata.pop("next_speaker_participant_id", None)
     metadata.pop("delegation_outcome", None)
+    # #880 — a work trace comes only with an agent's WebSocket reply.
+    metadata = sanitize_execution_trace(metadata, sender_is_agent=False)
     try:
         metadata = await canonicalize_message_references(
             db,

@@ -1395,3 +1395,25 @@ class TestReconnectBackoff:
         # but the room task is never registered so this asserts we reach
         # the normal backoff branch without error).
         assert attempts["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_send_typing_carries_valid_activity_detail_only():
+    # #880 — detail rides on a typing frame only while typing, and an invalid
+    # value is dropped here instead of failing the whole frame server-side.
+    client = ChatClient("ws://test", token="test")
+    ws = AsyncMock()
+    client._connections["room"] = ws
+
+    async def frame(*args, **kwargs):
+        await client.sendTyping("room", *args, **kwargs)
+        return json.loads(ws.send.call_args.args[0])
+
+    assert await frame(True, "using_tool", activity="command", activity_seq=2, narration="Checking.") == {
+        "type": "typing", "is_typing": True, "stage": "using_tool",
+        "activity": "command", "activity_seq": 2, "narration": "Checking.",
+    }
+    assert await frame(True, "using_tool", activity="secret", activity_seq=2) == {
+        "type": "typing", "is_typing": True, "stage": "using_tool",
+    }
+    assert await frame(False, activity="command") == {"type": "typing", "is_typing": False}

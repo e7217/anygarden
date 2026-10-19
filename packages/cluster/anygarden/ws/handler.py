@@ -29,7 +29,11 @@ from anygarden.db.models import (
     User,
 )
 from anygarden.db.repository import replay_since_seq
-from anygarden.messages.metadata import REPLY_REQUEST_ID_KEY, strip_turn_proof
+from anygarden.messages.metadata import (
+    REPLY_REQUEST_ID_KEY,
+    sanitize_execution_trace,
+    strip_turn_proof,
+)
 from anygarden.messages.references import (
     InvalidSharedFileReference,
     canonicalize_message_references,
@@ -1318,6 +1322,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 if identity is None or identity.kind != "agent":
                     metadata = strip_turn_proof(metadata)
                     metadata.pop("delegation_outcome", None)
+                metadata = sanitize_execution_trace(
+                    metadata, sender_is_agent=identity is not None and identity.kind == "agent"
+                )
                 # D-6 (#629): validate + stamp interaction payloads on the
                 # agent WS path too — same closed schema as REST, no bypass.
                 from anygarden.interactions import (
@@ -2329,15 +2336,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
             elif isinstance(frame_in, TypingFrame):
                 typing_tracker.set_typing(room_id, participant.id, frame_in.is_typing)
+                # Execution detail is an agent's to report (#701, #880).
+                agent_detail = frame_in.is_typing and identity is not None and identity.kind == "agent"
                 out_typing = TypingOut(
                     room_id=room_id,
                     participant_id=participant.id,
                     is_typing=frame_in.is_typing,
-                    stage=(
-                        frame_in.stage
-                        if frame_in.is_typing and identity and identity.kind == "agent"
-                        else None
-                    ),
+                    stage=frame_in.stage if agent_detail else None,
+                    activity=frame_in.activity if agent_detail else None,
+                    activity_seq=frame_in.activity_seq if agent_detail else None,
+                    narration=frame_in.narration if agent_detail else None,
                 )
                 await manager.broadcast(room_id, out_typing)
 
