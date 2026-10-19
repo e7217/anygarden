@@ -33,6 +33,7 @@ import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { AgentActionsContext } from '@/lib/agentActions'
 import { apiFetch } from '@/lib/api'
+import { deleteRoom, deleteRoomFailure } from '@/lib/roomDelete'
 import { leaveRoom } from '@/lib/roomMembership'
 import { MessageSquare, Menu, Plus } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
@@ -454,10 +455,8 @@ function LocalChatPage() {
     })
     if (!ok) return
     try {
-      const resp = await apiFetch(`/api/v1/rooms/${selectedRoom}`, {
-        method: 'DELETE',
-      })
-      if (resp.status === 204) {
+      const result = await deleteRoom(selectedRoom)
+      if (result.ok) {
         // The server's broadcast also tells us via WS, but acting
         // immediately on the success response avoids depending on
         // the round-trip — keeps the UI snappy. Navigate away
@@ -466,12 +465,7 @@ function LocalChatPage() {
         navigate('/')
         return
       }
-      let detail = t('chat.failedDeleteRoom', { status: resp.status })
-      try {
-        const body = await resp.json()
-        if (body && typeof body.detail === 'string') detail = body.detail
-      } catch { /* ignore body parse */ }
-      notify({ message: detail, tone: 'error' })
+      notify({ message: deleteRoomFailure(result, t('chat.failedDeleteRoom', { status: result.status }), t('chat.deleteRoomActiveExecution')), tone: 'error' })
     } catch (err) {
       notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
     }

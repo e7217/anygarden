@@ -641,14 +641,19 @@ class TestRoomCRUD:
             )
             assert resp.status_code == 204
 
-            # Verify it's gone
+            # #911 — the room leaves the list but is kept (archived) so its
+            # history stays; a direct read is read-only.
+            listed = await client.get(
+                "/api/v1/rooms",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert room_id not in {row["id"] for row in listed.json()}
             resp = await client.get(
                 f"/api/v1/rooms/{room_id}",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            # 403-before-404 keeps room existence hidden once membership is
-            # gone, including immediately after deletion.
-            assert resp.status_code == 403
+            assert resp.status_code == 200
+            assert resp.json()["archived_at"] is not None
 
     @pytest.mark.asyncio
     async def test_archive_is_read_only_until_owner_unarchives(self, room_env) -> None:

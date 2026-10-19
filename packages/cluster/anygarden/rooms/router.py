@@ -59,7 +59,6 @@ from anygarden.rooms.file_storage import FileTooLargeError
 from anygarden.rooms.membership import add_user_to_room, ensure_agent_in_room
 from anygarden.rooms.roster import broadcast_roster
 from anygarden.rooms.service import (
-    archive_child_rooms,
     create_sub_room,
     reorder_pinned_rooms,
     set_room_pinned,
@@ -298,7 +297,11 @@ async def list_rooms(
     )
     if not allowed_room_ids:
         return []
-    query = select(Room).where(Room.id.in_(allowed_room_ids))
+    # Archived rooms (including rooms the user deleted, #911) stay out of
+    # listings; they remain readable by id.
+    query = select(Room).where(
+        Room.id.in_(allowed_room_ids), Room.archived_at.is_(None)
+    )
     if identity.kind == "guest" and isinstance(identity.claims, GuestClaims):
         # Explicit room-id pin — even a spoofed ``project_id`` query
         # parameter cannot widen the result set beyond the JWT's
@@ -1247,55 +1250,84 @@ async def delete_room(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a room, cascading: archive child rooms.
+    """Delete a room for the user while keeping its history (#911).
 
     Authorisation: global admin OR a room-level ``owner`` Participant.
     Anyone else (room admin, member, outsider, agent, guest) is rejected
     with 403.
+
+    The room is archived rather than removed: invocation accounting must
+    keep referencing it, and the archive state already blocks new work.
+    Listings hide archived rooms, so the room disappears for its members.
+    Open turns and project executions in the room are cancelled in the
+    same transaction; a run the caller may not cancel refuses the delete
+    with 409 ``ROOM_HAS_ACTIVE_EXECUTION``. Child rooms move to the top
+    level.
 
     On success we broadcast ``RoomDeletedOut`` so any user with a
     live WS in this room (or any of its participants reached via a
     sibling-room WS) can remove the room from their tree without
     waiting for a polled refetch.
     """
+    from anygarden.rooms.retire import RoomRetireError, retire_room
+
     access = await require_capability(
         db,
         room_id=room_id,
         identity=identity,
         capability=Capability.ROOM_DELETE,
     )
-    room = access.room
-
-    from anygarden.db.native_invocation_models import NativeInvocationAccounting
-
-    if await db.scalar(select(NativeInvocationAccounting.id).where(
-        NativeInvocationAccounting.room_id == room_id,
-    ).limit(1)):
-        raise HTTPException(status_code=409, detail={
-            "code": "NATIVE_INVOCATION_HISTORY_DELETE_FORBIDDEN",
-            "detail": "Recorded invocation history must be retained; archive the room instead of deleting it",
-        })
-
-    # Capture the audience BEFORE we delete the participant rows. We
-    # need:
-    # - participant_ids in the room being deleted, so we can broadcast
-    #   over those still-open WS connections,
-    # - user_ids of those participants, so we can also reach each
-    #   user's OTHER active WS (e.g. a sidebar mounted in a sibling
-    #   room) — the ``add_participant`` push pattern from #19.
+    try:
+        retired = await retire_room(db, room=access.room, identity=identity)
+    except RoomRetireError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "detail": exc.detail},
+        ) from exc
+    messages = list(db.info.pop("project_execution_messages", []))
+    # Participants stay (history keeps its authors); they are the audience
+    # for the deletion notice.
     parts = (
         (await db.execute(select(Participant).where(Participant.room_id == room_id)))
         .scalars()
         .all()
     )
     user_ids = {p.user_id for p in parts if p.user_id}
-
-    await archive_child_rooms(db, room_id)
-    await db.execute(delete(Participant).where(Participant.room_id == room_id))
-    await db.delete(room)
     await db.commit()
 
     manager = getattr(request.app.state, "connection_manager", None)
+    if retired.cancelled_execution_ids:
+        from anygarden.mcp.project_tools import broadcast_project_messages
+        from anygarden.project_executions.serialization import fanout_execution_update
+        from anygarden.project_executions.stop_service import deliver_pending_stops
+
+        try:
+            await broadcast_project_messages(db, request=request, messages=messages)
+            if manager is not None:
+                # Before the room sockets are revoked, so a connected agent
+                # still hears the stop.
+                await deliver_pending_stops(request.app.state.session_factory, manager)
+            for execution_id in retired.cancelled_execution_ids:
+                await fanout_execution_update(db, manager=manager, execution_id=execution_id)
+        except Exception:  # durable cancel already committed
+            logger.warning("room.delete.execution_fanout_deferred", room_id=room_id, exc_info=True)
+    if retired.cancelled_turns:
+        from anygarden.turns.cancel import notify_turn_cancelled
+
+        for turn, stop_target in retired.cancelled_turns:
+            await notify_turn_cancelled(manager, turn, stop_target)
+
+    workspace_lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+    machine_bus = getattr(request.app.state, "machine_bus", None)
+    if workspace_lifecycle is not None and machine_bus is not None:
+        from anygarden.workspaces.lifecycle import revoke_invalid_attachments
+
+        await revoke_invalid_attachments(
+            request.app.state.session_factory,
+            machine_bus,
+            workspace_lifecycle,
+        )
+
     if manager is not None:
         from anygarden.ws.protocol import RoomDeletedOut
 
@@ -1304,6 +1336,7 @@ async def delete_room(
         #    instant gets the news directly. ``broadcast`` is best
         #    effort and tolerant of already-closed sockets.
         await manager.broadcast(room_id, frame)
+        await manager.revoke_room(room_id, reason="Room was deleted")
 
         # 2) Members who were NOT subscribed to the deleted room (e.g.
         #    they were viewing a sibling room) need a poke too so
@@ -1314,7 +1347,10 @@ async def delete_room(
             other_pids = (
                 (
                     await db.execute(
-                        select(Participant.id).where(Participant.user_id.in_(user_ids))
+                        select(Participant.id).where(
+                            Participant.user_id.in_(user_ids),
+                            Participant.room_id != room_id,
+                        )
                     )
                 )
                 .scalars()
@@ -1399,6 +1435,7 @@ async def list_sub_rooms(
     query = select(Room).where(
         Room.parent_room_id == room_id,
         Room.id.in_(allowed_room_ids),
+        Room.archived_at.is_(None),
     )
     if name:
         query = query.where(Room.name == name)
