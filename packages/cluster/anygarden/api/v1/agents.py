@@ -294,6 +294,12 @@ class AgentOut(BaseModel):
     unavailable_reason: Optional[UnavailableReasonOut] = None
     restart_policy: str
     agents_md: Optional[str] = None
+    # #908 — where the instructions live: ``disk`` (the placed machine keeps
+    # them and is online), ``disk_offline`` (read-only until it reconnects)
+    # or ``server`` (the snapshot here is still the source).
+    instructions_mode: str = "server"
+    instructions_revision: Optional[int] = 0
+    instructions_synced_at: Optional[datetime] = None
     # Last failure reason as recorded by the lifecycle — surfaced
     # to the admin UI so a ``pending`` or ``crashed`` agent shows
     # *why* on hover instead of being silently stuck. Populated
@@ -345,6 +351,10 @@ def _agent_to_out(
         and machine_bus
         and machine_bus.is_connected(agent.placed_on_machine_id)
     )
+    from anygarden.instructions.service import instructions_mode
+
+    out.instructions_mode = instructions_mode(agent, machine, machine_bus)
+    out.instructions_revision = int(agent.instructions_revision or 0)
     if machine is not None and machine.id == agent.placed_on_machine_id:
         out.placement = AgentPlacementOut(
             machine_id=machine.id,
@@ -780,7 +790,18 @@ async def update_agent(
         # Explicit opt-in flag is needed to distinguish "omit the
         # field" (no change) from "set the field to null" (clear
         # the role/rules body).
-        agent.agents_md = body.agents_md
+        # #908 — written to the agent's machine when it keeps instructions
+        # on disk; records a revision either way.
+        from anygarden.instructions.service import write_instructions
+
+        await write_instructions(
+            db,
+            request.app.state.machine_bus,
+            agent,
+            operation="write_agents_md",
+            text=body.agents_md or "",
+            by_user_id=identity.id if identity.kind == "user" else None,
+        )
         runtime_changed = True
     if body.reasoning_effort_set:
         agent.reasoning_effort = body.reasoning_effort
@@ -1080,6 +1101,7 @@ async def list_agent_files(
 async def upsert_agent_file(
     agent_id: str,
     body: AgentFileUpsert,
+    request: Request,
     identity: Identity = Depends(get_admin_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1098,8 +1120,33 @@ async def upsert_agent_file(
         )
 
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    if result.scalar_one_or_none() is None:
+    agent = result.scalar_one_or_none()
+    if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    from anygarden.instructions.service import is_instruction_path, write_instructions
+
+    if is_instruction_path(body.path):
+        # #908 — skills are instructions: written to the agent's machine
+        # when it keeps them on disk, with a revision either way.
+        await write_instructions(
+            db,
+            request.app.state.machine_bus,
+            agent,
+            operation="write_skill",
+            path=body.path,
+            text=body.content,
+            by_user_id=identity.id if identity.kind == "user" else None,
+        )
+        written = (
+            await db.execute(
+                select(AgentFile).where(
+                    AgentFile.agent_id == agent_id, AgentFile.path == body.path
+                )
+            )
+        ).scalar_one()
+        await db.refresh(written)
+        return written
 
     existing = (
         await db.execute(
@@ -1126,6 +1173,7 @@ async def upsert_agent_file(
 async def delete_agent_file(
     agent_id: str,
     body: AgentFileDelete,
+    request: Request,
     identity: Identity = Depends(get_admin_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1144,7 +1192,8 @@ async def delete_agent_file(
         )
 
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    if result.scalar_one_or_none() is None:
+    agent = result.scalar_one_or_none()
+    if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     existing = (
@@ -1157,6 +1206,19 @@ async def delete_agent_file(
     ).scalar_one_or_none()
     if existing is None:
         raise HTTPException(status_code=404, detail="File not found")
+
+    from anygarden.instructions.service import is_instruction_path, write_instructions
+
+    if is_instruction_path(body.path):
+        await write_instructions(
+            db,
+            request.app.state.machine_bus,
+            agent,
+            operation="delete_skill",
+            path=body.path,
+            by_user_id=identity.id if identity.kind == "user" else None,
+        )
+        return {"deleted": True, "path": body.path}
 
     await db.delete(existing)
     await db.commit()
@@ -1392,6 +1454,83 @@ async def delete_agent(
     await db.delete(agent)
     await db.commit()
     return {"deleted": True}
+
+
+# ── #908 instruction revisions ─────────────────────────────────────
+
+
+class InstructionRevisionOut(BaseModel):
+    revision: int
+    source: str
+    by_user_id: Optional[str] = None
+    restored_from: Optional[int] = None
+    agents_md: str
+    skills: dict[str, str]
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+@router.get(
+    "/{agent_id}/instructions/revisions",
+    response_model=list[InstructionRevisionOut],
+)
+async def list_instruction_revisions(
+    agent_id: str,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """#908 — accepted versions of the agent's instructions, newest first."""
+    from anygarden.instructions.service import list_revisions
+
+    if await db.get(Agent, agent_id) is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return await list_revisions(db, agent_id)
+
+
+@router.post(
+    "/{agent_id}/instructions/revisions/{revision}/restore",
+    response_model=AgentOut,
+)
+async def restore_instruction_revision(
+    agent_id: str,
+    revision: int,
+    request: Request,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """#908 — make an earlier version the current instructions again.
+
+    Recorded as a new revision. The agent restarts so the restored
+    instructions apply.
+    """
+    from anygarden.db.models import AgentInstructionRevision
+    from anygarden.instructions.service import Snapshot, write_instructions
+
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    stored = (
+        await db.execute(
+            select(AgentInstructionRevision).where(
+                AgentInstructionRevision.agent_id == agent_id,
+                AgentInstructionRevision.revision == revision,
+            )
+        )
+    ).scalar_one_or_none()
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    await write_instructions(
+        db,
+        request.app.state.machine_bus,
+        agent,
+        operation="replace",
+        replacement=Snapshot(stored.agents_md, dict(stored.skills or {})),
+        restored_from=revision,
+        by_user_id=identity.id if identity.kind == "user" else None,
+    )
+    await request.app.state.agent_lifecycle.bump_generation(agent_id)
+    await db.refresh(agent)
+    return await _agent_out(request, db, agent)
 
 
 # ── Agent start/restart ─────────────────────────────────────────────

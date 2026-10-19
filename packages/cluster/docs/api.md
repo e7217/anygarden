@@ -31,7 +31,9 @@ Base URL: `/api/v1`
 | POST | `/agents/{id}/start` | 에이전트 시작 (배치된 머신 유지, 머신이 삭제된 에이전트는 409) |
 | PUT | `/agents/{id}/machine` | 실행 머신 변경. 서버는 배치된 에이전트를 스스로 옮기지 않으므로 유일한 이동 경로 (#907) |
 | POST | `/agents/{id}/stop` | 에이전트 중지 |
-| PUT | `/agents/{id}/files` | 에이전트 파일(manifest) 업데이트 |
+| PUT | `/agents/{id}/files` | 에이전트 파일(manifest) 업데이트. `skills/` 경로는 지침으로 취급되어 실행 머신 디스크에 쓰고 리비전을 남긴다 (#908) |
+| GET | `/agents/{id}/instructions/revisions` | 지침(AGENTS.md·스킬) 리비전 목록, 최신 순. 수정 주체(`user`/`agent`/`system`) 포함 (#908) |
+| POST | `/agents/{id}/instructions/revisions/{n}/restore` | 리비전 n을 새 리비전으로 되돌리고 에이전트 재시작. 머신이 오프라인이면 409 (#908) |
 
 `POST /agents`는 관리자 전용이며 `name`, `engine`이 필요합니다. 선택 필드
 `description`(최대 200자), `agents_md`, `rooms`와 `permission_level`

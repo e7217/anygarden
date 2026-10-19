@@ -2712,3 +2712,86 @@ class TestAgentMachineChange:
             headers={"Authorization": f"Bearer {env['token']}"},
         )
         assert refused.status_code == 409
+
+
+class TestAgentInstructionsAPI:
+    """#908 — instruction writes keep revisions and respect disk placement."""
+
+    @pytest_asyncio.fixture
+    async def agent_id(self, agents_env) -> str:
+        env = agents_env
+        async with env["factory"]() as db:
+            agent = Agent(name="writer", engine="echo", agents_md="v1",
+                          placed_on_machine_id=env["machine"].id,
+                          desired_state="stopped", actual_state="stopped")
+            db.add(agent)
+            await db.commit()
+            return agent.id
+
+    def _auth(self, env, token=None):
+        return {"Authorization": f"Bearer {token or env['token']}"}
+
+    @pytest.mark.req("AGT-11")
+    @pytest.mark.asyncio
+    async def test_edits_are_recorded_and_restorable(self, agents_env, agent_id):
+        env = agents_env
+        env["lifecycle"].bump_generation = AsyncMock()
+        client = env["client"]
+        first = await client.put(f"/api/v1/agents/{agent_id}", json={"agents_md": "v2", "agents_md_set": True},
+                                 headers=self._auth(env))
+        assert first.status_code == 200, first.text
+        assert first.json()["instructions_mode"] == "server"
+        assert first.json()["instructions_revision"] == 1
+        skill = await client.put(f"/api/v1/agents/{agent_id}/files",
+                                 json={"path": "skills/a/SKILL.md", "content": "A"}, headers=self._auth(env))
+        assert skill.status_code == 200, skill.text
+
+        revisions = (await client.get(f"/api/v1/agents/{agent_id}/instructions/revisions",
+                                      headers=self._auth(env))).json()
+        assert [(r["revision"], r["source"], r["agents_md"]) for r in revisions] == [
+            (2, "user", "v2"), (1, "user", "v2")]
+        assert revisions[0]["skills"] == {"skills/a/SKILL.md": "A"}
+
+        restored = await client.post(f"/api/v1/agents/{agent_id}/instructions/revisions/1/restore",
+                                     headers=self._auth(env))
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["instructions_revision"] == 3
+        files = (await client.get(f"/api/v1/agents/{agent_id}/files", headers=self._auth(env))).json()
+        assert [f["path"] for f in files] == []
+        latest = (await client.get(f"/api/v1/agents/{agent_id}/instructions/revisions",
+                                   headers=self._auth(env))).json()[0]
+        assert latest["restored_from"] == 1
+        env["lifecycle"].bump_generation.assert_awaited()
+
+    @pytest.mark.req("AGT-11")
+    @pytest.mark.asyncio
+    async def test_offline_disk_machine_makes_instructions_read_only(self, agents_env, agent_id):
+        env = agents_env
+        async with env["factory"]() as db:
+            machine = await db.get(Machine, env["machine"].id)
+            machine.control_capabilities = ["agent_instructions_disk_v1"]
+            await db.commit()
+        await env["bus"].unregister(env["machine"].id)
+
+        listed = (await env["client"].get("/api/v1/agents", headers=self._auth(env))).json()
+        assert next(a for a in listed if a["id"] == agent_id)["instructions_mode"] == "disk_offline"
+        refused = await env["client"].put(f"/api/v1/agents/{agent_id}",
+                                          json={"agents_md": "x", "agents_md_set": True}, headers=self._auth(env))
+        assert refused.status_code == 409
+        skill = await env["client"].put(f"/api/v1/agents/{agent_id}/files",
+                                        json={"path": "skills/a/SKILL.md", "content": "A"}, headers=self._auth(env))
+        assert skill.status_code == 409
+        engine_file = await env["client"].put(f"/api/v1/agents/{agent_id}/files",
+                                              json={"path": ".codex/config.toml", "content": "a=1"},
+                                              headers=self._auth(env))
+        assert engine_file.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_revisions_are_admin_only(self, agents_env, agent_id):
+        env = agents_env
+        response = await env["client"].get(f"/api/v1/agents/{agent_id}/instructions/revisions",
+                                           headers=self._auth(env, env["regular_token"]))
+        assert response.status_code == 403
+        missing = await env["client"].post(f"/api/v1/agents/{agent_id}/instructions/revisions/9/restore",
+                                           headers=self._auth(env))
+        assert missing.status_code == 404

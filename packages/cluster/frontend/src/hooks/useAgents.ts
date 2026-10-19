@@ -24,6 +24,12 @@ export interface Agent {
   // prompt / role / rules body the materializer writes into
   // ``agent_root/AGENTS.md``. Nullable so the admin can clear it.
   agents_md?: string | null;
+  // #908 — where the instructions (AGENTS.md, skills) live. ``disk``: the
+  // placed machine keeps them and is online; ``disk_offline``: read-only
+  // until it reconnects; ``server``: the server copy is still the source.
+  instructions_mode?: 'disk' | 'disk_offline' | 'server';
+  instructions_revision?: number;
+  instructions_synced_at?: string | null;
   reasoning_effort?: string | null;
   model?: string | null;
   provider?: string | null;
@@ -64,6 +70,17 @@ export interface Agent {
   // (LLM roster + mention popover + participant list). Capped at 200
   // chars by the REST layer; null when unset.
   description?: string | null;
+}
+
+// #908 — one accepted version of an agent's instructions.
+export interface InstructionRevision {
+  revision: number;
+  source: 'user' | 'agent' | 'system';
+  by_user_id?: string | null;
+  restored_from?: number | null;
+  agents_md: string;
+  skills: Record<string, string>;
+  created_at: string;
 }
 
 export interface EngineModel {
@@ -324,6 +341,25 @@ export function useAgents() {
 
   // #769 — switch the engine in place. Separate endpoint from ``updateAgent``
   // because the server resets engine-specific settings and restarts the agent.
+  // #908 — instruction history and restore.
+  const fetchInstructionRevisions = useCallback(async (id: string): Promise<InstructionRevision[]> => {
+    const resp = await apiFetch(`/api/v1/agents/${id}/instructions/revisions`);
+    if (!resp.ok) throw new Error('Failed to load instruction history');
+    return await resp.json() as InstructionRevision[];
+  }, []);
+
+  const restoreInstructionRevision = useCallback(async (id: string, revision: number) => {
+    const resp = await apiFetch(`/api/v1/agents/${id}/instructions/revisions/${revision}/restore`, { method: 'POST' });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(typeof body.detail === 'string' ? body.detail : 'Failed to restore instructions');
+    }
+    const updated = await resp.json() as Agent;
+    mutationRevision.current += 1;
+    setAgents(previous => previous.map(agent => agent.id === id ? updated : agent));
+    return updated;
+  }, []);
+
   // #907 — move the agent to another machine. The server never does this on
   // its own; it stops the agent on the old machine and starts it on the new.
   const changeAgentMachine = useCallback(async (id: string, machineId: string) => {
@@ -490,6 +526,8 @@ export function useAgents() {
     updateAgent,
     changeAgentEngine,
     changeAgentMachine,
+    fetchInstructionRevisions,
+    restoreInstructionRevision,
     fetchAgentFiles,
     upsertAgentFile,
     deleteAgentFile,

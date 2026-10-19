@@ -667,3 +667,62 @@ describe('ManifestPanel — edit preservation across agent prop refresh (#479)',
     )
   })
 })
+
+describe('ManifestPanel — disk-sourced instructions (#908)', () => {
+  function renderWith(agent: Agent, extra: Record<string, unknown> = {}) {
+    render(
+      <MemoryRouter>
+        <ManifestPanel
+          agent={agent}
+          fetchAgentFiles={vi.fn().mockResolvedValue([
+            { path: 'skills/a/SKILL.md', content: 'A', updated_at: '2026-10-19T00:00:00Z' },
+            { path: '.codex/config.toml', content: 'x=1', updated_at: '2026-10-19T00:00:00Z' },
+          ])}
+          updateAgent={vi.fn()}
+          upsertAgentFile={vi.fn()}
+          deleteAgentFile={vi.fn()}
+          {...extra}
+        />
+      </MemoryRouter>,
+    )
+  }
+
+  it('keeps instructions read-only while the machine is offline [AGT-11]', async () => {
+    renderWith(makeAgent({
+      agents_md: 'rules',
+      instructions_mode: 'disk_offline',
+      instructions_synced_at: '2026-10-19T03:00:00Z',
+      placement: { machine_id: 'm', machine_name: 'iac-agent-machine', machine_hostname: 'h', is_local: false },
+    }))
+    expect(await screen.findByTestId('manifest-offline')).toHaveTextContent('iac-agent-machine')
+    const editor = await screen.findByTestId('agent-edit-file-content')
+    expect(editor).toHaveAttribute('readonly')
+    expect(screen.getByTestId('agent-edit-toggle-new-skill')).toBeDisabled()
+  })
+
+  it('leaves instructions editable when the machine is online', async () => {
+    renderWith(makeAgent({ agents_md: 'rules', instructions_mode: 'disk' }))
+    const editor = await screen.findByTestId('agent-edit-file-content')
+    expect(editor).not.toHaveAttribute('readonly')
+    expect(screen.queryByTestId('manifest-offline')).not.toBeInTheDocument()
+  })
+
+  it('shows who changed each version and restores one [AGT-11]', async () => {
+    const fetchInstructionRevisions = vi.fn().mockResolvedValue([
+      { revision: 3, source: 'agent', agents_md: 'agent rule', skills: {}, created_at: '2026-10-19T03:00:00Z' },
+      { revision: 2, source: 'user', agents_md: 'person rule', skills: { 'skills/a/SKILL.md': 'A' }, created_at: '2026-10-19T02:00:00Z' },
+    ])
+    const restoreInstructionRevision = vi.fn().mockResolvedValue(undefined)
+    renderWith(makeAgent({ agents_md: 'agent rule', instructions_mode: 'disk', instructions_revision: 3 }),
+      { fetchInstructionRevisions, restoreInstructionRevision })
+    fireEvent.click(await screen.findByTestId('manifest-history'))
+    expect(await screen.findByTestId('instruction-source-3')).toHaveTextContent('Agent')
+    expect(screen.getByTestId('instruction-source-2')).toHaveTextContent('Person')
+    expect(screen.queryByTestId('instruction-history-restore')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('Version 2'))
+    expect(screen.getByTestId('instruction-history-preview')).toHaveTextContent('person rule')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(screen.getByTestId('instruction-history-restore'))
+    await waitFor(() => expect(restoreInstructionRevision).toHaveBeenCalledWith('a1', 2))
+  })
+})

@@ -3,6 +3,20 @@
 
 ## Unreleased
 
+### Changed
+
+- An agent's instructions now live on its machine's disk (#908). The user
+  part of `AGENTS.md` and the files under `skills/` are no longer
+  overwritten on every start, so edits by the agent itself survive a
+  restart. Generated platform sections sit in a marked block at the end of
+  `AGENTS.md` that is refreshed on each start; skills the agent writes are
+  now inlined there too. The server keeps the last synced copy (shown
+  read-only while the machine is offline) and every version with who made
+  it — person, agent or system. Agent settings → Instructions → **History**
+  restores a version (`GET /agents/{id}/instructions/revisions`,
+  `POST …/revisions/{n}/restore`). Machines on an older daemon keep the
+  previous behaviour until updated.
+
 ### Fixed
 
 - The server no longer moves an agent to another machine on its own (#907).

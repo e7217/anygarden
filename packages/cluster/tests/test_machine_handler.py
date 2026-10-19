@@ -651,3 +651,37 @@ class TestEnginesReport:
                 )
             ).scalars().all()
             assert rows == []
+
+
+@pytest.mark.req("AGT-11")
+@pytest.mark.asyncio
+async def test_instructions_frames_are_routed(handler_env) -> None:
+    """#908 — a disk snapshot is recorded and acknowledged; request replies
+    resolve the waiting writer."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from anygarden.ws.machine_handler import handle_machine_frame
+
+    bus = handler_env["bus"]
+    bus.send = AsyncMock(return_value=True)
+    bus.resolve_instructions = lambda machine_id, data: setattr(bus, "resolved", (machine_id, data))
+    app = SimpleNamespace(state=SimpleNamespace(
+        config=handler_env["config"], session_factory=handler_env["factory"],
+        machine_bus=bus, agent_lifecycle=handler_env["lifecycle"],
+    ))
+    machine_id = handler_env["machine"].id
+    agent_id = handler_env["agent"].id
+
+    await handle_machine_frame(app, machine_id, {
+        "type": "agent_instructions_update", "agent_id": agent_id, "generation": 0,
+        "base_revision": 0, "digest": "d", "snapshot": {"agents_md": "rule", "skills": {}},
+    })
+    bus.send.assert_awaited_once()
+    assert bus.send.await_args.args[1]["status"] == "accepted"
+    async with handler_env["factory"]() as db:
+        assert (await db.get(Agent, agent_id)).agents_md == "rule"
+
+    reply = {"type": "agent_instructions_result", "request_id": "r", "agent_id": agent_id, "status": "ok"}
+    await handle_machine_frame(app, machine_id, reply)
+    assert bus.resolved == (machine_id, reply)

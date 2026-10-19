@@ -26,7 +26,7 @@ import {
 import PresenceDot from '@/components/PresenceDot'
 import MachineBadge from '@/components/MachineBadge'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
-import type { Agent, AgentFile, AttachedSkill, SkillPreview, EngineCatalog } from '@/hooks/useAgents'
+import type { Agent, AgentFile, AttachedSkill, InstructionRevision, SkillPreview, EngineCatalog } from '@/hooks/useAgents'
 import OverviewPanel from '@/components/agent-settings/OverviewPanel'
 import type { EngineChange } from '@/components/agent-settings/EngineChangeDialog'
 import ModelConnectionPanel, { type ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
@@ -87,6 +87,9 @@ interface Props {
   changeAgentMachine?: (id: string, machineId: string) => Promise<Agent>
   /** #907 — restart from the reason row of a crash-looped agent. */
   startAgent?: (id: string) => Promise<unknown>
+  /** #908 — instruction history (Instructions → History). */
+  fetchInstructionRevisions?: (id: string) => Promise<InstructionRevision[]>
+  restoreInstructionRevision?: (id: string, revision: number) => Promise<unknown>
   /** Fired when Rooms panel mutates so the caller can refresh its
    *  own derived state (e.g. comma-joined room names in a machine
    *  detail view). */
@@ -171,6 +174,8 @@ export default function AgentSettingsDialog({
   availableEngines,
   changeAgentMachine,
   startAgent,
+  fetchInstructionRevisions,
+  restoreInstructionRevision,
   onRoomsChange,
   onDelete,
   contextWindowOptOut,
@@ -355,6 +360,8 @@ export default function AgentSettingsDialog({
                   deleteAgentFile={deleteAgentFile}
                   fetchAttachedSkills={fetchAttachedSkills}
                   fetchSkillPreview={fetchSkillPreview}
+                  fetchInstructionRevisions={fetchInstructionRevisions}
+                  restoreInstructionRevision={restoreInstructionRevision}
                   onNavigateAway={() => onOpenChange(false)}
                 />
               </Section>

@@ -128,6 +128,7 @@ export default function AdminMachines() {
     deleteAgent, updateAgent, fetchAgentFiles, upsertAgentFile, deleteAgentFile,
     fetchAttachedSkills, fetchSkillPreview,
     availableEngines, changeAgentEngine, changeAgentMachine,
+    fetchInstructionRevisions, restoreInstructionRevision,
   } = useAgents()
   const { projects, rooms: roomsByProject, fetchAgentDMs, status: roomsStatus, refetch: refetchRooms } = useRooms()
 
@@ -1036,6 +1037,8 @@ export default function AdminMachines() {
           return updated
         }}
         startAgent={startAgent}
+        fetchInstructionRevisions={fetchInstructionRevisions}
+        restoreInstructionRevision={restoreInstructionRevision}
         onRoomsChange={() => selectedId && fetchDetail(selectedId)}
         onDelete={
           settingsAgent

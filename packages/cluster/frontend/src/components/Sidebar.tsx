@@ -1017,6 +1017,8 @@ function AgentDMListAdmin({
     changeAgentEngine,
     changeAgentMachine,
     startAgent,
+    fetchInstructionRevisions,
+    restoreInstructionRevision,
     availableEngines,
   } = useAgents()
   const { agentDMs: allDMs, fetchAgentDMs, createAgentDM } = useRooms()
@@ -1424,6 +1426,8 @@ function AgentDMListAdmin({
         availableEngines={availableEngines.map(e => e.engine)}
         changeAgentMachine={changeAgentMachine}
         startAgent={startAgent}
+        fetchInstructionRevisions={fetchInstructionRevisions}
+        restoreInstructionRevision={restoreInstructionRevision}
         onRoomsChange={() => { fetchAgentDMs() }}
         onDelete={
           settingsAgent

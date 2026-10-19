@@ -1952,3 +1952,24 @@ class TestStickyPlacement:
         async with factory() as db:
             agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one()
             assert agent.placed_on_machine_id == lifecycle_env["machine"].id
+
+
+@pytest.mark.req("AGT-11")
+@pytest.mark.asyncio
+async def test_manifest_carries_instructions_revision_only_for_disk_machines(lifecycle_env) -> None:
+    """#908 — older daemons keep rendering AGENTS.md from the snapshot."""
+    factory = lifecycle_env["factory"]
+    lifecycle = lifecycle_env["lifecycle"]
+    machine = lifecycle_env["machine"]
+    async with factory() as db:
+        agent = Agent(name="ins", engine="echo", desired_state="running", actual_state="pending",
+                      placed_on_machine_id=machine.id, instructions_revision=7)
+        db.add(agent)
+        await db.commit()
+        legacy = await lifecycle._build_sync_frame(db, agent, [lifecycle_env["room_id"]])
+        assert legacy["instructions_revision"] is None
+        row = await db.get(Machine, machine.id)
+        row.control_capabilities = ["agent_instructions_disk_v1"]
+        await db.commit()
+        disk = await lifecycle._build_sync_frame(db, agent, [lifecycle_env["room_id"]])
+        assert disk["instructions_revision"] == 7
