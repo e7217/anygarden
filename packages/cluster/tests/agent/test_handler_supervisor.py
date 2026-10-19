@@ -245,18 +245,19 @@ async def test_failed_path_marks_failed_and_notifies_user():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("code", "notice"),
+    ("engine", "code", "notice"),
     [
-        ("ENGINE_AUTH_ERROR", "인증을 확인해야 합니다"),
-        ("PI_PROVIDER_ERROR", "Pi 공급자 설정을 확인해야 합니다"),
-        ("AUTH_MISSING", "공급자 API 키가 없습니다"),
-        ("UNKNOWN_PROVIDER", "공급자 또는 모델 인증 확인에 실패했습니다"),
-        ("AUTH_CHECK_FAILED", "공급자 또는 모델 인증 확인에 실패했습니다"),
+        ("codex-cli", "ENGINE_AUTH_ERROR", "codex login"),
+        ("pi-cli", "ENGINE_AUTH_ERROR", "엔진 인증이 필요합니다"),
+        ("pi-cli", "PI_PROVIDER_ERROR", "Pi 공급자 설정을 확인해야 합니다"),
+        ("pi-cli", "AUTH_MISSING", "공급자 API 키가 없습니다"),
+        ("pi-cli", "UNKNOWN_PROVIDER", "공급자 또는 모델 인증 확인에 실패했습니다"),
+        ("pi-cli", "AUTH_CHECK_FAILED", "공급자 또는 모델 인증 확인에 실패했습니다"),
     ],
 )
-async def test_classified_failure_keeps_code_in_activity_and_guides_user(code, notice):
+async def test_classified_failure_keeps_code_in_activity_and_guides_user(engine, code, notice):
     client = _FakeClient()
-    sup = RoomHandlerSupervisor(client=client, engine_name="codex-cli")
+    sup = RoomHandlerSupervisor(client=client, engine_name=engine)
 
     async def failing_engine():
         raise EngineError(code)
@@ -271,6 +272,9 @@ async def test_classified_failure_keeps_code_in_activity_and_guides_user(code, n
     assert all(event["error"] == code and event["outcome"] == "failed" for event in finished)
     assert notice in client.sends[0][1]
     assert code not in client.sends[0][1]
+    # #902 — the first user of a node is its admin, so "ask an admin" is a
+    # dead end; every notice names the action instead.
+    assert "관리자" not in client.sends[0][1]
 
 
 @pytest.mark.asyncio
