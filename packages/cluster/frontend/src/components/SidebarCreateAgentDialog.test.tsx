@@ -5,10 +5,14 @@ import '@testing-library/jest-dom/vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import SidebarCreateAgentDialog from './SidebarCreateAgentDialog'
 
-const mocks = vi.hoisted(() => ({ apiFetch: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  apiFetch: vi.fn(),
+  projects: [] as Array<{ id: string; name: string }>,
+  rooms: {} as Record<string, unknown[]>,
+}))
 vi.mock('@/lib/api', () => ({ apiFetch: mocks.apiFetch }))
 vi.mock('@/hooks/useRooms', () => ({
-  useRooms: () => ({ projects: [], rooms: {}, status: 'ready', refetch: vi.fn() }),
+  useRooms: () => ({ projects: mocks.projects, rooms: mocks.rooms, status: 'ready', refetch: vi.fn() }),
 }))
 
 const json = (body: unknown) => Promise.resolve({ ok: true, json: async () => body })
@@ -21,13 +25,13 @@ function serve(machines: Array<{ id: string; name: string; status: string }>) {
   })
 }
 
-function renderDialog() {
+function renderDialog(initialRoomIds?: string[]) {
   const onOpenChange = vi.fn()
   render(
     <MemoryRouter>
       <Routes>
         <Route path="/" element={<SidebarCreateAgentDialog open onOpenChange={onOpenChange}
-          createAgent={vi.fn()} fetchEngineCatalog={vi.fn().mockResolvedValue(null)} availableEngines={[]} onCreated={vi.fn()} />} />
+          createAgent={vi.fn()} fetchEngineCatalog={vi.fn().mockResolvedValue(null)} availableEngines={[]} onCreated={vi.fn()} initialRoomIds={initialRoomIds} />} />
         <Route path="/admin/machines" element={<p>machines page</p>} />
       </Routes>
     </MemoryRouter>,
@@ -35,7 +39,7 @@ function renderDialog() {
   return { onOpenChange }
 }
 
-beforeEach(() => mocks.apiFetch.mockReset())
+beforeEach(() => { mocks.apiFetch.mockReset(); mocks.projects = []; mocks.rooms = {} })
 afterEach(cleanup)
 
 it('sends the admin to the machines page when no machine is online', async () => {
@@ -61,4 +65,15 @@ it('offers a picker of online machines when several are available', async () => 
   renderDialog()
   const picker = await screen.findByLabelText('Machine')
   expect([...(picker as HTMLSelectElement).options].map(o => o.text)).toEqual(['Laptop', 'Studio'])
+})
+
+it('checks the room it was opened from (#902)', async () => {
+  serve([{ id: 'm1', name: 'Studio', status: 'online' }])
+  mocks.projects = [{ id: 'p', name: 'Demo' }]
+  mocks.rooms = { p: [{ id: 'general', name: 'general', project_id: 'p', is_dm: false }] }
+  renderDialog(['general'])
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Reviewer' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+  expect(screen.getByLabelText('# general')).toBeChecked()
 })

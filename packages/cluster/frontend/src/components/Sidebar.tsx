@@ -1448,6 +1448,7 @@ function AgentDMListAdmin({
         createAgent={createAgent}
         fetchEngineCatalog={fetchEngineCatalog}
         availableEngines={availableEngines}
+        initialRoomIds={selectedRoom ? [selectedRoom] : undefined}
         onCreated={created => {
           fetchAgentDMs()
           setSettingsAgentId(created.id)

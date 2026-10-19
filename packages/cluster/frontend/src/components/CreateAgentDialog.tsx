@@ -31,6 +31,8 @@ interface Props {
   roomsByProject: Record<string, Room[]>
   roomsStatus?: RoomsStatus
   onRetryRooms?: () => Promise<void>
+  /** Rooms checked when the dialog opens, e.g. the room it was opened from. */
+  initialRoomIds?: string[]
   createAgent: ReturnType<typeof useAgents>['createAgent']
   fetchEngineCatalog: ReturnType<typeof useAgents>['fetchEngineCatalog']
   onCreated: (agent: Agent) => void
@@ -49,7 +51,7 @@ type Step = 1 | 2 | 3
  * The draft is split into three steps (#715): basics, engine and model, then
  * access and rooms. Every step stays mounted so going back keeps its input.
  */
-export default function CreateAgentDialog({ open, onOpenChange, machineId, machineName, machineOptions, onMachineChange, enginesLoading = false, engines, availableEngines, projects, roomsByProject, roomsStatus = 'ready', onRetryRooms, createAgent, fetchEngineCatalog, onCreated }: Props) {
+export default function CreateAgentDialog({ open, onOpenChange, machineId, machineName, machineOptions, onMachineChange, enginesLoading = false, engines, availableEngines, projects, roomsByProject, roomsStatus = 'ready', onRetryRooms, initialRoomIds, createAgent, fetchEngineCatalog, onCreated }: Props) {
   const { locale, t } = useLocale()
   const [step, setStep] = useState<Step>(1)
   const [agentName, setAgentName] = useState('')
@@ -78,7 +80,7 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
   useEffect(() => {
     if (!open) return
     setStep(1); setAgentName(''); setDescription(''); setInstructions(''); setPermission('standard')
-    setAgentEngine(engines[0]?.engine ?? ''); setAgentRooms(new Set())
+    setAgentEngine(engines[0]?.engine ?? ''); setAgentRooms(new Set(initialRoomIds))
     setAgentProvider(''); setAgentModel(''); setAgentReasoning('')
     setEndpointDraft(emptyEndpointDraft('')); setDiscoveredModels([])
     setCreateError(null); setCreatedAgent(null)
@@ -144,7 +146,8 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
       const created: Agent = await createAgent({
         name: agentName.trim(), engine: agentEngine, machine_id: machineId,
         request_id: requestId,
-        rooms: Array.from(agentRooms),
+        // An initial room can be a DM or one that is not listed; only listed rooms are joinable.
+        rooms: selectableRooms.filter(room => agentRooms.has(room.id)).map(room => room.id),
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(instructions.trim() ? { agents_md: instructions.trim() } : {}),
         ...(permission !== 'standard' ? { permission_level: permission } : {}),

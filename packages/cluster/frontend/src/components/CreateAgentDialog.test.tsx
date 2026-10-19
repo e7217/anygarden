@@ -217,3 +217,19 @@ it('hides the machine picker when only one machine is offered', () => {
   setup({ machineOptions: [{ id: 'chosen-machine', name: 'Studio' }] })
   expect(screen.queryByLabelText('Machine')).toBeNull()
 })
+
+it('starts with the room it was opened from as a membership (#902)', async () => {
+  const { props } = setup({ initialRoomIds: ['room'] })
+  goToStep(3)
+  expect(screen.getByLabelText('↳ Review')).toBeChecked()
+  expect(screen.getByLabelText('# Engineering')).not.toBeChecked()
+  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  await waitFor(() => expect(props.createAgent).toHaveBeenCalledWith(expect.objectContaining({ rooms: ['room'] })))
+})
+
+it('does not join a DM it was opened from (#902)', async () => {
+  const { props } = setup({ initialRoomIds: ['dm'] })
+  goToStep(3)
+  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  await waitFor(() => expect(props.createAgent).toHaveBeenCalledWith(expect.objectContaining({ rooms: [] })))
+})
