@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 const machine = { id: 'm-setup', name: 'Development machine', hostname: 'dev-host', status: 'online' }
 const user = { id: 'setup-admin', email: 'setup@example.com', is_admin: true }
 
-async function setup(page: Page, locale: string, theme: string) {
+async function setup(page: Page, locale: string, theme: string, engines: () => unknown[] = () => [{ engine: 'codex-cli', version: '0.154.0' }], openDialog = true) {
   await page.addInitScript(({ locale, theme }) => {
     localStorage.setItem('anygarden_token', 'setup-token')
     localStorage.setItem('anygarden_locale', locale)
@@ -15,7 +15,8 @@ async function setup(page: Page, locale: string, theme: string) {
     let status = 200
     if (pathname === '/api/v1/auth/me') body = user
     else if (pathname === '/api/v1/machines') body = [machine]
-    else if (pathname === `/api/v1/machines/${machine.id}/engines`) body = [{ engine: 'codex-cli', version: '0.154.0' }]
+    else if (pathname === `/api/v1/machines/${machine.id}/engines`) body = engines()
+    else if (pathname === `/api/v1/machines/${machine.id}/engines/rescan`) body = { status: 'rescanning' }
     else if (pathname === '/api/v1/agents/engines/available') body = [{ engine: 'codex-cli', machine_count: 1 }]
     else if (pathname === '/api/v1/agents/engines/codex-cli/models') body = { engine: 'codex-cli', default_model: '', models: [], reasoning_levels: [] }
     else if (pathname === '/api/v1/projects') body = [{ id: 'p-setup', name: 'Product' }]
@@ -30,7 +31,7 @@ async function setup(page: Page, locale: string, theme: string) {
     await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
   })
   await page.goto('/admin/machines')
-  await page.getByRole('button', { name: locale === 'ko' ? '새 에이전트' : 'New Agent', exact: true }).click()
+  if (openDialog) await page.getByRole('button', { name: locale === 'ko' ? '새 에이전트' : 'New Agent', exact: true }).click()
 }
 
 for (const [width, locale, theme] of [[375, 'en', 'light'], [768, 'ko', 'dark'], [1024, 'en', 'dark'], [1440, 'ko', 'light']] as const) {
@@ -69,3 +70,24 @@ for (const [width, locale, theme] of [[375, 'en', 'light'], [768, 'ko', 'dark'],
     await expect(create).toBeEnabled()
   })
 }
+
+// #902 — a fresh machine has no engine: the machine page shows how to install
+// one and finds it after "Detect again" without restarting the node.
+test('[NODE-16] a machine without an engine shows how to install one and detects it again', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 900 })
+  let installed = false
+  await setup(page, 'en', 'light', () => installed ? [{ engine: 'codex-cli', version: '0.163.0' }] : [], false)
+
+  const hint = page.getByTestId('engine-setup-hint')
+  await expect(hint).toContainText('No engine on Development machine yet')
+  await expect(hint).toContainText('npm i -g @openai/codex && codex login')
+  await expect(page.getByRole('button', { name: 'New Agent', exact: true })).toBeDisabled()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375)
+
+  installed = true
+  const rescan = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith(`/machines/${machine.id}/engines/rescan`))
+  await hint.getByRole('button', { name: 'Detect again' }).click()
+  await rescan
+  await expect(hint).toBeHidden({ timeout: 10_000 })
+  await expect(page.getByRole('button', { name: 'New Agent', exact: true })).toBeEnabled()
+})

@@ -189,6 +189,10 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
         # #553 — daemon reported an engine's current vs latest version.
         await _handle_engine_check_result(session_factory, machine_id, data)
 
+    elif frame_type == "engines_report":
+        # #902 — daemon re-detected its engines on request.
+        await _handle_engines_report(session_factory, machine_id, data)
+
     elif frame_type == "engine_update_result":
         # #553 — daemon reported engine update progress/outcome.
         await _handle_engine_update_result(session_factory, machine_id, data)
@@ -373,6 +377,44 @@ async def _handle_engine_check_result(
         await db.commit()
 
 
+async def _replace_machine_engines(db, machine_id: str, engines: list) -> None:
+    """Make ``engines`` the machine's whole engine list (register, #902 rescan)."""
+    await db.execute(
+        delete(MachineEngine).where(MachineEngine.machine_id == machine_id)
+    )
+    for eng in engines:
+        name = eng if isinstance(eng, str) else eng.get("engine", eng)
+        version = None if isinstance(eng, str) else eng.get("version")
+        db.add(
+            MachineEngine(
+                machine_id=machine_id,
+                engine=name,
+                version=version,
+            )
+        )
+        if isinstance(eng, dict) and isinstance(eng.get("auth"), str):
+            _record_auth_status(
+                await _upsert_engine_status(db, machine_id, name), eng
+            )
+
+
+async def _handle_engines_report(
+    session_factory,
+    machine_id: str,
+    data: dict[str, Any],
+) -> None:
+    """Record an ``engines_report``: the daemon's re-detected engines (#902)."""
+    engines = data.get("capabilities")
+    if not isinstance(engines, list):
+        return
+    async with session_factory() as db:
+        if await db.get(Machine, machine_id) is None:
+            return
+        await _replace_machine_engines(db, machine_id, engines)
+        await db.commit()
+    logger.info("machine_ws.engines_reported", machine_id=machine_id, engines=engines)
+
+
 async def _handle_engine_update_result(
     session_factory,
     machine_id: str,
@@ -471,24 +513,7 @@ async def _handle_register(
         # (empty hostname, 0 cpu_cores) never clobbers a previously-good value.
         _apply_system_info(machine, data.get("system_info"))
 
-        # Replace engine list
-        await db.execute(
-            delete(MachineEngine).where(MachineEngine.machine_id == machine_id)
-        )
-        for eng in engines:
-            name = eng if isinstance(eng, str) else eng.get("engine", eng)
-            version = None if isinstance(eng, str) else eng.get("version")
-            db.add(
-                MachineEngine(
-                    machine_id=machine_id,
-                    engine=name,
-                    version=version,
-                )
-            )
-            if isinstance(eng, dict) and isinstance(eng.get("auth"), str):
-                _record_auth_status(
-                    await _upsert_engine_status(db, machine_id, name), eng
-                )
+        await _replace_machine_engines(db, machine_id, engines)
 
         db.add(
             MachineActivityLog(

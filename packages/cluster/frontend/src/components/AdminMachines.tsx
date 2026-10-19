@@ -21,6 +21,7 @@ import {
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import MachineConnectionDialog from '@/components/MachineConnectionDialog'
 import CreateAgentDialog from '@/components/CreateAgentDialog'
+import EngineSetupHint from '@/components/agent-settings/EngineSetupHint'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
@@ -830,7 +831,10 @@ export default function AdminMachines() {
                         </div>
                       )
                     })}
-                    {detailReady && sortedMachineEngines.length === 0 && <span className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.noEnginesHint')}</span>}
+                    {detailReady && sortedMachineEngines.length === 0 && (
+                      <EngineSetupHint machineId={selectedMachine.id} machineName={selectedMachine.name}
+                        onDetected={() => { void fetchDetail(selectedMachine.id) }} />
+                    )}
                   </div>
                 </div>
                 <div>
@@ -994,6 +998,7 @@ export default function AdminMachines() {
         roomsByProject={roomsByProject}
         roomsStatus={roomsStatus}
         onRetryRooms={refetchRooms}
+        onEnginesDetected={() => { if (selectedId && selectedId !== UNPLACED) void fetchDetail(selectedId) }}
         createAgent={createAgent}
         fetchEngineCatalog={fetchEngineCatalog}
         onCreated={created => {

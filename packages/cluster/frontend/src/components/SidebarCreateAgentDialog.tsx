@@ -18,6 +18,8 @@ interface Props {
   fetchEngineCatalog: AgentsApi['fetchEngineCatalog']
   availableEngines: AgentsApi['availableEngines']
   onCreated: (agent: Agent) => void
+  /** Rooms to check when the form opens, e.g. the room the sidebar is showing. */
+  initialRoomIds?: string[]
 }
 
 /**
@@ -26,7 +28,7 @@ interface Props {
  * a single online machine is picked silently, several get a picker, and none
  * leads the admin to the machines page instead of an unusable form.
  */
-export default function SidebarCreateAgentDialog({ open, onOpenChange, createAgent, fetchEngineCatalog, availableEngines, onCreated }: Props) {
+export default function SidebarCreateAgentDialog({ open, onOpenChange, createAgent, fetchEngineCatalog, availableEngines, onCreated, initialRoomIds }: Props) {
   const { t } = useLocale()
   const navigate = useNavigate()
   const { machines, status: machinesStatus, fetchMachines } = useMachines()
@@ -43,7 +45,7 @@ export default function SidebarCreateAgentDialog({ open, onOpenChange, createAge
     setMachineId(current => onlineMachines.some(m => m.id === current) ? current : onlineMachines[0]?.id ?? null)
   }, [onlineMachines])
 
-  const { data: detail, status: detailStatus } = useMachineDetail(open ? machineId : null, '')
+  const { data: detail, status: detailStatus, refresh: refreshDetail } = useMachineDetail(open ? machineId : null, '')
   const engines = useMemo(() => {
     const deprecated = new Set(availableEngines.filter(e => e.deprecated).map(e => e.engine))
     const list = detail?.engines ?? []
@@ -89,6 +91,8 @@ export default function SidebarCreateAgentDialog({ open, onOpenChange, createAge
       roomsByProject={roomsByProject}
       roomsStatus={roomsStatus}
       onRetryRooms={refetchRooms}
+      initialRoomIds={initialRoomIds}
+      onEnginesDetected={() => { void refreshDetail() }}
       createAgent={createAgent}
       fetchEngineCatalog={fetchEngineCatalog}
       onCreated={onCreated}

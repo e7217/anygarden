@@ -584,3 +584,69 @@ class TestSelfUpdateResult:
         async with factory() as db:
             m = await db.get(Machine, machine.id)
             assert m.update_status == "updating"
+
+
+class TestEnginesReport:
+    """#902 — a rescan replaces the stored engine list without a reconnect."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("NODE-16")
+    async def test_replaces_engine_list_and_records_login(self, handler_env) -> None:
+        from anygarden.db.models import MachineEngineStatus
+        from anygarden.ws.machine_handler import _handle_engines_report
+
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+        await _handle_register(
+            factory,
+            machine.id,
+            {"type": "register", "capabilities": [{"engine": "pi-cli", "version": "0.85.1"}]},
+        )
+
+        await _handle_engines_report(
+            factory,
+            machine.id,
+            {
+                "type": "engines_report",
+                "capabilities": [
+                    {"engine": "codex-cli", "version": "codex-cli 0.163.0", "auth": "none"}
+                ],
+            },
+        )
+
+        async with factory() as db:
+            engines = (
+                await db.execute(
+                    select(MachineEngine).where(MachineEngine.machine_id == machine.id)
+                )
+            ).scalars().all()
+            assert [(e.engine, e.version) for e in engines] == [
+                ("codex-cli", "codex-cli 0.163.0")
+            ]
+            status = (
+                await db.execute(
+                    select(MachineEngineStatus).where(
+                        MachineEngineStatus.machine_id == machine.id,
+                        MachineEngineStatus.engine == "codex-cli",
+                    )
+                )
+            ).scalar_one()
+            assert status.auth_status == "none"
+
+    @pytest.mark.asyncio
+    async def test_unknown_machine_is_ignored(self, handler_env) -> None:
+        from anygarden.ws.machine_handler import _handle_engines_report
+
+        await _handle_engines_report(
+            handler_env["factory"],
+            "no-such-machine",
+            {"type": "engines_report", "capabilities": [{"engine": "codex-cli"}]},
+        )
+
+        async with handler_env["factory"]() as db:
+            rows = (
+                await db.execute(
+                    select(MachineEngine).where(MachineEngine.machine_id == "no-such-machine")
+                )
+            ).scalars().all()
+            assert rows == []

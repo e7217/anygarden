@@ -272,10 +272,14 @@ _QueueItem = Tuple[
 # them as system messages without leaking internal error detail.
 _TIMEOUT_NOTICE = "⚠️ 응답이 타임아웃으로 중단되었습니다."
 _FAILED_NOTICE = "⚠️ 에이전트가 응답을 생성하지 못했습니다."
-_AUTH_NOTICE = "⚠️ 에이전트 인증을 확인해야 합니다. 관리자에게 로그인 또는 API 키 설정 확인을 요청하세요."
-_PI_PROVIDER_NOTICE = "⚠️ Pi 공급자 설정을 확인해야 합니다. 관리자에게 Provider 설정 확인을 요청하세요."
-_PI_NATIVE_AUTH_NOTICE = "⚠️ 이 Pi 에이전트의 공급자 API 키가 없습니다. 관리자에게 에이전트 설정에서 키 등록을 요청하세요."
-_PI_NATIVE_CONFIG_NOTICE = "⚠️ Pi 공급자 또는 모델 인증 확인에 실패했습니다. 관리자에게 에이전트 설정 확인을 요청하세요."
+# #902 — notices name the action, not who should take it: on a fresh node
+# the person reading is usually the admin, so "ask an admin" was a dead end.
+_AUTH_NOTICE = "⚠️ 엔진 인증이 필요합니다. 에이전트 설정의 모델 연결에서 로그인이나 API 키를 확인하세요."
+_CODEX_AUTH_NOTICE = "⚠️ Codex 로그인이 필요합니다. 이 에이전트가 실행되는 컴퓨터에서 codex login 을 실행한 뒤 다시 멘션하세요."
+_PI_PROVIDER_NOTICE = "⚠️ Pi 공급자 설정을 확인해야 합니다. 에이전트 설정의 모델 연결에서 Provider를 확인하세요."
+_PI_NATIVE_AUTH_NOTICE = "⚠️ 이 Pi 에이전트의 공급자 API 키가 없습니다. 에이전트 설정의 모델 연결에서 키를 등록하세요."
+_PI_NATIVE_CONFIG_NOTICE = "⚠️ Pi 공급자 또는 모델 인증 확인에 실패했습니다. 에이전트 설정의 모델 연결을 확인하세요."
+_ENGINE_AUTH_NOTICES = {"codex-cli": _CODEX_AUTH_NOTICE}
 _FAILURE_NOTICES = {
     "ENGINE_AUTH_ERROR": _AUTH_NOTICE,
     "PI_PROVIDER_ERROR": _PI_PROVIDER_NOTICE,
@@ -315,6 +319,11 @@ class RoomHandlerSupervisor:
         self._queues: dict[str, Deque[_QueueItem]] = {}
         self._engine_tasks: dict[tuple, asyncio.Task] = {}
         self._cancelled_turns: set[tuple] = set()
+
+    def _failure_notice(self, error: str | None) -> str:
+        if error == "ENGINE_AUTH_ERROR":
+            return _ENGINE_AUTH_NOTICES.get(self._engine, _AUTH_NOTICE)
+        return _FAILURE_NOTICES.get(error, _FAILED_NOTICE)
 
     @staticmethod
     def _turn_key(room_id, request_id, context):
@@ -768,7 +777,7 @@ class RoomHandlerSupervisor:
             # for tracing/metrics, not in the user-facing text.
             await self._send_room_message(
                 room_id,
-                _FAILURE_NOTICES.get(error, _FAILED_NOTICE),
+                self._failure_notice(error),
                 metadata=send_metadata,
                 thread_root_id=thread_root_id,
             )

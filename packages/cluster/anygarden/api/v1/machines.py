@@ -676,6 +676,32 @@ async def check_machine_engine(
     return {"status": "checking", "engine": engine}
 
 
+@router.post("/{machine_id}/engines/rescan", status_code=202)
+async def rescan_machine_engines(
+    machine_id: str,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ask the machine to detect its engines again (#902).
+
+    An engine installed after the daemon started shows up without a restart.
+    The daemon replies with ``engines_report``, which replaces the stored
+    engine list. Returns 409 when the machine is offline.
+    """
+    await _get_owned_machine(db, machine_id, identity)
+    sent = await request.app.state.machine_bus.send(
+        machine_id, {"type": "engine_rescan"}
+    )
+    if not sent:
+        raise make_api_error(
+            status_code=409,
+            code="MACHINE_OFFLINE",
+            message="Machine is not connected",
+        )
+    return {"status": "rescanning"}
+
+
 @router.post("/{machine_id}/engines/{engine}/update", status_code=202)
 async def update_machine_engine(
     machine_id: str,

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { apiFetch } from '@/lib/api'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,6 +14,20 @@ export default function LoginForm() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [tab, setTab] = useState('login')
+
+  // #902 — a fresh node has no account to log in to; open on Create account.
+  useEffect(() => {
+    let active = true
+    apiFetch('/api/v1/auth/setup')
+      .then(async response => {
+        if (!response.ok) return
+        const body = await response.json() as { needs_first_account?: boolean }
+        if (active && body.needs_first_account) setTab('register')
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -48,7 +63,7 @@ export default function LoginForm() {
         <p className="text-sm text-[var(--color-foreground-muted)]">{t('auth.tagline')}</p>
       </div>
 
-      <Tabs defaultValue="login">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="login">{t('auth.login')}</TabsTrigger>
           <TabsTrigger value="register">{t('auth.register')}</TabsTrigger>

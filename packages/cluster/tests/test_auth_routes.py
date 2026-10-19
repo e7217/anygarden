@@ -46,6 +46,26 @@ async def auth_env():
     await engine.dispose()
 
 
+# ── First-run setup state (#902) ─────────────────────────────────────
+
+
+@pytest.mark.req("AUTH-10")
+async def test_setup_reports_needs_first_account_until_someone_registers(
+    auth_env: AsyncClient,
+):
+    resp = await auth_env.get("/api/v1/auth/setup")
+    assert resp.status_code == 200
+    assert resp.json() == {"needs_first_account": True}
+
+    await auth_env.post(
+        "/api/v1/auth/register",
+        json={"email": "first@example.com", "password": "s3cret!"},
+    )
+
+    resp = await auth_env.get("/api/v1/auth/setup")
+    assert resp.json() == {"needs_first_account": False}
+
+
 # ── Registration ─────────────────────────────────────────────────────
 
 

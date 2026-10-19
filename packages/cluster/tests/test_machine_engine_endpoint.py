@@ -330,3 +330,39 @@ async def test_engines_endpoint_exposes_login_status(env):
     assert rows["codex-cli"]["auth_status"] == "none"
     assert rows["codex-cli"]["auth_checked_at"] is not None
     assert rows["pi-cli"]["auth_status"] is None
+
+
+# ── #902: rescan without a restart ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("NODE-16")
+async def test_rescan_sends_frame(env):
+    resp = await env["client"].post(
+        f"/api/v1/machines/{env['machine_id']}/engines/rescan",
+        headers=_auth(env["tokens"]["owner"]),
+    )
+    assert resp.status_code == 202, resp.text
+    assert env["bus"].sent == [(env["machine_id"], {"type": "engine_rescan"})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("NODE-16")
+async def test_rescan_offline_returns_409(env):
+    env["bus"].connected = False
+    resp = await env["client"].post(
+        f"/api/v1/machines/{env['machine_id']}/engines/rescan",
+        headers=_auth(env["tokens"]["owner"]),
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("NODE-16")
+async def test_rescan_is_owner_only(env):
+    resp = await env["client"].post(
+        f"/api/v1/machines/{env['machine_id']}/engines/rescan",
+        headers=_auth(env["tokens"]["other"]),
+    )
+    assert resp.status_code in (403, 404)
+    assert env["bus"].sent == []

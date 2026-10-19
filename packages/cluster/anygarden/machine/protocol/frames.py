@@ -278,6 +278,16 @@ class EngineCheckFrame(BaseModel):
     engine: str
 
 
+class EngineRescanFrame(BaseModel):
+    """Server asks the daemon to detect its engines again (#902).
+
+    Lets an engine installed after the daemon started show up without a
+    restart. The daemon answers with an ``engines_report``.
+    """
+
+    type: Literal["engine_rescan"] = "engine_rescan"
+
+
 class EngineUpdateFrame(BaseModel):
     """Server asks the daemon to update an engine CLI to its latest version (#553).
 
@@ -352,6 +362,7 @@ ServerFrame = Union[
     AgentMemorySharedFileDeleteFrame,
     SelfUpdateFrame,
     EngineCheckFrame,
+    EngineRescanFrame,
     EngineUpdateFrame,
     WorkspaceAttachRequestFrame,
     WorkspaceRevokeFrame,
@@ -535,6 +546,17 @@ class EngineCheckResultFrame(BaseModel):
     auth: str | None = None
 
 
+class EnginesReportFrame(BaseModel):
+    """Daemon reports its freshly detected engines (#902).
+
+    ``capabilities`` has the same shape as ``RegisterFrame.capabilities`` and
+    replaces the machine's stored engine list.
+    """
+
+    type: Literal["engines_report"] = "engines_report"
+    capabilities: list[dict] = Field(default_factory=list)
+
+
 class EngineUpdateResultFrame(BaseModel):
     """Daemon reports the outcome of an ``engine_update`` (#553).
 
@@ -587,6 +609,7 @@ MachineFrame = Union[
     RoomArtifactProducedFrame,
     SelfUpdateResultFrame,
     EngineCheckResultFrame,
+    EnginesReportFrame,
     EngineUpdateResultFrame,
     WorkspaceAttachReceiptFrame,
     WorkspaceRevokeReceiptFrame,
@@ -609,6 +632,7 @@ _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
     "agent_memory_shared_file_delete": AgentMemorySharedFileDeleteFrame,
     "self_update": SelfUpdateFrame,
     "engine_check": EngineCheckFrame,
+    "engine_rescan": EngineRescanFrame,
     "engine_update": EngineUpdateFrame,
     "workspace_attach_request": WorkspaceAttachRequestFrame,
     "workspace_revoke": WorkspaceRevokeFrame,

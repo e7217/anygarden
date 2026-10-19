@@ -45,3 +45,22 @@ def test_update_result_accepts_lifecycle_statuses():
 def test_update_result_rejects_bad_status():
     with pytest.raises(ValidationError):
         EngineUpdateResultFrame(engine="x", status="bogus")
+
+
+def test_parse_engine_rescan():
+    """#902 — the server asks for a fresh engine list without a restart."""
+    from anygarden.machine.protocol.frames import EngineRescanFrame
+
+    frame = parse_server_frame({"type": "engine_rescan"})
+    assert isinstance(frame, EngineRescanFrame)
+
+
+def test_engines_report_roundtrip():
+    from anygarden.machine.protocol.frames import EnginesReportFrame
+
+    frame = EnginesReportFrame(
+        capabilities=[{"engine": "codex-cli", "version": "0.1", "path": "/x", "auth": "none"}]
+    )
+    dumped = frame.model_dump()
+    assert dumped["type"] == "engines_report"
+    assert EnginesReportFrame.model_validate(dumped).capabilities == frame.capabilities
