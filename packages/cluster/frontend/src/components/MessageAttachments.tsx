@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useArtifactBlobUrl } from '@/components/ArtifactImage'
+import ImageZoomViewer from '@/components/ImageZoomViewer'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
@@ -126,16 +127,14 @@ function ImageAttachment({ attachment }: { attachment: ArtifactReference }) {
         />
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-[min(92vw,64rem)]">
+        <DialogContent className="max-w-[min(96vw,80rem)]">
           <DialogHeader>
             <DialogTitle className="truncate">{attachment.name}</DialogTitle>
             <DialogDescription>
               {formatBytes(attachment.sizeBytes)} · {attachment.mime}
             </DialogDescription>
           </DialogHeader>
-          <div className="flex max-h-[70vh] justify-center overflow-auto rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)]">
-            <img src={image.src} alt={attachment.name} className="max-h-[70vh] max-w-full object-contain" />
-          </div>
+          <ImageZoomViewer src={image.src} alt={attachment.name} />
           <DialogFooter>
             <DialogDownloadButton attachment={attachment} />
           </DialogFooter>
