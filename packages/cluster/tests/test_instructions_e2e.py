@@ -77,6 +77,10 @@ async def test_disk_instructions_round_trip(instructions_env, tmp_path):
         instructions_revision=0,
     ))
     daemon._spawner.list_running = lambda: [{"agent_id": AGENT}]  # type: ignore[method-assign]
+    # Process start/stop is not under test. A real reconcile would spawn the
+    # engine and re-materialize while the test writes AGENTS.md directly,
+    # outside the per-agent lock a running agent never races with.
+    daemon._reconcile_agent = AsyncMock()  # type: ignore[method-assign]
 
     incoming: asyncio.Queue = asyncio.Queue()
     accepted = asyncio.Event()
