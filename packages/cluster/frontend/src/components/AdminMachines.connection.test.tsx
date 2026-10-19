@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import { MemoryRouter } from 'react-router-dom'
 
 const mocks = vi.hoisted(() => ({ registerMachine: vi.fn(), fetchMachines: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/hooks/useMachines', () => ({ useMachines: () => ({ machines: [], status: 'loaded', registerMachine: mocks.registerMachine, fetchMachines: mocks.fetchMachines }) }))
@@ -17,7 +18,7 @@ afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 it('continues registration into the connection guide even when the machine list refresh failed', async () => {
   mocks.registerMachine.mockResolvedValue({ id: 'new-machine', name: 'Office host', hostname: '', machine_token: 'one-time-token', refreshWarning: 'Machine created, list could not refresh' })
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   fireEvent.click(screen.getByRole('button', { name: 'Register machine' }))
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: ' Office host ' } })
   fireEvent.change(screen.getByLabelText('Description (optional)'), { target: { value: 'Remote worker' } })
@@ -32,7 +33,7 @@ it('continues registration into the connection guide even when the machine list 
 
 it('keeps the registration draft and surfaces a failed request', async () => {
   mocks.registerMachine.mockRejectedValue(new Error('server unavailable'))
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   fireEvent.click(screen.getByRole('button', { name: 'Register machine' }))
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My machine' } })
   fireEvent.click(screen.getByRole('button', { name: /^Register$/ }))

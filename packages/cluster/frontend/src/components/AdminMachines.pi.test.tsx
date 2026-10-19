@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import { MemoryRouter } from 'react-router-dom'
 
 const mocks = vi.hoisted(() => ({
   createAgent: vi.fn().mockResolvedValue({}),
@@ -39,7 +40,7 @@ async function selectPiEngine() {
 }
 
 it('requires an explicit provider and submits custom provider/model from Pi creation', async () => {
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   const newAgent = await screen.findByRole('button', { name: 'New Agent' })
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
@@ -66,7 +67,7 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
 
 it('warns before creation when the machine Pi version fails the adapter gate (#687)', async () => {
   mocks.piVersion = '0.87.1'
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   const newAgent = await screen.findByRole('button', { name: 'New Agent' })
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
@@ -76,7 +77,7 @@ it('warns before creation when the machine Pi version fails the adapter gate (#6
 })
 
 it('shows no version warning for the supported Pi version', async () => {
-  render(<AdminMachines />)
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   const newAgent = await screen.findByRole('button', { name: 'New Agent' })
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)

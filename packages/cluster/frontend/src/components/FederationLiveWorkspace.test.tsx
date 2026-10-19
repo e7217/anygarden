@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // UI tests for the live federation workspace (#593 / task #33). Verifies the
 // honest-state surfaces: disabled banner when the node has no federation
-// wiring, roster with tombstone revisions, submission tracking, and the
-// command-field gating on the task tab.
+// wiring and roster with tombstone revisions. Task handoff lives in the
+// shared room itself (#889).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { cleanup, render as renderView, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
@@ -10,6 +10,12 @@ import '@testing-library/jest-dom/vitest'
 import FederationLiveWorkspace from './FederationLiveWorkspace'
 import { FederationApiError, type ParticipantView } from '@/lib/federationApi'
 import type { useFederation } from '@/hooks/useFederation'
+import type { Room } from '@/hooks/useRooms'
+
+const roomsState = vi.hoisted(() => ({ rooms: {} as Record<string, Room[]>, projects: [] as { id: string; name: string }[] }))
+vi.mock('@/hooks/useRooms', () => ({
+  useRooms: () => ({ projects: roomsState.projects, rooms: roomsState.rooms, refetch: vi.fn().mockResolvedValue(undefined) }),
+}))
 
 type Federation = ReturnType<typeof useFederation>
 
@@ -65,7 +71,7 @@ function selectTab(name: string) {
 describe('FederationLiveWorkspace', () => {
   it('labels the surface as live, not a mock', () => {
     render(<FederationLiveWorkspace federation={baseFederation()} />)
-    expect(screen.getByText(/Connected federation workspace/i)).toBeInTheDocument()
+    expect(screen.getByText(/Live partner-node workspace/i)).toBeInTheDocument()
     expect(screen.queryByText(/Interactive mock/i)).not.toBeInTheDocument()
   })
 
@@ -152,7 +158,7 @@ describe('FederationLiveWorkspace', () => {
         })}
       />,
     )
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.getByText('tombstone · rev 5')).toBeInTheDocument()
     expect(screen.getByText('rev 2')).toBeInTheDocument()
     expect(screen.getByText(/applied seq 12/i)).toBeInTheDocument()
@@ -185,87 +191,9 @@ describe('FederationLiveWorkspace', () => {
         })}
       />,
     )
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     expect(changeParticipant).toHaveBeenCalledWith(participant.principal, false, 'member', 7)
-  })
-
-  it('gates task submission until follower command fields are set', () => {
-    render(
-      <FederationLiveWorkspace
-        federation={baseFederation({
-          channelRef: { authority: 'auth-1', channel: 'chan-1' },
-        })}
-      />,
-    )
-    selectTab('3. Task handoff')
-    const statusBox = screen
-      .getAllByRole('status')
-      .find((node) => node.textContent?.includes('grant epoch'))
-    expect(statusBox).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Submit task request' })).toBeDisabled()
-  })
-
-  it('lists submissions with receipt detail', () => {
-    render(
-      <FederationLiveWorkspace
-        federation={baseFederation({
-          channelRef: { authority: 'auth-1', channel: 'chan-1', senderNodeId: 'node-self', grantEpoch: 1 },
-          submissions: [
-            {
-              request_id: 'r1',
-              state: 'confirmed',
-              receipt: { state: 'applied', task_status: 'todo', process_state: 'not_started', revision: 1, seq: 4 },
-              error_code: null,
-              authority: 'auth-1',
-              channel: 'chan-1',
-              kind: 'task.request',
-              createdAt: 1,
-            },
-            {
-              request_id: 'r2',
-              state: 'failed',
-              receipt: null,
-              error_code: 'SCOPE_DENIED',
-              authority: 'auth-1',
-              channel: 'chan-1',
-              kind: 'task.cancel',
-              createdAt: 2,
-            },
-          ],
-        })}
-      />,
-    )
-    selectTab('3. Task handoff')
-    expect(screen.getByText('confirmed')).toBeInTheDocument()
-    expect(screen.getByText(/receipt applied · task todo · process not_started/)).toBeInTheDocument()
-    expect(screen.getByText(/SCOPE_DENIED/)).toBeInTheDocument()
-    // The sync affordance only appears for pending work.
-    expect(screen.queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument()
-  })
-
-  it('exposes sync for unconfirmed submissions', () => {
-    render(
-      <FederationLiveWorkspace
-        federation={baseFederation({
-          channelRef: { authority: 'auth-1', channel: 'chan-1', senderNodeId: 'node-self', grantEpoch: 1 },
-          submissions: [
-            {
-              request_id: 'r1',
-              state: 'unconfirmed',
-              receipt: null,
-              error_code: null,
-              authority: 'auth-1',
-              channel: 'chan-1',
-              kind: 'task.request',
-              createdAt: 1,
-            },
-          ],
-        })}
-      />,
-    )
-    selectTab('3. Task handoff')
-    expect(screen.getByRole('button', { name: /sync now/i })).toBeInTheDocument()
   })
 
   it('surfaces snapshot errors with their wire code', () => {
@@ -277,59 +205,12 @@ describe('FederationLiveWorkspace', () => {
         })}
       />,
     )
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.getByText(/CHANNEL_DENIED/)).toBeInTheDocument()
   })
 })
 
-describe('FederationLiveWorkspace — task #35 delegation states', () => {
-  it('renders the confirmed delegation vocabulary including cancel/unknown guidance', () => {
-    render(
-      <FederationLiveWorkspace
-        federation={baseFederation({
-          channelRef: { authority: 'auth-1', channel: 'chan-1', localRoomId: 'room-9' },
-          delegations: [
-            {
-              authority_node_id: 'auth-1',
-              channel_id: 'chan-1',
-              delegation_id: 'd1',
-              task_id: 't1',
-              source_message_id: 'm1',
-              requester: { node_id: 'auth-1', kind: 'human', principal_id: 'u1' },
-              executor: { node_id: 'b', agent_id: 'g1' },
-              execution_id: 'x1',
-              revision: 2,
-              state: 'running',
-              process_state: 'running',
-              task_status: 'in_progress',
-            },
-            {
-              authority_node_id: 'auth-1',
-              channel_id: 'chan-1',
-              delegation_id: 'd2',
-              task_id: 't2',
-              source_message_id: 'm2',
-              requester: { node_id: 'auth-1', kind: 'human', principal_id: 'u1' },
-              executor: { node_id: 'b', agent_id: 'g2' },
-              execution_id: null,
-              revision: 2,
-              state: 'unknown',
-              process_state: 'unknown',
-              task_status: 'blocked',
-            },
-          ],
-        })}
-      />,
-    )
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '3. Task handoff' }), { button: 0, ctrlKey: false })
-    expect(screen.getByText('running')).toBeInTheDocument()
-    expect(screen.getByText('unknown')).toBeInTheDocument()
-    expect(screen.getByText(/automatic retry stays blocked/i)).toBeInTheDocument()
-    expect(
-      screen.queryByText(/fine-grained delegation state.*pending backend work/i),
-    ).not.toBeInTheDocument()
-  })
-
+describe('FederationLiveWorkspace — shared channel', () => {
   it('offers binding-based channel selection when the node exposes bindings', () => {
     const setChannelRef = vi.fn()
     render(
@@ -348,7 +229,7 @@ describe('FederationLiveWorkspace — task #35 delegation states', () => {
         })}
       />,
     )
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.getByText(/bindings on this node/i)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /auth-1… \/ chan-1…/i }))
     expect(setChannelRef).toHaveBeenCalledWith({
@@ -362,9 +243,58 @@ describe('FederationLiveWorkspace — task #35 delegation states', () => {
 
   it('keeps the manual-entry hint when the node lists no bindings', () => {
     render(<FederationLiveWorkspace federation={baseFederation()} />)
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(
       screen.getByText(/this node lists no bindings/i),
     ).toBeInTheDocument()
+  })
+
+  it('[#889] keeps connection and shared channel, and leaves task handoff to the shared room', () => {
+    render(<FederationLiveWorkspace federation={baseFederation()} />)
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Connection', 'Shared channel'])
+    expect(screen.queryByRole('tab', { name: /Task handoff/ })).not.toBeInTheDocument()
+  })
+
+  it('[#889] points people who want to run their own agents to Machines', () => {
+    render(<FederationLiveWorkspace federation={baseFederation()} />)
+    expect(screen.getByRole('link', { name: 'Machines' })).toHaveAttribute('href', '/admin/machines')
+  })
+
+  it('[#889] binds a local room picked from the room list, skipping DMs and rooms already shared', () => {
+    roomsState.projects = [{ id: 'p1', name: 'Design' }]
+    roomsState.rooms = {
+      p1: [
+        { id: 'room-1', name: 'review', project_id: 'p1', is_dm: false } as Room,
+        { id: 'room-2', name: 'already-shared', project_id: 'p1', is_dm: false, shared_channel: { authority_node_id: 'a', channel_id: 'c' } } as Room,
+        { id: 'dm-1', name: 'DM: helper', project_id: null, is_dm: true } as Room,
+      ],
+    }
+    const bindChannel = vi.fn()
+    render(<FederationLiveWorkspace federation={baseFederation({ bindChannel })} />)
+    selectTab('Shared channel')
+    fireEvent.change(screen.getByLabelText('Authority node ID (UUID)'), { target: { value: 'auth-1' } })
+    fireEvent.change(screen.getByLabelText('Channel ID (UUID)'), { target: { value: 'chan-1' } })
+    const picker = screen.getByLabelText('Bind a local room (authority side)')
+    const options = Array.from(picker.querySelectorAll('option')).map((option) => option.textContent)
+    expect(options).toContain('Design / review')
+    expect(options).not.toContain('Design / already-shared')
+    expect(options).not.toContain('DM: helper')
+    const bind = screen.getByRole('button', { name: 'Bind' })
+    expect(bind).toBeDisabled()
+    fireEvent.change(picker, { target: { value: 'room-1' } })
+    fireEvent.click(bind)
+    expect(bindChannel).toHaveBeenCalledWith({ authority_node_id: 'auth-1', channel_id: 'chan-1', local_room_id: 'room-1' })
+    roomsState.projects = []
+    roomsState.rooms = {}
+  })
+
+  it('[#889] opens the bound room from the shared channel tab', () => {
+    render(
+      <FederationLiveWorkspace
+        federation={baseFederation({ channelRef: { authority: 'auth-1', channel: 'chan-1', localRoomId: 'room-9' } })}
+      />,
+    )
+    selectTab('Shared channel')
+    expect(screen.getByRole('link', { name: 'Open shared conversation' })).toHaveAttribute('href', '/rooms/room-9')
   })
 })

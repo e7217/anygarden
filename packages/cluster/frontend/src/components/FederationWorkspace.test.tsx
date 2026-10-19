@@ -29,7 +29,7 @@ describe('FederationWorkspace mock UI', () => {
     expect(screen.getByText('Interactive mock · no server connection')).toBeInTheDocument()
     expect(screen.queryByText('Private reviewer')).not.toBeInTheDocument()
 
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.getByText('Planner')).toBeInTheDocument()
     expect(screen.queryByText('Builder')).not.toBeInTheDocument()
     expect(screen.queryByText('Private reviewer')).not.toBeInTheDocument()
@@ -43,13 +43,13 @@ describe('FederationWorkspace mock UI', () => {
     expect(screen.getByText('Accepted locally · waiting for peer')).toBeInTheDocument()
     expect(onIntent).toHaveBeenCalledWith({ type: 'accept_node_invite', nodeId: 'node-orchard' })
 
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.queryByText('Builder')).not.toBeInTheDocument()
 
-    selectTab('1. Connection')
+    selectTab('Connection')
     fireEvent.click(screen.getByRole('button', { name: 'Preview peer confirmation' }))
     expect(screen.getByText('Connected')).toBeInTheDocument()
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.getByText('Builder')).toBeInTheDocument()
     expect(screen.queryByText('Private reviewer')).not.toBeInTheDocument()
   })
@@ -75,7 +75,7 @@ describe('FederationWorkspace mock UI', () => {
       remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
     })} onIntent={onIntent} />)
 
-    selectTab('3. Task handoff')
+    selectTab('Task handoff')
     fireEvent.click(screen.getByRole('button', { name: /Preview task request/ }))
     expect(screen.getAllByText('Waiting for the execution node')).not.toHaveLength(0)
     expect(onIntent).toHaveBeenCalledWith({
@@ -106,7 +106,7 @@ describe('FederationWorkspace mock UI', () => {
       delegationState: 'requested',
     })} />)
 
-    selectTab('3. Task handoff')
+    selectTab('Task handoff')
     fireEvent.click(screen.getByRole('button', { name: 'Preview remote rejection' }))
     expect(screen.getAllByText('Request declined by the execution node')).not.toHaveLength(0)
     expect(screen.getByText(/Task · todo · process · not started/)).toBeInTheDocument()
@@ -119,7 +119,7 @@ describe('FederationWorkspace mock UI', () => {
       remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
     })} />)
 
-    selectTab('3. Task handoff')
+    selectTab('Task handoff')
     fireEvent.click(screen.getByRole('button', { name: /Preview task request/ }))
     expect(screen.getAllByText('Submitted locally — not confirmed by the channel owner')).not.toHaveLength(0)
     expect(screen.getByText('This request exists only on your node.')).toBeInTheDocument()
@@ -134,7 +134,7 @@ describe('FederationWorkspace mock UI', () => {
       taskStatus: 'in_progress',
     })} />)
 
-    selectTab('3. Task handoff')
+    selectTab('Task handoff')
     fireEvent.click(screen.getByRole('button', { name: 'Preview known failure' }))
     expect(screen.getAllByText('Execution failed and termination is confirmed')).not.toHaveLength(0)
     expect(screen.getByText(/ENGINE_ERROR/)).toBeInTheDocument()
@@ -147,7 +147,7 @@ describe('FederationWorkspace mock UI', () => {
       remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
     })} />)
 
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.getByText('Builder')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Preview participant removal' }))
     expect(screen.queryByText('Builder')).not.toBeInTheDocument()
@@ -167,11 +167,11 @@ describe('FederationWorkspace mock UI', () => {
       agents,
     })} />)
 
-    selectTab('2. Shared channel')
+    selectTab('Shared channel')
     expect(screen.getByText('Builder')).toBeInTheDocument()
     expect(screen.getByText('No execution access')).toBeInTheDocument()
 
-    selectTab('3. Task handoff')
+    selectTab('Task handoff')
     expect(screen.getByRole('button', { name: /Preview task request/ })).toBeDisabled()
     expect(screen.getByText(/visible but has no execution permission/)).toBeInTheDocument()
   })
