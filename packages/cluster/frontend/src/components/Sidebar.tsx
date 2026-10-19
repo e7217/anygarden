@@ -6,7 +6,7 @@ import { useAgents, type Agent } from '@/hooks/useAgents'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
 import { useModalDrawer } from '@/hooks/useModalDrawer'
-import { apiFetch } from '@/lib/api'
+import { deleteRoom, deleteRoomFailure } from '@/lib/roomDelete'
 import { AGENT_ACTION_EVENT, type AgentActionDetail } from '@/lib/agentActions'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import { Button } from '@/components/ui/button'
@@ -310,8 +310,8 @@ export default function Sidebar({
     })
     if (!ok) return
     try {
-      const resp = await apiFetch(`/api/v1/rooms/${roomId}`, { method: 'DELETE' })
-      if (resp.status === 204) {
+      const result = await deleteRoom(roomId)
+      if (result.ok) {
         // The WS ``room_deleted`` broadcast will also trigger a
         // full ``refetch`` via RoomsProvider's invalidate listener.
         // The explicit fetchRooms here keeps the UI snappy for the
@@ -320,12 +320,7 @@ export default function Sidebar({
         if (selectedRoom === roomId) navigate('/')
         return
       }
-      let detail = t('chat.failedDeleteRoom', { status: resp.status })
-      try {
-        const body = await resp.json()
-        if (body && typeof body.detail === 'string') detail = body.detail
-      } catch { /* ignore body parse */ }
-      notify({ message: detail, tone: 'error' })
+      notify({ message: deleteRoomFailure(result, t('chat.failedDeleteRoom', { status: result.status }), t('chat.deleteRoomActiveExecution')), tone: 'error' })
     } catch (err) {
       notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
     }
@@ -1103,10 +1098,8 @@ function AgentDMListAdmin({
         destructive: true,
       })
       if (!ok) return
-      const resp = await apiFetch(`/api/v1/rooms/${roomId}`, {
-        method: 'DELETE',
-      })
-      if (resp.status === 204) {
+      const result = await deleteRoom(roomId)
+      if (result.ok) {
         // Refresh the DM list immediately; the WS ``room_deleted``
         // broadcast will also fan out, but this keeps the acting
         // user's UI snappy without waiting on the round-trip.
@@ -1115,14 +1108,7 @@ function AgentDMListAdmin({
         if (selectedRoom === roomId) onGo('/')
         return
       }
-      let detail = t('chat.failedDeleteConversation', { status: resp.status })
-      try {
-        const body = await resp.json()
-        if (body && typeof body.detail === 'string') detail = body.detail
-      } catch {
-        /* ignore */
-      }
-      notify({ message: detail, tone: 'error' })
+      notify({ message: deleteRoomFailure(result, t('chat.failedDeleteConversation', { status: result.status }), t('chat.deleteRoomActiveExecution')), tone: 'error' })
     },
     [fetchAgentDMs, onGo, selectedRoom, t, confirm, notify],
   )

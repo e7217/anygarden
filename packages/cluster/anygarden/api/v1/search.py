@@ -144,6 +144,14 @@ async def search_messages(
         identity=identity,
         scope="search.messages",
     )
+    # Archived rooms (including rooms the user deleted, #911) are out of
+    # search, as they are out of the room list.
+    if allowed_room_ids:
+        allowed_room_ids = set(await db.scalars(
+            select(Room.id).where(
+                Room.id.in_(allowed_room_ids), Room.archived_at.is_(None)
+            )
+        ))
 
     # FTS5 query — use highlight() for snippets.
     # If project_id is given, join through rooms to filter.
