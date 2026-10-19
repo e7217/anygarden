@@ -2193,9 +2193,11 @@ class PeerAskGroup(Base):
     """The peer questions one caller turn sent through ``ask_peer`` (#762).
 
     The caller's turn ends without posting (its reply is kept as
-    ``caller_draft``); once every target turn and the caller turn are
-    terminal, or ``deadline_at`` passes, the turn-recovery worker posts a
-    hidden result message and starts a new caller turn from it.
+    ``caller_draft``); once every target and the caller turn are settled,
+    the turn-recovery worker posts a hidden result message and starts a new
+    caller turn from it. A target settles when its peer turn ends, or times
+    out when that turn never starts (#900); ``deadline_at`` is only the
+    last-resort cap (24 hours by default).
     """
 
     __tablename__ = "peer_ask_groups"

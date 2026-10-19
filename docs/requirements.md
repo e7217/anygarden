@@ -100,7 +100,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | COL-03 | `@everyone`은 모든 에이전트를 깨우고, 에이전트가 보낸 `@everyone`도 깊이·예산에 포함된다 | pytest |
 | COL-04 | 2단계 이상 peer 호출은 멘션이 제거되고 '전달 안 됨'으로 기록된다 | pytest |
 | COL-05 | 사용자 턴 하나에서 peer handoff는 최대 8회다 | pytest |
-| COL-06 | `ask_peer`로 3명에게 물으면 호출자는 정확히 1번, 3명 모두의 결과(또는 타임아웃)와 함께 깨어난다 | pytest |
+| COL-06 | `ask_peer`로 3명에게 물으면 호출자는 정확히 1번, 3명 모두의 결과(또는 타임아웃)와 함께 깨어난다. 상대가 작업 중이면 기다리고, 상대 턴이 시작조차 못 하면 15분 뒤 타임아웃(`peer_unavailable`), 묶음 전체는 24시간이 최후 상한이다 | pytest |
 | COL-07 | 본문에 없는 멘션 메타데이터를 가진 스레드 답글은 에이전트를 깨우지 않는다 | pytest |
 | COL-08 | 1:1 DM에서는 멘션 없이도 에이전트가 답한다 | pytest |
 | COL-09 | 에이전트는 로스터에서 자신과 다른 참여자를 구분한다 (화자 신원 혼동 없음) | pytest |
