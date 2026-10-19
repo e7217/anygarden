@@ -188,9 +188,11 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     # #778 added the project execution tools (mcp/project_tools.py).
     # #806 added ``claim_current_request`` / ``request_task_input``
     # (test_general_tasks.py). #866 added ``read_room_messages``
-    # (test_mcp_read_room_messages.py).
+    # (test_mcp_read_room_messages.py). #901 added ``delegate_to_subroom``
+    # (test_project_execution_flow.py).
     assert names == {
         "begin_project_execution",
+        "delegate_to_subroom",
         "delegate_project_task",
         "resume_project_task",
         "seal_project_plan",

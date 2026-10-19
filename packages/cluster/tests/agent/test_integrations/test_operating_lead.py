@@ -60,3 +60,16 @@ def test_operating_lead_handles_small_requests_itself() -> None:
     assert "위임은 서브룸의 권한·도구·분업이 실제로 필요할 때만" in workflow
     assert "직접 답하세요" in workflow
     assert "검토(QA) 작업은 사용자가 요청했거나 외부 동작 직전에만" in workflow
+
+
+def test_operating_lead_hands_a_single_task_over_in_one_call() -> None:
+    """#901 — one task for one subroom is one ``delegate_to_subroom`` call; the
+    step-by-step tools stay for multi-task, dependent, QA or approval plans,
+    and the lead still finishes with ``complete_project_execution``."""
+    workflow = operating_lead_workflow({"operating_lead": True})
+
+    assert "delegate_to_subroom 한 번으로 충분" in workflow
+    assert "여러 작업, 작업 간 의존, 검토(QA)·승인·외부 제출" in workflow
+    assert "begin_project_execution" in workflow
+    assert "seal_project_plan" in workflow
+    assert "complete_project_execution" in workflow

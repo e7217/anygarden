@@ -32,6 +32,17 @@
 
 ### Added
 
+- An operating lead can hand one task to one subroom with a single
+  `delegate_to_subroom` call instead of `begin_project_execution`,
+  `delegate_project_task` and `seal_project_plan` (#901). It runs those same
+  steps in one transaction, so a refusal leaves nothing behind, and repeating
+  the call returns the same task. `subroom` (ID or name) and `assignee`
+  (participant ID or agent name) may be left out when only one running agent
+  fits; otherwise the call is refused with the candidates so the model can pick.
+  Several tasks, dependencies, QA, approvals and releases still use the
+  step-by-step tools, and the lead still reports with
+  `complete_project_execution`.
+
 - The working indicator shows how long each agent has been working, e.g.
   `planner · running a shell command… · 2m 31s` (#893). The server counts from
   the agent's first typing heartbeat and sends `elapsed_ms` on agent typing

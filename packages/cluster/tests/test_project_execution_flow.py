@@ -35,6 +35,7 @@ from anygarden.db.models import (
     Message,
     Participant,
     Project,
+    ProjectExecution,
     Room,
     Task,
     User,
@@ -2006,3 +2007,194 @@ async def test_transient_fence_closed_by_recovery_then_retried_is_not_counted(ha
         await db.commit()
     recovered = await recover_stalled_turns(harness.sessions, harness.manager)
     assert (recovered.redispatched, recovered.failed) == (0, 1)
+
+
+# -- #901 single-call delegation ---------------------------------------------
+
+
+async def _set_desired(harness: Harness, agent: str, state: str) -> None:
+    async with harness.sessions() as db:
+        (await db.get(Agent, harness.ids[agent])).desired_state = state
+        await db.commit()
+
+
+async def _delegate_result(harness: Harness, turn: Turn, **arguments) -> dict:
+    return await harness.tool_error_or_ok(turn, "delegate_to_subroom", **arguments)
+
+
+@pytest.mark.req("EXE-23", "EXE-11", "EXE-12")
+async def test_delegate_to_subroom_hands_one_task_over_in_a_single_call(harness):
+    # Only the development room has a running agent, so neither the subroom
+    # nor the assignee has to be named.
+    await _set_desired(harness, "releaser", "stopped")
+    await harness.user_request("Fix the login bug")
+    lead_turn = await harness.deliver("lead")
+    lead_frames = len(harness.sockets["lead"].frames)
+
+    result = await harness.tool(
+        lead_turn, "delegate_to_subroom",
+        spec="Login fails for accounts with uppercase emails.",
+    )
+
+    assert result["status"] == "waiting_children"
+    assert result["subroom"] == {"room_id": harness.ids["worker_room"], "name": "development"}
+    assert result["assignee"] == {"participant_id": harness.ids["worker_pid"], "name": "garden-dev"}
+    assert "complete_project_execution" in result["note"]
+    async with harness.sessions() as db:
+        child = await db.get(Task, result["task_id"])
+        assert child.parent_task_id == result["root_task_id"]
+        assert child.execution_id == result["execution_id"]
+        assert child.role == "work"
+        assert child.title == "Login fails for accounts with uppercase emails."
+        assert "Fix the login bug" in child.spec
+        execution = await db.get(ProjectExecution, result["execution_id"])
+        assert execution.plan_sealed
+        assert execution.required_task_ids == [child.id]
+        assert not execution.requires_qa
+
+    # Both the root and the child task are pushed to the operating room.
+    pushed = {f["task"]["id"] for f in harness.sockets["lead"].frames[lead_frames:]
+              if f.get("type") == "task.updated"}
+    assert {result["root_task_id"], result["task_id"]} <= pushed
+
+    # The assignee receives the assignment as its own leased turn.
+    worker_turn = await harness.deliver("worker")
+    assert worker_turn.frame["metadata"]["task_assignment"]["task_id"] == result["task_id"]
+    assert worker_turn.execution_id == result["execution_id"]
+
+
+@pytest.mark.req("EXE-23")
+async def test_delegate_to_subroom_replay_returns_the_same_task(harness):
+    await harness.user_request("Fix the login bug")
+    lead_turn = await harness.deliver("lead")
+    args = {"subroom": "development", "spec": "Normalize emails before comparing.",
+            "title": "Fix login"}
+
+    first = await harness.tool(lead_turn, "delegate_to_subroom", **args)
+    again = await harness.tool(lead_turn, "delegate_to_subroom", **args)
+
+    assert again["task_id"] == first["task_id"]
+    assert again["execution_id"] == first["execution_id"]
+    async with harness.sessions() as db:
+        children = (await db.scalars(select(Task).where(
+            Task.execution_id == first["execution_id"],
+            Task.id != first["root_task_id"],
+        ))).all()
+    assert [t.id for t in children] == [first["task_id"]]
+
+
+@pytest.mark.req("EXE-23")
+async def test_delegate_to_subroom_asks_to_choose_among_several_subrooms(harness):
+    await harness.user_request("Fix the login bug")
+    lead_turn = await harness.deliver("lead")
+
+    rejected = await _delegate_result(harness, lead_turn, spec="Fix it.")
+
+    assert rejected["isError"]
+    content = rejected["structuredContent"]
+    assert content["code"] == "SUBROOM_CHOICE_REQUIRED"
+    assert rejected["content"][0]["text"].startswith("SUBROOM_CHOICE_REQUIRED: ")
+    assert {room["name"] for room in content["subrooms"]} == {"development", "release"}
+    # Nothing was started: the rejected call leaves no execution behind.
+    async with harness.sessions() as db:
+        assert await db.scalar(select(func.count()).select_from(ProjectExecution)) == 0
+        assert await db.scalar(select(func.count()).select_from(Task)) == 0
+
+    # The model retries with the subroom's name and the same turn succeeds.
+    result = await harness.tool(lead_turn, "delegate_to_subroom",
+                                subroom="release", spec="Fix it.")
+    assert result["subroom"]["room_id"] == harness.ids["releaser_room"]
+    assert result["assignee"]["participant_id"] == harness.ids["releaser_pid"]
+
+
+@pytest.mark.req("EXE-23")
+async def test_delegate_to_subroom_refuses_a_subroom_without_running_agents(harness):
+    await _set_desired(harness, "releaser", "stopped")
+    await harness.user_request("Ship the release notes")
+    lead_turn = await harness.deliver("lead")
+
+    rejected = await _delegate_result(harness, lead_turn, subroom="release",
+                                      spec="Write the notes.")
+
+    assert rejected["isError"]
+    assert rejected["structuredContent"]["code"] == "ASSIGNEE_NOT_FOUND"
+    assert rejected["structuredContent"]["assignees"] == []
+    async with harness.sessions() as db:
+        assert await db.scalar(select(func.count()).select_from(ProjectExecution)) == 0
+        assert await db.scalar(select(func.count()).select_from(Task)) == 0
+
+
+@pytest.mark.req("EXE-23")
+async def test_delegate_to_subroom_names_candidates_for_an_unknown_assignee(harness):
+    await harness.user_request("Fix the login bug")
+    lead_turn = await harness.deliver("lead")
+
+    rejected = await _delegate_result(harness, lead_turn, subroom="development",
+                                      assignee="nobody", spec="Fix it.")
+
+    content = rejected["structuredContent"]
+    assert content["code"] == "ASSIGNEE_NOT_FOUND"
+    assert content["assignees"] == [{"participant_id": harness.ids["worker_pid"],
+                                     "agent_id": harness.ids["worker"], "name": "garden-dev"}]
+
+    result = await harness.tool(lead_turn, "delegate_to_subroom", subroom="development",
+                                assignee="garden-dev", spec="Fix it.")
+    assert result["assignee"]["participant_id"] == harness.ids["worker_pid"]
+
+
+@pytest.mark.req("EXE-23")
+async def test_delegate_to_subroom_requires_the_operating_lead(harness):
+    async with harness.sessions() as db:
+        (await db.get(Room, harness.ids["lead_room"])).representative_agent_id = None
+        await db.commit()
+    await harness.user_request("Fix the login bug")
+    lead_turn = await harness.deliver("lead")
+
+    rejected = await _delegate_result(harness, lead_turn, subroom="development", spec="Fix it.")
+
+    assert rejected["structuredContent"]["code"] == "OPERATING_LEAD_REQUIRED"
+
+
+@pytest.mark.req("EXE-23")
+async def test_delegate_to_subroom_does_not_join_a_multi_task_plan(harness):
+    flow = await harness.begin_and_delegate()
+    lead_turn, execution = flow["lead_turn"], flow["execution"]
+    other = await harness.tool(
+        lead_turn, "delegate_project_task",
+        execution_id=execution["execution_id"], parent_task_id=execution["root_task_id"],
+        target_room_id=harness.ids["releaser_room"],
+        assignee_participant_id=harness.ids["releaser_pid"],
+        delegation_key="notes", title="Release notes", spec="Write the notes.",
+    )
+    await harness.tool(lead_turn, "seal_project_plan", execution_id=execution["execution_id"],
+                       required_task_ids=[flow["delegated"]["task_id"], other["task_id"]])
+
+    rejected = await _delegate_result(harness, lead_turn, subroom="development", spec="More.")
+
+    assert rejected["structuredContent"]["code"] == "SINGLE_DELEGATION_ONLY"
+    async with harness.sessions() as db:
+        assert await db.scalar(select(func.count()).select_from(Task).where(
+            Task.execution_id == execution["execution_id"])) == 3
+
+
+@pytest.mark.req("EXE-23", "EXE-15")
+async def test_delegate_to_subroom_result_wakes_the_lead_to_complete(harness):
+    await harness.user_request("Fix the login bug")
+    lead_turn = await harness.deliver("lead")
+    result = await harness.tool(lead_turn, "delegate_to_subroom", subroom="development",
+                                spec="Normalize emails before comparing.")
+    await harness.end_turn(lead_turn)
+
+    worker_turn = await harness.deliver("worker")
+    await harness.tool(
+        worker_turn, "mark_task_status", task_id=result["task_id"], status="done",
+        result_markdown="Fixed: emails are lower-cased before comparison.",
+    )
+
+    lead_turn = await harness.deliver("lead")
+    assert "emails are lower-cased" in json.dumps(lead_turn.frame)
+    completed = await harness.tool(
+        lead_turn, "complete_project_execution", execution_id=result["execution_id"],
+        summary="Login bug fixed: emails are normalized before comparison.",
+    )
+    assert completed["status"] == "completed"
