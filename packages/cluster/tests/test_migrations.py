@@ -1505,6 +1505,22 @@ class TestMigrationFailureMessage:
         assert "059" in msg
         assert "074_usage_ledger" in msg
 
+    def test_names_the_pre_upgrade_backup(self) -> None:
+        """#920 — the integrated node snapshots before upgrading; a failed
+        upgrade must point at that file as the way back."""
+        from anygarden.app import _migration_failure_message
+
+        backup = Path("/data/backups/anygarden.db.bak-095-20261020T000000Z")
+        msg = _migration_failure_message(
+            db_url="sqlite+aiosqlite:////data/anygarden.db",
+            current_rev="095",
+            head_rev="096",
+            cause=RuntimeError("boom"),
+            backup_path=backup,
+        )
+        assert str(backup) in msg
+        assert "Back up the database before any manual repair" not in msg
+
     def test_reports_innermost_cause(self) -> None:
         """SQLAlchemy wraps the DBAPI error; the actionable line is the one
         underneath. Reporting the wrapper reproduces the original complaint."""

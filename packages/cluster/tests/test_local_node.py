@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -627,21 +628,95 @@ def test_real_cli_sigint_exits_zero_after_confirmed_cleanup(tmp_path):
     assert "Aborted!" not in log
 
 
-def test_integrated_node_refuses_implicit_schema_upgrade(tmp_path):
+def _previous_revision_db(path):
+    """A database migrated to the revision just before head (#920)."""
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from anygarden import app as app_module
+
+    cfg = Config()
+    cfg.set_main_option(
+        "script_location", str(Path(app_module.__file__).parent / "db" / "migrations")
+    )
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{path}")
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_revision(script.get_current_head())
+    command.upgrade(cfg, head.down_revision)
+    return head.down_revision, head.revision
+
+
+def _stamped(path):
+    import sqlite3
+
+    with sqlite3.connect(path) as db:
+        return db.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+
+
+def test_integrated_node_backs_up_and_upgrades_an_older_schema(tmp_path, monkeypatch):
+    _silence_logging_setup(monkeypatch)
+    config = node_config(tmp_path)
+    previous, head = _previous_revision_db(tmp_path / "node.db")
+
+    with capture_logs() as logs, TestClient(create_app(config)) as client:
+        assert client.get("/healthz").status_code == 200
+
+    assert _stamped(tmp_path / "node.db") == head
+    backups = list((tmp_path / "backups").iterdir())
+    assert len(backups) == 1
+    assert backups[0].name.startswith(f"anygarden.db.bak-{previous}-")
+    assert _stamped(backups[0]) == previous
+    events = [e for e in logs if e["event"] == "startup.schema_backup"]
+    assert events and events[0]["path"] == str(backups[0])
+
+
+def test_integrated_node_refuses_a_revision_from_a_newer_build(tmp_path):
     import sqlite3
 
     config = node_config(tmp_path)
     with TestClient(create_app(config)):
         pass
     with sqlite3.connect(tmp_path / "node.db") as db:
-        db.execute("UPDATE alembic_version SET version_num = '062'")
-    with pytest.raises(RuntimeError, match="explicitly migrate"):
-        with TestClient(create_app(config)):
-            pytest.fail("old database automatically upgraded")
-    with sqlite3.connect(tmp_path / "node.db") as db:
-        assert (
-            db.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "062"
-        )
+        db.execute("UPDATE alembic_version SET version_num = '999_from_the_future'")
+    with (
+        pytest.raises(RuntimeError, match="newer anygarden") as excinfo,
+        TestClient(create_app(config)),
+    ):
+        pytest.fail("unknown revision accepted")
+    assert str(tmp_path / "node.db") in str(excinfo.value)
+    assert _stamped(tmp_path / "node.db") == "999_from_the_future"
+    assert not (tmp_path / "backups").exists()
+
+
+def test_integrated_node_does_not_migrate_when_the_backup_fails(tmp_path):
+    config = node_config(tmp_path)
+    previous, _head = _previous_revision_db(tmp_path / "node.db")
+    (tmp_path / "backups").write_text("not a directory")
+
+    with (
+        pytest.raises(RuntimeError, match="could not back it up"),
+        TestClient(create_app(config)),
+    ):
+        pytest.fail("migrated without a backup")
+    assert _stamped(tmp_path / "node.db") == previous
+
+
+def test_integrated_node_keeps_only_recent_backups(tmp_path):
+    config = node_config(tmp_path)
+    _previous_revision_db(tmp_path / "node.db")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    for day in range(1, 5):
+        (backup_dir / f"anygarden.db.bak-001-202601{day:02d}T000000Z").write_text("old")
+
+    with TestClient(create_app(config)):
+        pass
+
+    remaining = sorted(p.name for p in backup_dir.iterdir())
+    assert len(remaining) == 3
+    assert "anygarden.db.bak-001-20260103T000000Z" in remaining
+    assert "anygarden.db.bak-001-20260104T000000Z" in remaining
 
 
 @pytest.mark.parametrize(

@@ -90,10 +90,15 @@ effects or certify the new runtime/session protocol in #589.
 
 1. Gracefully stop the old server and local daemon; confirm their agent process
    trees have stopped. Back up the DB and the complete data directory together.
-2. Inspect the configured paths and existing migration revision. Integrated mode
-   refuses an older/future revision instead of implicitly upgrading it. Apply
-   required schema migrations as a separate, operator-controlled operation using
-   the existing server migration workflow. Fresh empty DBs are initialized.
+2. Inspect the configured paths and existing migration revision. On start, an
+   older SQLite revision is first snapshotted with SQLite's backup API to
+   `<data-dir>/backups/anygarden.db.bak-<old-revision>-<UTC>` (the newest three
+   are kept), then upgraded to head; the `startup.schema_backup` warning names
+   the file. If the snapshot cannot be written, start refuses and leaves the DB
+   unchanged. A revision this build does not know (written by a newer
+   anygarden), several `alembic_version` rows, or an older non-SQLite DB are
+   refused: back those up with the database's own tools and run
+   `anygarden server migrate`. Fresh empty DBs are initialized (#920).
 3. Start the integrated node. It creates a distinct internal local Machine row;
    it does not seize an old daemon's machine token/ID. Existing stopped agents
    can be explicitly started/placed through normal controls. Existing remote
@@ -101,8 +106,9 @@ effects or certify the new runtime/session protocol in #589.
 4. To roll back, stop the integrated node and confirm cleanup first. Use the old
    server/daemon commands and their original configuration/tokens. Reassign agents
    from the now-offline internal Machine through the existing placement controls.
-   Never overlap old and new local execution owners. No new DB revision needs to
-   be downgraded for this change.
+   Never overlap old and new local execution owners. To undo a schema upgrade
+   made by start, stop the node, copy the matching `backups/` file over the DB
+   and run the previous anygarden version.
 
 ## Unconfirmed shutdown
 
