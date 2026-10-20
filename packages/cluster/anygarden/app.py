@@ -191,7 +191,9 @@ async def _repair_failed_upgrade(engine) -> dict | None:
     return {"dropped_tmp_tables": dropped, "fts_recreated": fts_recreated}
 
 
-async def _ensure_schema_ready(engine, db_url: str) -> None:
+async def _ensure_schema_ready(
+    engine, db_url: str, *, backup_path: Path | None = None
+) -> None:
     """Ensure the database schema is ready, using Alembic where possible.
 
     Three distinct cases:
@@ -248,6 +250,7 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
                         await _read_current_revision(engine),
                         _try_head_revision(),
                         first_error,
+                        backup_path=backup_path,
                     )
                 ) from first_error
             log.warning("startup.schema_upgrade_repaired", **repaired)
@@ -262,6 +265,7 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
                         _try_head_revision(),
                         retry_error,
                         repaired=repaired,
+                        backup_path=backup_path,
                     )
                 ) from retry_error
         log.info("startup.schema_migrated", action="upgrade", target="head")
@@ -346,6 +350,17 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
     )
 
 
+def _migration_script():
+    """The packaged Alembic ``ScriptDirectory`` (no database access)."""
+    from alembic.config import Config as AlembicConfig
+    from alembic.script import ScriptDirectory
+
+    cfg = AlembicConfig()
+    script_location = Path(__file__).parent / "db" / "migrations"
+    cfg.set_main_option("script_location", str(script_location))
+    return ScriptDirectory.from_config(cfg)
+
+
 def _discover_head_revision() -> str:
     """Return the Alembic head revision id by reading the versions directory.
 
@@ -353,17 +368,100 @@ def _discover_head_revision() -> str:
     write the correct ``alembic_version`` row inside the create_all
     transaction without needing a separate Alembic command invocation.
     """
-    from alembic.config import Config as AlembicConfig
-    from alembic.script import ScriptDirectory
-
-    cfg = AlembicConfig()
-    script_location = Path(__file__).parent / "db" / "migrations"
-    cfg.set_main_option("script_location", str(script_location))
-    script = ScriptDirectory.from_config(cfg)
-    head = script.get_current_head()
+    head = _migration_script().get_current_head()
     if head is None:
         raise RuntimeError("No Alembic head revision found in versions/")
     return head
+
+
+async def _prepare_node_schema(engine, db_url: str, data_dir: Path) -> Path | None:
+    """Back up an older integrated-node database before it is upgraded (#920).
+
+    Returns the backup path when one was written. Refuses to boot when the
+    stamped revision is unknown to this build (a newer anygarden wrote it), is
+    ambiguous, or is older on a database we cannot snapshot ourselves — the
+    upgrade must never run without a way back (ADR 007).
+    """
+    from datetime import UTC, datetime
+
+    import structlog
+
+    from anygarden.node.schema import (
+        backup_sqlite,
+        classify_revision,
+        prune_backups,
+        sqlite_db_path,
+    )
+
+    async with engine.connect() as conn:
+        try:
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            revisions = list(result.scalars())
+        except Exception:
+            # Fresh/legacy classification stays in _ensure_schema_ready.
+            revisions = None
+
+    script = _migration_script()
+    head = script.get_current_head()
+
+    def is_known(rev: str) -> bool:
+        from alembic.util import CommandError
+
+        try:
+            return script.get_revision(rev) is not None
+        except CommandError:
+            return False
+
+    state = classify_revision(revisions, head=head, is_known=is_known)
+    if state in ("absent", "current"):
+        return None
+
+    label, _ = _safe_db_label(db_url)
+    found = ", ".join(revisions or [])
+    if state == "unknown":
+        raise RuntimeError(
+            f"Database revision {found} was written by a newer anygarden than this one "
+            f"(latest known: {head}).\n"
+            f"  database: {label}\n"
+            "Reinstall the newer anygarden, or stop the node and restore a backup "
+            f"from {data_dir / 'backups'} made before that upgrade."
+        )
+    if state == "ambiguous":
+        raise RuntimeError(
+            f"Database has several alembic_version rows ({found}); refusing to guess "
+            f"which schema it holds.\n  database: {label}"
+        )
+
+    db_path = sqlite_db_path(db_url)
+    if db_path is None:
+        raise RuntimeError(
+            f"Database is at revision {found}, older than {head}, and anygarden start "
+            "only backs up SQLite databases by itself.\n"
+            f"  database: {label}\n"
+            "Back it up with your database's own tools, then run "
+            "`anygarden server migrate` and start the node again."
+        )
+    try:
+        backup = backup_sqlite(
+            db_path, data_dir / "backups", from_rev=found, now=datetime.now(UTC)
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Database is at revision {found}, older than {head}, but anygarden "
+            f"could not back it up before upgrading, so it was left unchanged.\n"
+            f"  database: {label}\n"
+            f"  cause:    {exc}"
+        ) from exc
+    structlog.get_logger().warning(
+        "startup.schema_backup", path=str(backup), from_revision=found, to_revision=head
+    )
+    try:
+        prune_backups(data_dir / "backups")
+    except OSError:
+        structlog.get_logger().warning(
+            "startup.schema_backup_prune_failed", exc_info=True
+        )
+    return backup
 
 
 def _innermost_cause(exc: BaseException) -> BaseException:
@@ -404,6 +502,7 @@ def _migration_failure_message(
     head_rev: str | None,
     cause: BaseException,
     repaired: dict | None = None,
+    backup_path: Path | None = None,
 ) -> str:
     """Compose the operator-facing text for a failed ``upgrade head`` (#650).
 
@@ -432,6 +531,9 @@ def _migration_failure_message(
                 f"  repaired first:   {'; '.join(done)} — the retry still failed"
             )
 
+    if backup_path is not None:
+        lines.append(f"  backup:           {backup_path}")
+
     lines.append("")
     if is_sqlite:
         # Established by experiment, not assumed: pysqlite only opens an
@@ -446,7 +548,12 @@ def _migration_failure_message(
     lines.extend(
         [
             "To investigate:",
-            "  1. Back up the database before any manual repair.",
+            (
+                "  1. The pre-upgrade backup above restores the old schema: stop "
+                "the node and copy it over the database file."
+                if backup_path is not None
+                else "  1. Back up the database before any manual repair."
+            ),
             "  2. Inspect the migrations between the two revisions above.",
             "  3. Re-run with --log-level DEBUG for the full traceback.",
         ]
@@ -849,21 +956,12 @@ async def _startup_server(app: FastAPI) -> None:
         # and stamp head — this covers both fresh dev databases and
         # pre-Alembic legacy DBs, bringing them under Alembic control so
         # subsequent migrations apply cleanly.
+        backup_path = None
         if config.local_node_data_dir is not None:
-            async with engine.connect() as conn:
-                try:
-                    result = await conn.execute(
-                        text("SELECT version_num FROM alembic_version")
-                    )
-                    revisions = list(result.scalars())
-                except Exception:
-                    revisions = None  # Fresh/legacy classification stays in _ensure_schema_ready.
-            if revisions is not None and revisions != [_discover_head_revision()]:
-                raise RuntimeError(
-                    "Integrated node requires the current database schema. Back up the database "
-                    "and explicitly migrate it before using anygarden start."
-                )
-        await _ensure_schema_ready(engine, config.db_url)
+            backup_path = await _prepare_node_schema(
+                engine, config.db_url, config.local_node_data_dir
+            )
+        await _ensure_schema_ready(engine, config.db_url, backup_path=backup_path)
 
     # #593 — compose federation services from persisted credentials. No-op
     # (routes stay mounted but disabled, 503) when credentials are absent.

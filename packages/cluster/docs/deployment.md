@@ -37,6 +37,12 @@ anygarden server --host 0.0.0.0 --port 8000
 anygarden server migrate       # ANYGARDEN_DB_URL / --config / --db 를 따른다
 ```
 
+통합 노드(`anygarden start`)도 기동 시 스키마를 올린다. 단, 구버전 SQLite
+DB는 먼저 `<data-dir>/backups/anygarden.db.bak-<옛 revision>-<UTC>`로
+스냅샷을 남긴 뒤 upgrade한다(최근 3개 보존). 백업에 실패하거나, 더 새
+anygarden이 만든 revision이거나, SQLite가 아닌 DB면 기동을 거부한다 —
+그때는 직접 백업하고 `anygarden server migrate`를 실행한다 (#920).
+
 ### 환경변수
 
 | 변수 | 기본값 | 설명 |
