@@ -561,8 +561,8 @@ code, pre, kbd, samp {
 }
 
 /* MSG-09 (#912) — an agent is answering. The three dots step in turn;
-   the presence pulse grows out past the dot's halo and fades. Both keep
-   a static shape under reduced motion so the state still reads. */
+   the presence pulse grows out past the dot's halo and fades. Under
+   reduced motion both breathe in place instead (#921). */
 @keyframes responding-dot {
   0%, 80%, 100% { opacity: 0.3; }
   40% { opacity: 1; }
@@ -585,6 +585,24 @@ code, pre, kbd, samp {
 
 .presence-working {
   animation: presence-working 1.6s ease-out infinite;
+}
+
+/* Reduced-motion variants: the same shapes, only their opacity moves. */
+@keyframes responding-breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes presence-working-breathe {
+  0%, 100% {
+    box-shadow: var(--presence-halo),
+      0 0 0 calc(var(--presence-halo-width) + 1.5px)
+        color-mix(in srgb, var(--presence-working-color) 35%, transparent);
+  }
+  50% {
+    box-shadow: var(--presence-halo),
+      0 0 0 calc(var(--presence-halo-width) + 1.5px) var(--presence-working-color);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -613,14 +631,15 @@ code, pre, kbd, samp {
     animation: none;
   }
 
+  /* A responding agent is a busy signal like a spinner: keep it alive
+     with a slow fade in place rather than freeze it. No travel, no growth,
+     and the dots breathe together instead of stepping across. */
   .responding-dot {
-    animation: none;
-    opacity: 1;
+    animation: responding-breathe 2s ease-in-out infinite;
+    animation-delay: 0s !important; /* beats the inline step delay */
   }
 
   .presence-working {
-    animation: none;
-    box-shadow: var(--presence-halo),
-      0 0 0 calc(var(--presence-halo-width) + 1.5px) var(--presence-working-color) !important;
+    animation: presence-working-breathe 2s ease-in-out infinite;
   }
 }

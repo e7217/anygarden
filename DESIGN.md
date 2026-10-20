@@ -61,7 +61,7 @@ Check at 375px, 768px, 1024px and 1440px. No action may disappear beyond the hor
 
 ## 7. Accessibility and language
 
-Text contrast targets WCAG AA (4.5:1 for normal text); focus indicators remain visible in both themes. Icons with no visible label need an accessible name. State is expressed with text or icons as well as colour. Reduced motion preferences apply to decorative animation.
+Text contrast targets WCAG AA (4.5:1 for normal text); focus indicators remain visible in both themes. Icons with no visible label need an accessible name. State is expressed with text or icons as well as colour. Reduced motion preferences apply to decorative animation. Busy signals (spinners, responding indicators) are not decoration: under reduced motion they keep a slow in-place turn or fade rather than stopping.
 
 Fixed interface copy lives in `src/i18n/catalogs/`. The locale provider persists `anygarden_locale`, defaults to Korean for Korean browsers and English otherwise, and changes visible copy without a reload. Use locale aware formatting for dates and numbers. Project names, user messages, agent output and arbitrary server details remain as supplied.
 
