@@ -4,6 +4,18 @@
 
 ### Added
 
+- Moving an agent to another machine can bring its work files along
+  (#915). **Machine → Change** shows how many files would move and offers
+  **Move work files** when the current machine is online (checked by
+  default). The old machine zips the work directory — without instructions,
+  memory or private files — and the new machine unpacks it right before the
+  agent starts there; names that already exist on the new machine are kept,
+  not replaced. If the copy fails the move is cancelled and the agent stays
+  where it was; the old machine's files are never deleted.
+  `GET /agents/{id}/machine/move-preview`, `move_files` on
+  `PUT /agents/{id}/machine`. The dialog no longer says memory is lost:
+  room memory always followed the agent.
+
 - Work files up to 20 MiB can be uploaded and downloaded, and a folder (or
   the whole workspace) downloads as a zip up to 200 MiB, with progress
   (#914). The bytes go over HTTP instead of one machine WebSocket frame: the

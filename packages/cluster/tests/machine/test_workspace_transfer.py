@@ -134,3 +134,21 @@ def test_archive_limits(managed):
         with pytest.raises(transfer.TransferError) as caught, _open(roots) as ws:
             transfer.build_archive(ws, "", io.BytesIO(), **kwargs)
         assert caught.value.status == "too_large"
+
+
+@pytest.mark.req("AGT-12")
+def test_measure_matches_the_move_archive(managed):
+    roots, agent = managed
+    (agent / "AGENTS.md").write_text("rules")
+    (agent / "memory").mkdir()
+    (agent / "memory" / "notes.md").write_text("n")
+    (agent / "out").mkdir()
+    (agent / "out" / "a.md").write_text("aaa")
+    (agent / "result.csv").write_text("1,2")
+    with _open(roots) as ws:
+        summary = transfer.measure(ws, exclude_memory=True)
+    buffer = io.BytesIO()
+    with _open(roots) as ws:
+        packed = transfer.build_archive(ws, "", buffer, max_entries=10, max_bytes=100, exclude_memory=True)
+    assert summary == packed == transfer.ArchiveSummary(files=2, bytes=6)
+    assert sorted(zipfile.ZipFile(buffer).namelist()) == ["out/a.md", "result.csv"]

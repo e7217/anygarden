@@ -29,7 +29,8 @@ Base URL: `/api/v1`
 | PUT | `/agents/{id}` | 에이전트 수정 |
 | DELETE | `/agents/{id}` | 에이전트 삭제 |
 | POST | `/agents/{id}/start` | 에이전트 시작 (배치된 머신 유지, 머신이 삭제된 에이전트는 409) |
-| PUT | `/agents/{id}/machine` | 실행 머신 변경. 서버는 배치된 에이전트를 스스로 옮기지 않으므로 유일한 이동 경로 (#907) |
+| PUT | `/agents/{id}/machine` | 실행 머신 변경. `move_files: true`면 작업 파일도 옮기고, 실패하면 이동을 취소(409). 서버는 배치된 에이전트를 스스로 옮기지 않으므로 유일한 이동 경로 (#907) |
+| GET | `/agents/{id}/machine/move-preview?machine_id=` | 작업 파일을 함께 옮길 수 있는지와 파일 수·크기. 사유 `source_offline`·`source_unsupported`·`target_unsupported`·`too_large`·`nothing` (#915) |
 | POST | `/agents/{id}/stop` | 에이전트 중지 |
 | PUT | `/agents/{id}/files` | 에이전트 파일(manifest) 업데이트. `skills/` 경로는 지침으로 취급되어 실행 머신 디스크에 쓰고 리비전을 남긴다 (#908) |
 | GET | `/agents/{id}/workspace/download?path=` | 작업 파일 내려받기(768 KiB 이하, 초과 시 413) (#908) |

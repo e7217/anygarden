@@ -12,7 +12,7 @@ const agent = {
   permission_level: 'trusted',
 }
 
-async function setup(page: Page, locale: string, theme: string, moves: string[]) {
+async function setup(page: Page, locale: string, theme: string, moves: Array<{ machine_id: string; move_files: boolean }>) {
   await page.addInitScript(({ locale, theme }) => {
     localStorage.setItem('anygarden_token', 'machine-change-test')
     localStorage.setItem('anygarden_locale', locale)
@@ -28,8 +28,10 @@ async function setup(page: Page, locale: string, theme: string, moves: string[])
     else if (pathname === '/api/v1/machines/m-home/agents') body = [{ ...agent, rooms: [] }]
     else if (pathname === '/api/v1/agents' && method === 'GET') body = [agent]
     else if (pathname === '/api/v1/agents/engines/available') body = [{ engine: 'codex-cli', machine_count: 2 }]
-    else if (pathname === `/api/v1/agents/${agent.id}/machine` && method === 'PUT') {
-      moves.push(JSON.parse(route.request().postData() ?? '{}').machine_id)
+    else if (pathname === `/api/v1/agents/${agent.id}/machine/move-preview`) {
+      body = { can_move: true, reason: null, files: 42, bytes: 12 * 1024 * 1024, limit_bytes: 200 * 1024 * 1024 }
+    } else if (pathname === `/api/v1/agents/${agent.id}/machine` && method === 'PUT') {
+      moves.push(JSON.parse(route.request().postData() ?? '{}'))
       body = { ...agent, placed_on_machine_id: 'm-office', placement: { ...agent.placement, machine_id: 'm-office', machine_name: 'office-linux' } }
     } else if (pathname.endsWith('/models')) body = { engine: 'codex-cli', models: [], default_model: '', reasoning_levels: [] }
     else if (pathname === '/api/v1/system/version') body = { version: 'test' }
@@ -44,16 +46,19 @@ async function setup(page: Page, locale: string, theme: string, moves: string[])
 for (const [width, locale, theme] of [[375, 'ko', 'dark'], [1440, 'en', 'light']] as const) {
   test(`admin moves an agent to another machine at ${width}px [AGT-10]`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 })
-    const moves: string[] = []
+    const moves: Array<{ machine_id: string; move_files: boolean }> = []
     await setup(page, locale, theme, moves)
     await expect(page.getByTestId('overview-machine')).toContainText('iac-agent-machine')
     await page.getByTestId('overview-change-machine').click()
     const warning = page.getByTestId('machine-change-warning')
     await expect(warning).toContainText('office-linux')
     await expect(warning.locator('li')).toHaveCount(3)
+    // #915 — work files can follow the agent; checked by default.
+    await expect(page.getByTestId('machine-change-move-files-checkbox')).toBeChecked()
+    await expect(page.getByTestId('machine-change-move-files')).toContainText('42')
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     await page.screenshot({ path: testInfo.outputPath(`machine-change-${width}.png`) })
     await page.getByTestId('machine-change-submit').click()
-    await expect.poll(() => moves).toEqual(['m-office'])
+    await expect.poll(() => moves).toEqual([{ machine_id: 'm-office', move_files: true }])
   })
 }

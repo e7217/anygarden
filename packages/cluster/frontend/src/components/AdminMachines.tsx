@@ -1031,8 +1031,8 @@ export default function AdminMachines() {
         fetchEngineCatalog={fetchEngineCatalog}
         changeAgentEngine={changeAgentEngine}
         availableEngines={availableEngines.map(e => e.engine)}
-        changeAgentMachine={async (id, machineId) => {
-          const updated = await changeAgentMachine(id, machineId)
+        changeAgentMachine={async (id, machineId, options) => {
+          const updated = await changeAgentMachine(id, machineId, options)
           if (selectedId) void fetchDetail(selectedId)
           return updated
         }}

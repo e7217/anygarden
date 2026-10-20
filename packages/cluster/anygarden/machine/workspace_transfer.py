@@ -198,27 +198,15 @@ def receive_into(
         raise TransferError("blocked") from exc
 
 
-def build_archive(
-    workspace_fd: int,
-    path: str,
-    out: BinaryIO,
-    *,
-    max_entries: int,
-    max_bytes: int,
-    exclude_memory: bool = False,
-) -> ArchiveSummary:
-    """Write the folder ``path`` ("" = whole workspace) to ``out`` as a zip.
+def _walk_files(workspace_fd: int, parts: list[str], *, exclude_memory: bool):
+    """Yield ``(relative_path, directory_fd, name, size)`` for archivable files.
 
     Links, special files, private names and (at the workspace root) the
-    instruction files are left out. Exceeding ``max_entries`` files or
-    ``max_bytes`` uncompressed raises ``too_large``.
+    instruction files are skipped. The directory descriptor is only valid
+    until the next item.
     """
-    parts = _parts(path, allow_root=True)
-    files = 0
-    total = 0
 
-    def walk(directory: int, prefix: str, at_root: bool) -> None:
-        nonlocal files, total
+    def walk(directory: int, prefix: str, at_root: bool):
         with os.scandir(directory) as iterator:
             entries = sorted(iterator, key=lambda entry: entry.name)
         for entry in entries:
@@ -231,25 +219,63 @@ def build_archive(
             if stat.S_ISDIR(info.st_mode):
                 child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
                 try:
-                    walk(child, f"{prefix}{name}/", False)
+                    yield from walk(child, f"{prefix}{name}/", False)
                 finally:
                     os.close(child)
                 continue
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 continue
-            files += 1
-            total += info.st_size
-            if files > max_entries or total > max_bytes:
-                raise TransferError("too_large")
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-            with os.fdopen(fd, "rb") as source, archive.open(f"{prefix}{name}", "w") as target:
-                for chunk in iter(lambda: source.read(CHUNK_BYTES), b""):
-                    target.write(chunk)
+            yield f"{prefix}{name}", directory, name, info.st_size
 
+    with _directory(workspace_fd, parts) as folder:
+        yield from walk(folder, "", not parts)
+
+
+def measure(workspace_fd: int, path: str = "", *, exclude_memory: bool = False) -> ArchiveSummary:
+    """Count the files and bytes :func:`build_archive` would pack (#915)."""
+    parts = _parts(path, allow_root=True)
+    files = total = 0
+    try:
+        for _rel, _directory_fd, _name, size in _walk_files(workspace_fd, parts, exclude_memory=exclude_memory):
+            files += 1
+            total += size
+    except FileNotFoundError as exc:
+        raise TransferError("not_found") from exc
+    except OSError as exc:
+        raise TransferError("blocked") from exc
+    return ArchiveSummary(files=files, bytes=total)
+
+
+def build_archive(
+    workspace_fd: int,
+    path: str,
+    out: BinaryIO,
+    *,
+    max_entries: int,
+    max_bytes: int,
+    exclude_memory: bool = False,
+) -> ArchiveSummary:
+    """Write the folder ``path`` ("" = whole workspace) to ``out`` as a zip.
+
+    Links, special files, private names and (at the workspace root) the
+    instruction files are left out; with ``exclude_memory`` also
+    ``memory/`` (a machine move, #915). Exceeding ``max_entries`` files or
+    ``max_bytes`` uncompressed raises ``too_large``.
+    """
+    parts = _parts(path, allow_root=True)
+    files = 0
+    total = 0
     try:
         with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            with _directory(workspace_fd, parts) as folder:
-                walk(folder, "", not parts)
+            for rel, directory, name, size in _walk_files(workspace_fd, parts, exclude_memory=exclude_memory):
+                files += 1
+                total += size
+                if files > max_entries or total > max_bytes:
+                    raise TransferError("too_large")
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                with os.fdopen(fd, "rb") as source, archive.open(rel, "w") as target:
+                    for chunk in iter(lambda: source.read(CHUNK_BYTES), b""):
+                        target.write(chunk)
     except FileNotFoundError as exc:
         raise TransferError("not_found") from exc
     except TransferError:

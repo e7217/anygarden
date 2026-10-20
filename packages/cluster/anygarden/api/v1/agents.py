@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -21,6 +22,7 @@ from anygarden.agent_availability import (
     render_unavailable_message,
 )
 from anygarden.agent_files import AgentFilePathError, validate_agent_file_path
+from anygarden.workspaces import moves
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import (
     ActivityLog,
@@ -249,6 +251,19 @@ class AgentMachineChange(BaseModel):
     """#907 — body for ``PUT /agents/{id}/machine``."""
 
     machine_id: str = Field(min_length=1, max_length=64)
+    # #915 — copy the work files to the new machine. The old machine must be
+    # online; a failed copy cancels the move and leaves the agent in place.
+    move_files: bool = False
+
+
+class MovePreviewOut(BaseModel):
+    """#915 — whether work files can follow the agent to a machine."""
+
+    can_move: bool
+    reason: Optional[str] = None
+    files: int = 0
+    bytes: int = 0
+    limit_bytes: int = 0
 
 
 class UnavailableReasonOut(BaseModel):
@@ -1009,6 +1024,13 @@ async def change_agent_machine(
         else set()
     )
     await _require_machine_supports(db, machine, agent.engine, capabilities)
+    move_files = False
+    if body.move_files:
+        # Ask the old machine before taking the capacity lock below.
+        plan = await moves.preview(request, db, agent, machine)
+        if not plan.can_move and plan.reason != "nothing":
+            raise HTTPException(409, f"Work files cannot be moved ({plan.reason})")
+        move_files = plan.can_move
     try:
         await reserve_machine_for(
             agent.engine, db, bus,
@@ -1031,6 +1053,24 @@ async def change_agent_machine(
     if needs_stop:
         await lifecycle.request_stop(agent_id)
 
+    moved: moves.MoveResult | None = None
+    if move_files:
+        # Pack the files only once the agent has stopped writing them.
+        if needs_stop and not await _wait_until_stopped(request, agent_id):
+            if was_running:
+                await lifecycle.request_start(agent_id)
+            raise HTTPException(409, "The agent did not stop in time; it stays on its machine")
+        await db.refresh(agent)
+        try:
+            moved = await moves.move_work_files(request, db, agent, previous, target_id)
+        except moves.MoveFailed as exc:
+            await moves.discard_import(request, agent, target_id)
+            if was_running:
+                await lifecycle.request_start(agent_id)
+            raise HTTPException(
+                409, f"Work files could not be moved ({exc.reason}); the agent stays on its machine"
+            ) from None
+
     await db.refresh(agent)
     agent.placed_on_machine_id = target_id
     agent.actual_state = "stopped"
@@ -1049,6 +1089,11 @@ async def change_agent_machine(
                 "from": previous,
                 "to": target_id,
                 "by_user_id": identity.id if identity.kind == "user" else None,
+                **(
+                    {"moved_files": {"count": moved.files, "archive_bytes": moved.archive_bytes,
+                                     "skipped": moved.skipped}}
+                    if moved is not None else {}
+                ),
             },
         )
     )
@@ -1058,6 +1103,39 @@ async def change_agent_machine(
         await lifecycle.request_start(agent_id)
     await db.refresh(agent)
     return await _agent_out(request, db, agent)
+
+
+async def _wait_until_stopped(request: Request, agent_id: str, timeout: float = 30.0) -> bool:
+    """#915 — wait for the old machine to report the agent stopped."""
+    factory = request.app.state.session_factory
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        async with factory() as session:
+            state = await session.scalar(select(Agent.actual_state).where(Agent.id == agent_id))
+        if state in {"stopped", "crashed", "idle", None}:
+            return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.25)
+
+
+@router.get("/{agent_id}/machine/move-preview", response_model=MovePreviewOut)
+async def preview_machine_move(
+    agent_id: str,
+    request: Request,
+    machine_id: str = Query(min_length=1, max_length=64),
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """#915 — what moving the agent to ``machine_id`` would carry."""
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    machine = await db.get(Machine, machine_id)
+    if machine is None:
+        raise HTTPException(404, "Selected machine not found")
+    plan = await moves.preview(request, db, agent, machine)
+    return MovePreviewOut(**plan.__dict__)
 
 
 # ── agent_files CRUD ────────────────────────────────────────────────
