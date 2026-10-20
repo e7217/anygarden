@@ -362,10 +362,14 @@ export function useAgents() {
 
   // #907 — move the agent to another machine. The server never does this on
   // its own; it stops the agent on the old machine and starts it on the new.
-  const changeAgentMachine = useCallback(async (id: string, machineId: string) => {
+  const changeAgentMachine = useCallback(async (
+    id: string, machineId: string, options: { moveFiles: boolean } = { moveFiles: false },
+  ) => {
+    // #915 — ``moveFiles`` copies the work files; the request lasts until
+    // they have reached the new machine.
     const resp = await apiFetch(`/api/v1/agents/${id}/machine`, {
       method: 'PUT',
-      body: JSON.stringify({ machine_id: machineId }),
+      body: JSON.stringify({ machine_id: machineId, move_files: options.moveFiles }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));

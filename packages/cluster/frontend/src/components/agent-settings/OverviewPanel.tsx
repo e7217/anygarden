@@ -102,7 +102,7 @@ interface Props {
   changeAgentEngine?: (id: string, change: EngineChange) => Promise<Agent>
   availableEngines?: string[]
   /** #907 — explicit move; the Machine row's Change button needs it. */
-  changeAgentMachine?: (id: string, machineId: string) => Promise<Agent>
+  changeAgentMachine?: (id: string, machineId: string, options?: { moveFiles: boolean }) => Promise<Agent>
   /** #907 — "Start again" on a crash-looped agent's reason row. */
   startAgent?: (id: string) => Promise<unknown>
   connectionState?: ConnectionState | null
@@ -672,12 +672,13 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
         <MachineChangeDialog
           open={machineDialogOpen}
           onOpenChange={setMachineDialogOpen}
+          agentId={agent.id}
           agentName={agent.name}
           engine={agent.engine}
           trusted={agent.permission_level === 'trusted'}
           currentMachineId={agent.placed_on_machine_id ?? null}
           currentMachineName={agent.placed_on_machine_id ? agent.placement?.machine_name ?? agent.placed_on_machine_id : null}
-          onSubmit={async machineId => { await changeAgentMachine(agent.id, machineId) }}
+          onSubmit={async (machineId, options) => { await changeAgentMachine(agent.id, machineId, options) }}
         />
       ) : null}
     </div>

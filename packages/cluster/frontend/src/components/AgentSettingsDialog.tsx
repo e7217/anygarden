@@ -84,7 +84,7 @@ interface Props {
   changeAgentEngine?: (id: string, change: EngineChange) => Promise<Agent>
   availableEngines?: string[]
   /** #907 — explicit move to another machine (Overview "Machine" row). */
-  changeAgentMachine?: (id: string, machineId: string) => Promise<Agent>
+  changeAgentMachine?: (id: string, machineId: string, options?: { moveFiles: boolean }) => Promise<Agent>
   /** #907 — restart from the reason row of a crash-looped agent. */
   startAgent?: (id: string) => Promise<unknown>
   /** #908 — instruction history (Instructions → History). */

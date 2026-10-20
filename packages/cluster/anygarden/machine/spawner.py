@@ -923,6 +923,24 @@ class Spawner:
                 self._remove_tree_entry(ws_skills)
             ws_skills.symlink_to("../skills")
 
+        # #915 — work files moved here from the agent's previous machine are
+        # unpacked into the work directory before the agent starts. A failed
+        # import is logged and kept aside; it never blocks the start.
+        from anygarden.machine import workspace_import
+
+        try:
+            imported = workspace_import.apply_pending_import(agent_root, msg.engine)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("workspace_import_failed", agent_id=msg.agent_id, error=str(exc))
+        else:
+            if imported is not None:
+                log.info(
+                    "workspace_imported",
+                    agent_id=msg.agent_id,
+                    files=imported.files,
+                    skipped=len(imported.skipped),
+                )
+
         return agent_root
 
     async def spawn(self, msg: SpawnManifest) -> SpawnResult:

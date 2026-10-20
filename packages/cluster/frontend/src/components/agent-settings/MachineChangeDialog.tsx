@@ -15,6 +15,15 @@ import { Select } from '@/components/ui/select'
 import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
 
+/** #915 — whether the work files can follow the agent to a machine. */
+export interface MovePreview {
+  can_move: boolean
+  reason: string | null
+  files: number
+  bytes: number
+  limit_bytes: number
+}
+
 export interface MachineChoice {
   id: string
   name: string
@@ -36,25 +45,37 @@ async function defaultListMachineEngines(machineId: string): Promise<string[]> {
 
 type ListState = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; machines: MachineChoice[] }
 
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`
+  return `${bytes} B`
+}
+
+const KNOWN_REASONS = new Set(['source_offline', 'source_unsupported', 'target_unsupported', 'too_large', 'nothing'])
+
 export default function MachineChangeDialog({
-  open, onOpenChange, agentName, engine, trusted, currentMachineId, currentMachineName, onSubmit,
-  listMachines = defaultListMachines, listMachineEngines = defaultListMachineEngines,
+  open, onOpenChange, agentId, agentName, engine, trusted, currentMachineId, currentMachineName, onSubmit,
+  listMachines = defaultListMachines, listMachineEngines = defaultListMachineEngines, previewMove,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  agentId: string
   agentName: string
   engine: string
   trusted: boolean
   currentMachineId: string | null
   currentMachineName: string | null
-  onSubmit: (machineId: string) => Promise<void>
+  onSubmit: (machineId: string, options: { moveFiles: boolean }) => Promise<void>
   listMachines?: () => Promise<MachineChoice[]>
   listMachineEngines?: (machineId: string) => Promise<string[]>
+  previewMove?: (machineId: string) => Promise<MovePreview>
 }) {
   const { t } = useLocale()
   const [list, setList] = useState<ListState>({ kind: 'loading' })
   const [machineId, setMachineId] = useState('')
   const [supported, setSupported] = useState<boolean | null>(null)
+  const [preview, setPreview] = useState<MovePreview | null>(null)
+  const [moveFiles, setMoveFiles] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -84,6 +105,21 @@ export default function MachineChangeDialog({
     return () => { active = false }
   }, [machineId, engine, listMachineEngines])
 
+  useEffect(() => {
+    setPreview(null); setMoveFiles(false)
+    if (!machineId) return
+    let active = true
+    const load = previewMove ?? (async (id: string) => {
+      const resp = await apiFetch(`/api/v1/agents/${encodeURIComponent(agentId)}/machine/move-preview?machine_id=${encodeURIComponent(id)}`)
+      if (!resp.ok) throw new Error('preview')
+      return await resp.json() as MovePreview
+    })
+    load(machineId)
+      .then(result => { if (active) { setPreview(result); setMoveFiles(result.can_move) } })
+      .catch(() => { if (active) setPreview({ can_move: false, reason: 'other', files: 0, bytes: 0, limit_bytes: 0 }) })
+    return () => { active = false }
+  }, [machineId, agentId, previewMove])
+
   const machines = list.kind === 'ready' ? list.machines : []
   const target = machines.find(machine => machine.id === machineId)
   const ready = !!target && supported === true
@@ -91,7 +127,7 @@ export default function MachineChangeDialog({
   const submit = async () => {
     setBusy(true); setError('')
     try {
-      await onSubmit(machineId)
+      await onSubmit(machineId, { moveFiles: moveFiles && Boolean(preview?.can_move) })
       onOpenChange(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('admin.machineChange.failed'))
@@ -137,14 +173,38 @@ export default function MachineChangeDialog({
               <div className="min-w-0 space-y-1">
                 <p className="font-medium">{t('admin.machineChange.warningTitle')}</p>
                 <ul className="list-disc space-y-1 pl-4">
-                  <li>{t('admin.machineChange.warningFiles')}</li>
+                  <li>{moveFiles ? t('admin.machineChange.warningFilesMoved') : t('admin.machineChange.warningFiles')}</li>
                   <li>{t('admin.machineChange.warningLogin', { machine: target.name })}</li>
                   {trusted && <li>{t('admin.machineChange.warningTrusted', { machine: target.name })}</li>}
                 </ul>
               </div>
             </div>
           )}
+          {target && <div className="space-y-1" data-testid="machine-change-move-files">
+            {preview === null && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machineChange.moveFilesChecking')}</p>}
+            {preview?.can_move && <>
+              <label className="flex min-h-[var(--control-height)] items-start gap-2 text-sm text-[var(--color-foreground)]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 accent-[var(--color-brand)]"
+                  checked={moveFiles}
+                  disabled={busy}
+                  onChange={event => setMoveFiles(event.target.checked)}
+                  data-testid="machine-change-move-files-checkbox"
+                />
+                <span>{t('admin.machineChange.moveFiles', { files: preview.files, size: formatBytes(preview.bytes) })}</span>
+              </label>
+              <p className="pl-6 text-caption text-[var(--color-foreground-muted)]">{t('admin.machineChange.moveFilesHint')}</p>
+            </>}
+            {preview && !preview.can_move && <p className="text-sm text-[var(--color-foreground-muted)]" data-testid="machine-change-move-files-reason">
+              {t(KNOWN_REASONS.has(preview.reason ?? '')
+                ? `admin.machineChange.moveFilesUnavailable.${preview.reason}` as Parameters<typeof t>[0]
+                : 'admin.machineChange.moveFilesUnavailable.other',
+              { files: preview.files, size: formatBytes(preview.bytes), limit: formatBytes(preview.limit_bytes) })}
+            </p>}
+          </div>}
           <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machineChange.instructionsKept')}</p>
+          {busy && moveFiles && <p role="status" className="text-sm text-[var(--color-foreground)]" data-testid="machine-change-moving">{t('admin.machineChange.movingFiles')}</p>}
           {error && <p role="alert" className="text-sm text-[var(--color-danger)]">{error}</p>}
         </div>
         <DialogFooter>

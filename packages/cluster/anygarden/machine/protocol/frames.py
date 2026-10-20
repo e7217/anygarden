@@ -407,10 +407,13 @@ class WorkspaceTransferRequestFrame(BaseModel):
     request_id: str = Field(min_length=1, max_length=64)
     agent_id: str = Field(min_length=1, max_length=64)
     generation: int = Field(ge=0)
-    operation: Literal["send", "receive", "archive"]
+    # #915 — ``measure`` previews a move, ``import`` stores the moved zip
+    # for the next start and ``discard_import`` drops it.
+    operation: Literal["send", "receive", "archive", "measure", "import", "discard_import"]
     path: str = Field(default="", max_length=1024)
-    ticket_id: str = Field(min_length=1, max_length=64)
-    ticket_token: str = Field(min_length=16, max_length=128)
+    ticket_id: str | None = Field(default=None, min_length=1, max_length=64)
+    ticket_token: str | None = Field(default=None, min_length=16, max_length=128)
+    work_dir: Literal[".", "workspace"] | None = None
     max_bytes: int = Field(gt=0)
     max_entries: int | None = Field(default=None, gt=0)
     edit_token: str | None = Field(default=None, min_length=64, max_length=64)
@@ -428,6 +431,8 @@ class WorkspaceTransferResultFrame(BaseModel):
     status: str = Field(max_length=32)
     size: int | None = Field(default=None, ge=0)
     files: int | None = Field(default=None, ge=0)
+    # #915 — moved names that already exist on the new machine (first 50).
+    skipped: list[str] = Field(default_factory=list, max_length=50)
 
 
 ServerFrame = Union[

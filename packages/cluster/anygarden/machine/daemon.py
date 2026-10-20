@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -544,17 +545,16 @@ class MachineDaemon:
             "running_pid": running.pid if running else None,
             "running_started_at": running.started_at if running else None,
         }
-        status, size, files = await asyncio.to_thread(
+        outcome = await asyncio.to_thread(
             run_workspace_transfer,
             self._manifest_store.agents_root,
             frame,
-            self._transfer_url(frame.ticket_id),
+            self._transfer_url(frame.ticket_id or ""),
             kwargs,
             self._transfer_client_factory,
         )
         await self._send(WorkspaceTransferResultFrame(
-            request_id=frame.request_id, agent_id=frame.agent_id,
-            status=status, size=size, files=files,
+            request_id=frame.request_id, agent_id=frame.agent_id, **outcome,
         ).model_dump())
 
     async def _handle_managed_workspace(self, frame: ManagedWorkspaceRequestFrame) -> None:
@@ -2024,15 +2024,18 @@ def run_workspace_transfer(
     url: str,
     running: dict,
     client_factory=_transfer_client,
-) -> tuple[str, int | None, int | None]:
-    """#914 — perform one HTTP work-file transfer; return (status, size, files)."""
+) -> dict:
+    """#914/#915 — perform one work-file transfer; return result fields."""
     import tempfile
 
     import httpx
 
     headers = {"Authorization": f"Ticket {frame.ticket_token}"}
     chunk = workspace_transfer.CHUNK_BYTES
-    client = client_factory()
+    needs_http = frame.operation in {"send", "receive", "archive", "import"}
+    if needs_http and not frame.ticket_token:
+        return {"status": "blocked"}
+    client = client_factory() if needs_http else None
 
     def upload(stream, length: int) -> None:
         response = client.put(
@@ -2045,17 +2048,24 @@ def run_workspace_transfer(
         response.raise_for_status()
 
     try:
+        if frame.operation in {"import", "discard_import"}:
+            return _import_workspace(agents_root, frame, client, url, headers)
         with workspace_transfer.open_workspace(
             agents_root, frame.agent_id, frame.generation,
             edit_token=frame.edit_token if frame.operation == "receive" else None,
             **running,
         ) as workspace_fd:
+            if frame.operation == "measure":
+                summary = workspace_transfer.measure(
+                    workspace_fd, frame.path, exclude_memory=frame.exclude_memory
+                )
+                return {"status": "ready", "size": summary.bytes, "files": summary.files}
             if frame.operation == "send":
                 with workspace_transfer.open_for_send(
                     workspace_fd, frame.path, max_bytes=frame.max_bytes
                 ) as (stream, size):
                     upload(stream, size)
-                return "ready", size, 1
+                return {"status": "ready", "size": size, "files": 1}
             if frame.operation == "archive":
                 with tempfile.TemporaryFile() as archive:
                     summary = workspace_transfer.build_archive(
@@ -2067,20 +2077,83 @@ def run_workspace_transfer(
                     length = archive.tell()
                     archive.seek(0)
                     upload(archive, length)
-                return "ready", length, summary.files
+                return {"status": "ready", "size": length, "files": summary.files}
             if frame.size is None or frame.sha256 is None:
-                return "blocked", None, None
+                return {"status": "blocked"}
             with client.stream("GET", url, headers=headers) as response:
                 response.raise_for_status()
                 workspace_transfer.receive_into(
                     workspace_fd, frame.path, response.iter_bytes(chunk),
                     size=frame.size, sha256=frame.sha256,
                 )
-            return "ready", frame.size, 1
+            return {"status": "ready", "size": frame.size, "files": 1}
     except workspace_transfer.TransferError as exc:
-        return exc.status, None, None
+        return {"status": exc.status}
     except httpx.HTTPError as exc:
         log.warning("workspace_transfer_http_failed", agent_id=frame.agent_id, error=str(exc))
-        return "failed", None, None
+        return {"status": "failed"}
     finally:
-        client.close()
+        if client is not None:
+            client.close()
+
+
+def _import_workspace(agents_root: Path, frame: WorkspaceTransferRequestFrame, client, url: str, headers: dict) -> dict:
+    """#915 — store (or drop) work files moved from another machine.
+
+    The zip is unpacked by the materializer on the next start; here it is
+    only downloaded, checked and compared with what already exists.
+    """
+    import hashlib
+    import zipfile
+
+    from anygarden.machine import workspace_import
+    from anygarden.machine.agent_dir import AgentFilePathError, validate_agent_id
+    from anygarden.machine.safefs import secure_chmod
+
+    try:
+        validate_agent_id(frame.agent_id)
+    except AgentFilePathError:
+        return {"status": "blocked"}
+    agent_root = agents_root / frame.agent_id
+    target = workspace_import.import_zip_path(agent_root)
+    if frame.operation == "discard_import":
+        target.unlink(missing_ok=True)
+        return {"status": "ready"}
+    if frame.size is None or frame.sha256 is None:
+        return {"status": "blocked"}
+    for directory in (agents_root, agent_root, target.parent):
+        if directory.is_symlink():
+            return {"status": "blocked"}
+        directory.mkdir(mode=0o700, exist_ok=True)
+    secure_chmod(target.parent, 0o700)
+    partial = target.with_name(f"incoming-{frame.request_id}.zip")
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with client.stream("GET", url, headers=headers) as response, open(partial, "xb") as out:
+            response.raise_for_status()
+            for piece in response.iter_bytes(workspace_transfer.CHUNK_BYTES):
+                size += len(piece)
+                if size > frame.size:
+                    return {"status": "too_large"}
+                digest.update(piece)
+                out.write(piece)
+        if size != frame.size or digest.hexdigest() != frame.sha256:
+            return {"status": "blocked"}
+        with zipfile.ZipFile(partial) as archive:
+            files = sum(1 for info in archive.infolist() if not info.is_dir())
+        os.replace(partial, target)
+    except zipfile.BadZipFile:
+        return {"status": "blocked"}
+    finally:
+        partial.unlink(missing_ok=True)
+    skipped: list[str] = []
+    work = agent_root / (frame.work_dir or ".")
+    if work.is_dir() and not work.is_symlink():
+        try:
+            with workspace_import.open_target(work) as fd:
+                skipped = workspace_import.conflicts(target, fd)
+        except workspace_import.ImportRefused:
+            target.unlink(missing_ok=True)
+            return {"status": "blocked"}
+    return {"status": "ready", "size": size, "files": files, "skipped": skipped[:50]}
