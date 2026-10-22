@@ -327,6 +327,57 @@ describe('Sidebar — layout (#827)', () => {
   })
 })
 
+describe('Sidebar — projects/agents split (#928)', () => {
+  const dm = { id: 'dm1', name: 'DM: helper', project_id: null, is_dm: true }
+
+  it('[ROOM-12] splits the two sections evenly with a resize handle between them', () => {
+    roomsMockState.agentDMs = [dm]
+    renderSidebar()
+    expect(screen.getByTestId('sidebar-sections').style.getPropertyValue('--sidebar-split')).toBe('50%')
+    const handle = screen.getByRole('separator', { name: 'Resize projects and agents' })
+    expect(handle).toHaveAttribute('aria-controls', 'sidebar-agents-section')
+    expect(screen.getByTestId('sidebar-agents-section')).toHaveClass('basis-[var(--sidebar-split)]')
+  })
+
+  it('[ROOM-12] restores a stored split', () => {
+    roomsMockState.agentDMs = [dm]
+    localStorage.setItem('anygarden_sidebar_split_ratio', '0.3')
+    renderSidebar()
+    expect(screen.getByTestId('sidebar-sections').style.getPropertyValue('--sidebar-split')).toBe('30%')
+  })
+
+  it('[ROOM-12] collapsing either section hides the handle and gives the other the space', () => {
+    roomsMockState.agentDMs = [dm]
+    renderSidebar()
+    const agentsToggle = screen.getByRole('button', { name: 'Agents' })
+
+    fireEvent.click(agentsToggle)
+    expect(agentsToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('separator')).toBeNull()
+    expect(screen.queryByTestId('sidebar-dm-dm1')).toBeNull()
+    expect(screen.getByTestId('sidebar-projects-section')).toHaveClass('flex-1')
+    expect(localStorage.getItem('anygarden_sidebar_agents_collapsed')).toBe('true')
+
+    fireEvent.click(agentsToggle)
+    const projectsToggle = screen.getByTestId('sidebar-projects-toggle')
+    fireEvent.click(projectsToggle)
+    expect(projectsToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('separator')).toBeNull()
+    expect(screen.getByTestId('sidebar-agents-section')).toHaveClass('flex-1')
+    expect(screen.getByTestId('sidebar-dm-dm1')).toBeInTheDocument()
+
+    fireEvent.click(projectsToggle)
+    expect(screen.getByRole('separator')).toBeInTheDocument()
+  })
+
+  it('keeps the projects section whole when there is no agents section', () => {
+    renderSidebar()
+    expect(screen.queryByTestId('sidebar-agents-section')).toBeNull()
+    expect(screen.queryByRole('separator')).toBeNull()
+    expect(screen.getByTestId('sidebar-projects-section')).toHaveClass('flex-1')
+  })
+})
+
 describe('Sidebar — agent actions requested from chat', () => {
   beforeEach(() => {
     authMockState.isAdmin = true

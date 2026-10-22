@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useSystemVersion, useUpdateStatus } from '@/hooks/useSystemVersion'
 import { useAgents, type Agent } from '@/hooks/useAgents'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
+import { useSidebarSplit } from '@/hooks/useSidebarSplit'
 import { useModalDrawer } from '@/hooks/useModalDrawer'
 import { deleteRoom, deleteRoomFailure } from '@/lib/roomDelete'
 import { AGENT_ACTION_EVENT, type AgentActionDetail } from '@/lib/agentActions'
@@ -25,6 +26,7 @@ import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import SidebarAdminMenu from '@/components/SidebarAdminMenu'
+import SidebarSplitHandle, { SIDEBAR_SPLIT_VAR, splitPercent } from '@/components/SidebarSplitHandle'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import SidebarCreateAgentDialog from '@/components/SidebarCreateAgentDialog'
@@ -232,7 +234,16 @@ export default function Sidebar({
       )
     } catch { /* ignore */ }
   }, [expandedProjects])
-  const [agentsExpanded, setAgentsExpanded] = useState(true)
+  const splitRef = useRef<HTMLDivElement>(null)
+  const {
+    ratio,
+    setRatio,
+    resetRatio,
+    projectsCollapsed,
+    toggleProjects,
+    agentsCollapsed,
+    toggleAgents,
+  } = useSidebarSplit()
   const [createAgentOpen, setCreateAgentOpen] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [newRoomName, setNewRoomName] = useState('')
@@ -475,60 +486,39 @@ export default function Sidebar({
 
       <div className="px-2 pb-2"><button type="button" onClick={() => go('/inbox')} aria-current={location.pathname === '/inbox' ? 'page' : undefined} data-testid="sidebar-inbox" className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-sm font-medium ${location.pathname === '/inbox' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Inbox className="h-4 w-4 shrink-0" />{t('inbox.title')}</button></div>
 
-      {/* Projects & Rooms */}
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="px-2 py-2">
-          {/* Pinned section — top-level pinned rooms across all
-              projects, ordered by ``sort_order`` (#47). The
-              ``DndContext`` scope is intentionally local to the
-              pinned section so drags outside the section never
-              trigger reorder logic. */}
-          {pinnedRooms.length > 0 && (
-            <div className="mb-2">
-              <div className="flex items-center gap-1 px-2 py-1 text-badge uppercase text-[var(--color-foreground-muted)]">
-                <Pin className="h-3 w-3" />
-                {t('chat.pinned')}
-              </div>
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
-                onDragEnd={(event: DragEndEvent) => {
-                  const { active, over } = event
-                  if (!over || active.id === over.id) return
-                  const ids = pinnedRooms.map(r => r.id)
-                  const from = ids.indexOf(String(active.id))
-                  const to = ids.indexOf(String(over.id))
-                  if (from === -1 || to === -1) return
-                  const nextOrder = arrayMove(ids, from, to)
-                  void reorderPinnedRooms(nextOrder)
-                }}
-              >
-                <SortableContext
-                  items={pinnedRooms.map(r => r.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  <div className="flex flex-col gap-0.5">
-                    {pinnedRooms.map(room => (
-                      <PinnedRoomItem
-                        key={room.id}
-                        room={room}
-                        selectedRoom={selectedRoom}
-                        onGo={go}
-                        onUnpin={() => { void pinRoom(room.id, false) }}
-                      />
-                    ))}
-                  </div>
-                </SortableContext>
-              </DndContext>
-            </div>
-          )}
-
+      {/* Projects & agents split (#928). Each section scrolls on its own
+          under a fixed header, so a long room tree no longer pushes the
+          agents off-screen. While both are open the boundary between
+          them is draggable; ``--sidebar-split`` is the agents section's
+          share of the height. Each section keeps a 96px floor. */}
+      <div
+        ref={splitRef}
+        data-testid="sidebar-sections"
+        className="flex min-h-0 flex-1 flex-col"
+        style={{ [SIDEBAR_SPLIT_VAR]: splitPercent(ratio) } as CSSProperties}
+      >
+        <section
+          aria-labelledby="sidebar-projects-heading"
+          data-testid="sidebar-projects-section"
+          className={`flex flex-col ${projectsCollapsed ? 'shrink-0' : 'min-h-24 flex-1'}`}
+        >
           {/* Projects section header — same shape as the agents header so
               project creation reads as part of this section (#827). */}
-          <div className="flex items-center gap-1">
-            <span className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center px-2 text-badge uppercase text-[var(--color-foreground-muted)]">
+          <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
+            <button
+              type="button"
+              id="sidebar-projects-heading"
+              onClick={toggleProjects}
+              aria-expanded={!projectsCollapsed}
+              aria-controls="sidebar-projects-list"
+              data-testid="sidebar-projects-toggle"
+              className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+            >
+              {projectsCollapsed
+                ? <ChevronRight className="h-3 w-3" />
+                : <ChevronDown className="h-3 w-3" />}
               {t('chat.projects')}
-            </span>
+            </button>
             <button
               type="button"
               onClick={() => setProjectDialogOpen(true)}
@@ -540,70 +530,118 @@ export default function Sidebar({
               <Plus className="h-4 w-4" />
             </button>
           </div>
-
-          {projects.map(project => (
-            <div key={project.id} className="mb-1">
-              {/* Project header row: the expand/collapse <button>
-                  and the overflow-menu trigger live side-by-side
-                  inside a ``group`` container so the menu fades
-                  in on hover without nesting interactive elements
-                  (which would be invalid HTML). ``relative`` anchors
-                  the menu's absolute-positioned popover. */}
-              <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] transition-colors">
-                <button
-                  onClick={() => toggleProject(project.id)}
-                  aria-expanded={expandedProjects.has(project.id)}
-                  className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
-                >
-                  {expandedProjects.has(project.id)
-                    ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                    : <ChevronRight className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                  }
-                  <span className="truncate">{project.name}</span>
-                </button>
-                {/* The menu holds only "Delete project", so it is hidden when
-                    the caller may not delete (#783). */}
-                {project.can_delete && (
-                  <SidebarProjectMenu
-                    projectId={project.id}
-                    onDelete={() => setDeleteProjectTarget({ id: project.id, name: project.name })}
-                  />
-                )}
-              </div>
-
-              {expandedProjects.has(project.id) && (
-                <div className="ml-3 mt-0.5 flex flex-col gap-0.5">
-                  <RoomTreeBranch
-                    nodes={projectTrees[project.id] ?? []}
-                    selectedRoom={selectedRoom}
-                    onGo={go}
-                    onPin={(roomId) => { void pinRoom(roomId, true) }}
-                    isAdmin={isAdmin}
-                    projectId={project.id}
-                    onRename={(roomId) => setEditRoomId(roomId)}
-                    onDelete={(roomId, name) => {
-                      void handleDeleteRoom(roomId, project.id, name)
+          <ScrollArea id="sidebar-projects-list" className={projectsCollapsed ? 'hidden' : 'min-h-0 flex-1'}>
+            <div className="px-2 pb-2">
+              {/* Pinned section — top-level pinned rooms across all
+                  projects, ordered by ``sort_order`` (#47). The
+                  ``DndContext`` scope is intentionally local to the
+                  pinned section so drags outside the section never
+                  trigger reorder logic. */}
+              {pinnedRooms.length > 0 && (
+                <div className="mb-2">
+                  <div className="flex items-center gap-1 px-2 py-1 text-badge uppercase text-[var(--color-foreground-muted)]">
+                    <Pin className="h-3 w-3" />
+                    {t('chat.pinned')}
+                  </div>
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={(event: DragEndEvent) => {
+                      const { active, over } = event
+                      if (!over || active.id === over.id) return
+                      const ids = pinnedRooms.map(r => r.id)
+                      const from = ids.indexOf(String(active.id))
+                      const to = ids.indexOf(String(over.id))
+                      if (from === -1 || to === -1) return
+                      const nextOrder = arrayMove(ids, from, to)
+                      void reorderPinnedRooms(nextOrder)
                     }}
-                  />
-
-                  <button
-                    onClick={() => openNewRoomDialog(project.id)}
-                    className="flex min-h-[var(--control-sm-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-caption font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
                   >
-                    <Plus className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
-                    <span>{t('chat.newRoom')}</span>
-                  </button>
+                    <SortableContext
+                      items={pinnedRooms.map(r => r.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className="flex flex-col gap-0.5">
+                        {pinnedRooms.map(room => (
+                          <PinnedRoomItem
+                            key={room.id}
+                            room={room}
+                            selectedRoom={selectedRoom}
+                            onGo={go}
+                            onUnpin={() => { void pinRoom(room.id, false) }}
+                          />
+                        ))}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
                 </div>
               )}
-            </div>
-          ))}
 
-          {projects.length === 0 && (
-            <p className="text-caption text-[var(--color-foreground-muted)] px-2 py-4 text-center">
-              {t('chat.noProjects')}
-            </p>
-          )}
-        </div>
+              {projects.map(project => (
+                <div key={project.id} className="mb-1">
+                  {/* Project header row: the expand/collapse <button>
+                      and the overflow-menu trigger live side-by-side
+                      inside a ``group`` container so the menu fades
+                      in on hover without nesting interactive elements
+                      (which would be invalid HTML). ``relative`` anchors
+                      the menu's absolute-positioned popover. */}
+                  <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] transition-colors">
+                    <button
+                      onClick={() => toggleProject(project.id)}
+                      aria-expanded={expandedProjects.has(project.id)}
+                      className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
+                    >
+                      {expandedProjects.has(project.id)
+                        ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                        : <ChevronRight className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                      }
+                      <span className="truncate">{project.name}</span>
+                    </button>
+                    {/* The menu holds only "Delete project", so it is hidden when
+                        the caller may not delete (#783). */}
+                    {project.can_delete && (
+                      <SidebarProjectMenu
+                        projectId={project.id}
+                        onDelete={() => setDeleteProjectTarget({ id: project.id, name: project.name })}
+                      />
+                    )}
+                  </div>
+
+                  {expandedProjects.has(project.id) && (
+                    <div className="ml-3 mt-0.5 flex flex-col gap-0.5">
+                      <RoomTreeBranch
+                        nodes={projectTrees[project.id] ?? []}
+                        selectedRoom={selectedRoom}
+                        onGo={go}
+                        onPin={(roomId) => { void pinRoom(roomId, true) }}
+                        isAdmin={isAdmin}
+                        projectId={project.id}
+                        onRename={(roomId) => setEditRoomId(roomId)}
+                        onDelete={(roomId, name) => {
+                          void handleDeleteRoom(roomId, project.id, name)
+                        }}
+                      />
+
+                      <button
+                        onClick={() => openNewRoomDialog(project.id)}
+                        className="flex min-h-[var(--control-sm-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-caption font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+                      >
+                        <Plus className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
+                        <span>{t('chat.newRoom')}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {projects.length === 0 && (
+                <p className="text-caption text-[var(--color-foreground-muted)] px-2 py-4 text-center">
+                  {t('chat.noProjects')}
+                </p>
+              )}
+            </div>
+          </ScrollArea>
+        </section>
         {/* Agents DM section.
             Admin users see presence dots next to each DM (driven by
             ``useAgents()`` — an admin-gated endpoint). Non-admins
@@ -613,72 +651,99 @@ export default function Sidebar({
             Admins always get the section so its "add agent" action is
             reachable before the first agent exists. */}
         {(isAdmin || agentDMs.length > 0) && (
-          <div className="border-t border-[var(--color-border)] px-2 py-2">
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setAgentsExpanded(prev => !prev)}
-                aria-expanded={agentsExpanded}
-                className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
-              >
-                {agentsExpanded
-                  ? <ChevronDown className="h-3 w-3" />
-                  : <ChevronRight className="h-3 w-3" />}
-                {t('chat.agents')}
-              </button>
-              {isAdmin && (
+          <>
+            {!projectsCollapsed && !agentsCollapsed && (
+              <SidebarSplitHandle
+                containerRef={splitRef}
+                controls="sidebar-agents-section"
+                ratio={ratio}
+                onRatioChange={setRatio}
+                onReset={resetRatio}
+              />
+            )}
+            <section
+              id="sidebar-agents-section"
+              aria-labelledby="sidebar-agents-heading"
+              data-testid="sidebar-agents-section"
+              className={`flex flex-col border-t border-[var(--color-border)] ${
+                agentsCollapsed ? 'shrink-0'
+                : projectsCollapsed ? 'min-h-24 flex-1'
+                : 'min-h-24 shrink grow-0 basis-[var(--sidebar-split)]'
+              }`}
+            >
+              <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setCreateAgentOpen(true)}
-                  aria-label={t('chat.addAgent')}
-                  title={t('chat.addAgent')}
-                  data-testid="sidebar-add-agent"
-                  className="inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+                  id="sidebar-agents-heading"
+                  onClick={toggleAgents}
+                  aria-expanded={!agentsCollapsed}
+                  aria-controls="sidebar-agents-list"
+                  className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                 >
-                  <Plus className="h-4 w-4" />
+                  {agentsCollapsed
+                    ? <ChevronRight className="h-3 w-3" />
+                    : <ChevronDown className="h-3 w-3" />}
+                  {t('chat.agents')}
                 </button>
-              )}
-            </div>
-            {isAdmin ? (
-              // Stays mounted while collapsed so the create/settings
-              // dialogs it owns survive toggling the section.
-              <AgentDMListAdmin
-                dms={agentsExpanded ? agentDMs : []}
-                selectedRoom={selectedRoom}
-                onGo={go}
-                createAgentOpen={createAgentOpen}
-                onCreateAgentOpenChange={setCreateAgentOpen}
-              />
-            ) : agentsExpanded && (
-                <div className="flex flex-col gap-0.5">
-                  {agentDMs.map(dm => {
-                    const label = dm.name.replace(/^DM:\s*/, '')
-                    return (
-                      <button
-                        key={dm.id}
-                        onClick={() => go(`/rooms/${dm.id}`)}
-                        data-testid={`sidebar-dm-${dm.id}`}
-                        className={`flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-caption font-medium transition-colors ${
-                          selectedRoom === dm.id
-                            ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
-                            : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
-                        }`}
-                      >
-                        <EntityAvatar
-                          id={dm.representative_agent_id ?? dm.id}
-                          name={label}
-                          kind="agent"
-                          size="xs"
-                        />
-                        <span className="min-w-0 truncate">{label}</span>
-                        <RoomStatus roomId={dm.id} hasUpdates={dm.has_updates} />
-                      </button>
-                    )
-                  })}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setCreateAgentOpen(true)}
+                    aria-label={t('chat.addAgent')}
+                    title={t('chat.addAgent')}
+                    data-testid="sidebar-add-agent"
+                    className="inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <ScrollArea id="sidebar-agents-list" className={agentsCollapsed ? 'hidden' : 'min-h-0 flex-1'}>
+                <div className="px-2 pb-2">
+                  {isAdmin ? (
+                    // Stays mounted while collapsed so the create/settings
+                    // dialogs it owns survive toggling the section.
+                    <AgentDMListAdmin
+                      dms={agentsCollapsed ? [] : agentDMs}
+                      selectedRoom={selectedRoom}
+                      onGo={go}
+                      createAgentOpen={createAgentOpen}
+                      onCreateAgentOpenChange={setCreateAgentOpen}
+                    />
+                  ) : !agentsCollapsed && (
+                      <div className="flex flex-col gap-0.5">
+                        {agentDMs.map(dm => {
+                          const label = dm.name.replace(/^DM:\s*/, '')
+                          return (
+                            <button
+                              key={dm.id}
+                              onClick={() => go(`/rooms/${dm.id}`)}
+                              data-testid={`sidebar-dm-${dm.id}`}
+                              className={`flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-caption font-medium transition-colors ${
+                                selectedRoom === dm.id
+                                  ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
+                                  : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
+                              }`}
+                            >
+                              <EntityAvatar
+                                id={dm.representative_agent_id ?? dm.id}
+                                name={label}
+                                kind="agent"
+                                size="xs"
+                              />
+                              <span className="min-w-0 truncate">{label}</span>
+                              <RoomStatus roomId={dm.id} hasUpdates={dm.has_updates} />
+                            </button>
+                          )
+                        })}
+                      </div>
+                  )}
                 </div>
-            )}
-          </div>
+              </ScrollArea>
+            </section>
+          </>
         )}
-      </ScrollArea>
+      </div>
 
       {/* New Project dialog — opened from the projects section header. */}
       <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
