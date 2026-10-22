@@ -4,6 +4,20 @@
 
 ### Added
 
+- A node started with `anygarden start` can update itself from the web UI
+  (#927). **Admin → Machines → This server** offers **Update to X and
+  restart** once *Check for updates* finds a newer release: the node installs
+  `anygarden[server,agent]==X` with `uv tool` or pip while it keeps serving,
+  shuts down like `anygarden stop`, and re-executes itself with the same
+  arguments — same process and terminal, no service manager needed. A failed
+  install leaves the running version untouched; only newer versions are
+  installed. The page follows the restart and reports the version the node
+  came back on. Not offered (the command is shown instead, with the reason)
+  for `anygarden server`, non-POSIX systems or a source checkout.
+  `GET/POST /api/v1/system/node-update`. The node's own machine now points
+  to **This server** instead of a per-machine update that always failed.
+  `python -m anygarden` now runs the same CLI as the `anygarden` command.
+
 - Moving an agent to another machine can bring its work files along
   (#915). **Machine → Change** shows how many files would move and offers
   **Move work files** when the current machine is online (checked by

@@ -1851,3 +1851,121 @@ cli.main()
             timeout=30,
         ).returncode
     assert exited == 0, (tmp_path / "daemon.log").read_text()
+
+
+@pytest.mark.req("NODE-17")
+def test_real_cli_web_update_restarts_the_node_in_the_same_process(tmp_path):
+    """#927: a web update installs, shuts down cleanly and re-executes in place.
+
+    The installer is stubbed (no network); everything else is the real CLI:
+    the same PID comes back healthy on the same data directory and port.
+    """
+    import json
+    import os
+    import socket
+    import time
+    import urllib.request
+
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    environment = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("ANYGARDEN_") and k != "WEB_CONCURRENCY"
+    }
+    for key in (
+        "SKILL_STALE_INTERVAL_HOURS",
+        "ORPHAN_SWEEPER_INTERVAL_SEC",
+        "TURN_RECOVERY_INTERVAL_SEC",
+    ):
+        environment["ANYGARDEN_" + key] = "0"
+    start = [
+        sys.executable,
+        "-c",
+        """
+import anygarden.node.self_update as su
+su.unsupported_reason = lambda **kwargs: None
+async def installed(self, target):
+    return None
+su.NodeUpdater._install = installed
+from anygarden.cli import dispatch
+dispatch()
+""",
+        "start",
+        "--data-dir",
+        str(tmp_path),
+        "--port",
+        str(port),
+    ]
+    base = f"http://127.0.0.1:{port}"
+
+    def request(path, *, body=None, token=None):
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(base + path, data=data, method="POST" if body is not None else "GET")
+        req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
+        with urllib.request.urlopen(req, timeout=2) as response:
+            return response.status, json.loads(response.read() or b"null")
+
+    def wait_healthy():
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            assert process.poll() is None, log_path.read_text()
+            try:
+                if request("/healthz")[0] == 200:
+                    return
+            except OSError:
+                time.sleep(0.05)
+        pytest.fail("node did not become healthy:\n" + log_path.read_text())
+
+    log_path = tmp_path / "server.log"
+    with log_path.open("w") as log:
+        process = subprocess.Popen(
+            start, env=environment, stdout=log, stderr=subprocess.STDOUT
+        )
+        try:
+            wait_healthy()
+            identity = read_object(tmp_path / "node-identity.json")
+            _, account = request(
+                "/api/v1/auth/register",
+                body={"email": "owner@example.test", "password": "test-password-123"},
+            )
+            status, update = request(
+                "/api/v1/system/node-update",
+                body={"target_version": "99.0.0"},
+                token=account["token"],
+            )
+            assert status == 202
+            assert update["status"] in ("installing", "restarting")
+            # The node goes away, then the same process serves again.
+            deadline = time.monotonic() + 20
+            while "restarting on the new version" not in log_path.read_text():
+                assert time.monotonic() < deadline, log_path.read_text()
+                assert process.poll() is None, log_path.read_text()
+                time.sleep(0.05)
+            wait_healthy()
+            assert process.poll() is None
+            assert read_object(tmp_path / "node-identity.json") == identity
+            assert read_object(tmp_path / "node-owner.json")["state"] == "running"
+            # The re-executed build starts a fresh, idle update state.
+            _, again = request(
+                "/api/v1/auth/login",
+                body={"email": "owner@example.test", "password": "test-password-123"},
+            )
+            _, after = request("/api/v1/system/node-update", token=again["token"])
+            assert after["status"] == "idle"
+            stopped = subprocess.run(
+                [sys.executable, "-m", "anygarden", "stop", "--data-dir", str(tmp_path)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+            assert process.wait(timeout=15) == 0, log_path.read_text()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)

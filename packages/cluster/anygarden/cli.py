@@ -420,6 +420,10 @@ def start_node(
     """Run the API and owned local execution together, in the foreground."""
     import os
 
+    # #927 — a web update re-executes the node with what it was launched with,
+    # not with the runtime variables applied below.
+    launch_env = dict(os.environ)
+
     if workers != 1 or os.environ.get("WEB_CONCURRENCY", "1") not in ("", "1"):
         raise click.ClickException(
             "Integrated mode supports exactly one worker; use --workers 1"
@@ -571,6 +575,36 @@ def start_node(
     from anygarden.observability.logging import settle_standard_streams
 
     settle_standard_streams()
+    if getattr(app.state, "node_restart_requested", False):
+        _reexec_node(launch_env)
+
+
+def _reexec_node(env: dict[str, str]) -> None:
+    """Replace this process with the newly installed node (#927).
+
+    Runs only after a confirmed clean shutdown, so the ownership lock, ports
+    and database are free; the PID and terminal stay the same.
+    """
+    import os
+    import sys
+
+    from anygarden.node.self_update import reexec_command
+
+    command = reexec_command()
+    try:
+        click.echo("AnyGarden node updated; restarting on the new version")
+        # Buffered output would be lost when the process image is replaced.
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except OSError:
+        pass
+    try:
+        os.execve(command[0], command, env)
+    except OSError as exc:
+        raise _NodeExitError(
+            f"Node update installed but the restart failed ({exc}); run "
+            "`anygarden start` again"
+        ) from exc
 
 
 @dispatch.command(name="stop")

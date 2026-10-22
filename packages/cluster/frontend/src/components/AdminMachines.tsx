@@ -4,7 +4,7 @@ import { useMachines } from '@/hooks/useMachines'
 import { useAgents } from '@/hooks/useAgents'
 import { useRooms } from '@/hooks/useRooms'
 import { useMachineDetail, type MachineEngineInfo } from '@/hooks/useMachineDetail'
-import { useUpdateStatus } from '@/hooks/useSystemVersion'
+import { useNodeUpdate, useUpdateStatus } from '@/hooks/useSystemVersion'
 import type { RegisterMachineResult } from '@/hooks/useMachines'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -146,6 +146,8 @@ export default function AdminMachines() {
   const isUnplacedView = selectedId === UNPLACED
   const isServerView = selectedId === SERVER
   const serverStatus = useUpdateStatus(true)
+  // #927 — an integrated node can install the update and restart in place.
+  const nodeUpdate = useNodeUpdate(true)
   const serverPackage = serverStatus.updates.find(u => u.package === 'anygarden') ?? serverStatus.updates[0]
   const serverUpdateAvailable = serverStatus.updates.some(u => u.update_available)
 
@@ -457,7 +459,7 @@ export default function AdminMachines() {
       {/* ── Right: Machine Detail ── */}
       <div className="min-w-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto">
         {isServerView ? (
-          <ServerVersionPanel status={serverStatus} />
+          <ServerVersionPanel status={serverStatus} nodeUpdate={nodeUpdate} />
         ) : isUnplacedView ? (
           <div className="max-w-2xl space-y-6">
             <div>
@@ -876,6 +878,14 @@ export default function AdminMachines() {
                   >
                     <PauseCircle className="mr-1.5 h-3 w-3" /> {t('admin.machines.drain')}
                   </Button>
+                  {/* #927 — the node's own machine shares its process: it is
+                      updated with the node from the server entry. The label is
+                      the server-enforced local node identity. */}
+                  {selectedMachine.labels?.['anygarden.local_node_id'] ? (
+                  <Button variant="outline" size="sm" onClick={() => setSelectedId(SERVER)}>
+                    <ArrowUpCircle className="mr-1.5 h-3 w-3" /> {t('admin.machines.updateWithNode')}
+                  </Button>
+                  ) : (
                   <Button variant="outline" size="sm"
                     disabled={selectedMachine.status === 'offline' || selectedMachine.update_status === 'updating'}
                     onClick={async () => {
@@ -889,6 +899,7 @@ export default function AdminMachines() {
                   >
                     <ArrowUpCircle className="mr-1.5 h-3 w-3" /> {t('admin.machines.update')}
                   </Button>
+                  )}
                   <Button variant="outline" size="sm"
                     className="text-[var(--color-destructive)] hover:text-[var(--color-destructive)] border-[var(--color-destructive)]/30 hover:border-[var(--color-destructive)]/50"
                     disabled={!detailReady}

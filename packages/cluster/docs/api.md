@@ -129,6 +129,10 @@ must not be used as a machine identifier.
 | `MACHINE_OFFLINE` | 409 | daemon update or engine operation while disconnected |
 | `MACHINE_NOT_FOUND` | 404 | migrated machine resource lookups |
 | `MACHINE_ACCESS_DENIED` | 403 | owned-machine lookup by another user |
+| `NODE_UPDATE_UNAVAILABLE` | 409 | node web update on a process that cannot update itself (top-level `reason`) |
+| `NODE_UPDATE_NO_TARGET` | 409 | node web update with no version given and no cached newer release |
+| `NODE_UPDATE_REJECTED` | 409 | node web update to an invalid or not-newer version |
+| `NODE_UPDATE_BUSY` | 409 | node web update while one is installing or restarting |
 | `TASK_ASSIGNEE_NOT_IN_ROOM` | 400 | assignee is absent from the task room |
 | `TASK_ROOM_NOT_FOUND` | 404 | task creation for a missing room |
 | `TASK_SOURCE_MESSAGE_NOT_FOUND` | 404 | message-to-task conversion with no same-room source |
