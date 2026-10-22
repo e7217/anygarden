@@ -8,6 +8,12 @@ import type { PackageUpdate } from '@/hooks/useSystemVersion'
 const state = vi.hoisted(() => ({ updates: [] as PackageUpdate[], machines: [] as unknown[] }))
 vi.mock('@/hooks/useSystemVersion', () => ({
   useUpdateStatus: () => ({ updates: state.updates, loading: false, error: null, refresh: vi.fn() }),
+  useNodeUpdate: () => ({
+    state: { supported: false, reason: 'not_integrated_node', status: 'idle', from_version: '0.21.0', target_version: null, error: null },
+    progress: { phase: 'idle', fromVersion: null, targetVersion: null, version: null, error: null, since: 0 },
+    startError: null,
+    start: vi.fn(),
+  }),
 }))
 vi.mock('@/hooks/useMachines', () => ({ useMachines: () => ({ machines: state.machines, status: 'loaded', fetchMachines: vi.fn().mockResolvedValue(undefined) }) }))
 vi.mock('@/hooks/useAgents', () => ({ useAgents: () => ({ agents: [], availableEngines: [], pendingIds: new Set() }) }))
@@ -53,4 +59,16 @@ it('[#888] shows the server version and update command when the server entry is 
 it('[#889] points people who want to work with someone else\'s server to Partner nodes', () => {
   render(<MemoryRouter><AdminMachines /></MemoryRouter>)
   expect(screen.getByRole('link', { name: 'Partner nodes' })).toHaveAttribute('href', '/admin/federation')
+})
+
+it("[NODE-18] sends the node's own machine to the server entry for updates", () => {
+  state.updates = [serverRow(true)]
+  state.machines = [{
+    id: 'm-local', name: 'this computer', hostname: 'host', owner_user_id: 'u', status: 'online',
+    labels: { 'anygarden.local_node_id': 'node-1' },
+  }]
+  render(<MemoryRouter><AdminMachines /></MemoryRouter>)
+  expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Update with this server' }))
+  expect(screen.getByRole('region', { name: 'This server' })).toBeInTheDocument()
 })

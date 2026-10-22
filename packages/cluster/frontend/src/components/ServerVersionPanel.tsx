@@ -1,16 +1,24 @@
-import { RefreshCw } from 'lucide-react'
+import { ArrowUpCircle, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { PackageUpdate, UpdateStatus } from '@/hooks/useSystemVersion'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import type { NodeUpdateControl, PackageUpdate, UpdateStatus } from '@/hooks/useSystemVersion'
 import { parseServerDate } from '@/lib/datetime'
 import { useLocale } from '@/i18n/LocaleProvider'
+import type { MessageKey } from '@/i18n/messages'
 
 /**
  * "This server" panel on the Machines page (#546, #888) — shows each
  * tracked package's running version vs the latest on PyPI, with a manual
- * "check for updates" action. Applying an update is intentionally
- * out-of-band: the panel surfaces the exact command rather than running it.
+ * "check for updates" action. An integrated node can also install the update
+ * and restart itself in place (#927); otherwise the panel shows the command.
  */
-export default function ServerVersionPanel({ status }: { status: UpdateStatus }) {
+export default function ServerVersionPanel({
+  status,
+  nodeUpdate,
+}: {
+  status: UpdateStatus
+  nodeUpdate?: NodeUpdateControl
+}) {
   const { t } = useLocale()
   const { updates, loading, error, refresh } = status
   const checkError = error?.match(/^Check failed \((\d+)\)$/)
@@ -41,7 +49,11 @@ export default function ServerVersionPanel({ status }: { status: UpdateStatus })
 
       <div className="flex flex-col gap-3">
         {updates.map((u) => (
-          <PackageRow key={u.package} update={u} />
+          <PackageRow
+            key={u.package}
+            update={u}
+            nodeUpdate={u.package === 'anygarden' ? nodeUpdate : undefined}
+          />
         ))}
         {updates.length === 0 && (
           <p className="text-sm text-[var(--color-foreground-subtle)]">
@@ -53,9 +65,11 @@ export default function ServerVersionPanel({ status }: { status: UpdateStatus })
   )
 }
 
-function PackageRow({ update }: { update: PackageUpdate }) {
+function PackageRow({ update, nodeUpdate }: { update: PackageUpdate; nodeUpdate?: NodeUpdateControl }) {
   const { t, formatDate } = useLocale()
   const { package: pkg, current, latest, update_available, checked_at, error } = update
+  const canUpdateInPlace = !!nodeUpdate?.state?.supported
+  const unsupportedReason = nodeUpdate?.state && !nodeUpdate.state.supported ? nodeUpdate.state.reason : null
 
   return (
     <div className="rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-[var(--space-4)] shadow-whisper">
@@ -81,14 +95,25 @@ function PackageRow({ update }: { update: PackageUpdate }) {
         />
       </div>
 
-      {update_available && (
+      {update_available && latest && canUpdateInPlace && nodeUpdate && (
+        <NodeUpdateAction control={nodeUpdate} latest={latest} />
+      )}
+
+      {update_available && !canUpdateInPlace && (
         <div className="mt-3 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-2">
           <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.system.updateCommand')}</p>
           <code className="mt-0.5 block font-mono text-xs text-[var(--color-foreground)]">
             {`pip install -U ${pkg}`}
           </code>
+          {unsupportedReason && (
+            <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+              {t(UNSUPPORTED_REASON_KEYS[unsupportedReason] ?? 'admin.system.nodeUpdate.unsupported.unsupported_install')}
+            </p>
+          )}
         </div>
       )}
+
+      {nodeUpdate && !(update_available && canUpdateInPlace) && <NodeUpdateOutcome control={nodeUpdate} />}
 
       {checked_at && (
         <p className="mt-2 text-badge font-normal text-[var(--color-foreground-subtle)]">
@@ -136,5 +161,99 @@ function StatusBadge({
     <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-badge font-semibold text-[var(--color-foreground-muted)]">
       {ahead ? t('admin.system.aheadOfPypi') : t('admin.system.upToDate')}
     </span>
+  )
+}
+
+// Why this server cannot update itself (``GET /node-update`` reason).
+const UNSUPPORTED_REASON_KEYS: Record<string, MessageKey> = {
+  not_integrated_node: 'admin.system.nodeUpdate.unsupported.not_integrated_node',
+  unsupported_platform: 'admin.system.nodeUpdate.unsupported.unsupported_platform',
+  development_install: 'admin.system.nodeUpdate.unsupported.development_install',
+  unsupported_install: 'admin.system.nodeUpdate.unsupported.unsupported_install',
+}
+
+/** Install-and-restart for an integrated node (#927). */
+function NodeUpdateAction({ control, latest }: { control: NodeUpdateControl; latest: string }) {
+  const { t } = useLocale()
+  const { confirm } = useFeedback()
+  const busy = control.progress.phase === 'installing' || control.progress.phase === 'restarting'
+
+  const onUpdate = async () => {
+    const ok = await confirm({
+      title: t('admin.system.nodeUpdate.confirmTitle'),
+      description: t('admin.system.nodeUpdate.confirmDescription', { version: latest }),
+      confirmLabel: t('admin.system.nodeUpdate.confirmAction'),
+    })
+    if (ok) await control.start(latest)
+  }
+
+  // Once the node is back on the new version only the reload remains to do.
+  const done = control.progress.phase === 'updated' && !control.startError
+
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      {!done && (
+        <>
+          <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.system.nodeUpdate.hint')}</p>
+          <div>
+            <Button size="sm" onClick={onUpdate} disabled={busy}>
+              <ArrowUpCircle />
+              {t('admin.system.nodeUpdate.action', { version: latest })}
+            </Button>
+          </div>
+        </>
+      )}
+      <NodeUpdateOutcome control={control} />
+    </div>
+  )
+}
+
+/** Progress and result of a node update; announced to screen readers. */
+function NodeUpdateOutcome({ control }: { control: NodeUpdateControl }) {
+  const { t } = useLocale()
+  const { progress, startError } = control
+  let message: string | null = null
+  let tone = 'text-[var(--color-foreground-muted)]'
+  if (startError) {
+    message = startError === 'network'
+      ? t('admin.system.networkError')
+      : t('admin.system.nodeUpdate.failed', { error: startError })
+    tone = 'text-[var(--color-danger)]'
+  } else {
+    switch (progress.phase) {
+      case 'installing':
+        message = t('admin.system.nodeUpdate.installing', { version: progress.targetVersion ?? '' })
+        break
+      case 'restarting':
+        message = t('admin.system.nodeUpdate.restarting')
+        break
+      case 'failed':
+        message = t('admin.system.nodeUpdate.failed', { error: progress.error ?? '' })
+        tone = 'text-[var(--color-danger)]'
+        break
+      case 'same_version':
+        message = t('admin.system.nodeUpdate.sameVersion', { version: progress.version ?? '' })
+        tone = 'text-[var(--color-danger)]'
+        break
+      case 'stalled':
+        message = t('admin.system.nodeUpdate.stalled')
+        tone = 'text-[var(--color-warning)]'
+        break
+      case 'updated':
+        message = t('admin.system.nodeUpdate.updated', { version: progress.version ?? '' })
+        tone = 'text-[var(--color-success)]'
+        break
+    }
+  }
+  return (
+    <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-2">
+      {message && <p className={`text-sm ${tone}`}>{message}</p>}
+      {progress.phase === 'updated' && !startError && (
+        // The page still runs the previous build's scripts.
+        <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+          {t('admin.system.nodeUpdate.reload')}
+        </Button>
+      )}
+    </div>
   )
 }

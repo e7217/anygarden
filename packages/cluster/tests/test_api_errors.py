@@ -129,7 +129,7 @@ def test_machine_task_call_sites_match_public_error_registry() -> None:
     """Adding a migrated error requires an explicit snapshot and registry entry."""
     api_dir = Path(__file__).parents[1] / "anygarden" / "api" / "v1"
     observed: set[tuple[str, int]] = set()
-    for filename in ("machines.py", "tasks.py"):
+    for filename in ("machines.py", "tasks.py", "system.py"):
         tree = ast.parse((api_dir / filename).read_text())
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -146,7 +146,12 @@ def test_machine_task_call_sites_match_public_error_registry() -> None:
             observed.add((code_node.value, status_node.value))
 
     snapshotted = {(case[0], case[1]) for case in STRING_DETAIL_CASES} | {
-        ("MACHINE_HAS_ACTIVE_AGENTS", 409)
+        ("MACHINE_HAS_ACTIVE_AGENTS", 409),
+        # #927 — node self-update (messages carry the version or reason).
+        ("NODE_UPDATE_BUSY", 409),
+        ("NODE_UPDATE_NO_TARGET", 409),
+        ("NODE_UPDATE_REJECTED", 409),
+        ("NODE_UPDATE_UNAVAILABLE", 409),
     }
     assert {code for code, _status in observed} == set(PUBLIC_ERROR_CODES)
     assert observed == snapshotted

@@ -41,7 +41,8 @@ Integrated mode supports **one API worker**. `--workers` other than 1,
 restarts. Existing `anygarden server`, `machine`, `agent`, `client` and the legacy
 server alias retain their behavior. Remote machine WebSockets remain available
 for other Machine IDs; the internal local ID refuses network ownership, token
-regeneration, deletion, and daemon self-update.
+regeneration, deletion, and daemon self-update; it is updated together with the
+node (see *Updating from the web UI*).
 
 ## Ownership and delivery
 
@@ -109,6 +110,41 @@ effects or certify the new runtime/session protocol in #589.
    Never overlap old and new local execution owners. To undo a schema upgrade
    made by start, stop the node, copy the matching `backups/` file over the DB
    and run the previous anygarden version.
+
+## Updating from the web UI (#927)
+
+An admin can update a node started with `anygarden start` from **Admin >
+Machines > This server**. After *Check for updates* finds a newer release, the
+**Update to X and restart** button:
+
+1. installs `anygarden[server,agent]==X` while the node keeps serving — with
+   `uv tool install … --force` for a `uv tool` install, otherwise
+   `<python> -m pip install --upgrade …` in the node's environment;
+2. on success, shuts down exactly like `anygarden stop` (agents stop their
+   current work, ownership is released);
+3. re-executes itself as `<python> -m anygarden <same arguments>` with the
+   environment it was launched with — same PID, same terminal, no supervisor
+   needed. A systemd unit sees no restart.
+
+The new build then backs up and upgrades the database (#920). The page follows
+the node through the restart and reports the version it came back on; reload
+the page to load the new interface.
+
+- **Install fails**: nothing is shut down; the node keeps running the current
+  version and the panel shows the installer's error.
+- **New version does not start** (import error, migration failure): the
+  terminal shows the error and the process exits. Reinstall the previous version
+  (`uv tool install "anygarden[server,agent]==<old>" --force` or the pip
+  equivalent), and if the database was already upgraded restore the matching
+  `backups/` file as described above, then `anygarden start`.
+- Only a version newer than the running one is installed: an older build would
+  refuse a database already migrated past its head.
+- Not available (the panel shows the command and the reason instead) for
+  `anygarden server` without an integrated node, non-POSIX systems (`os.execve`
+  cannot replace the process), a source checkout (editable install), or an
+  environment that is neither a `uv tool` install nor has pip.
+- The node's own machine and machine links (#848) run inside the node process
+  and are updated with it; their per-machine update button is not used.
 
 ## Unconfirmed shutdown
 
