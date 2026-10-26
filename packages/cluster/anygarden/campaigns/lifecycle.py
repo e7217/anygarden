@@ -36,7 +36,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -47,10 +47,12 @@ from anygarden.campaigns.brief import STRATEGY_CHANGE_REASON
 from anygarden.campaigns.judge import JUDGED_OUTCOMES, Verdict, classify, reaches_target
 from anygarden.campaigns.notify import mark
 from anygarden.campaigns.policy import (
+    DEFAULT_EVAL_TIMEOUT_SECONDS,
     EVAL_FAILURE_BLOCK_THRESHOLD,
     PLATEAU_WINDOW,
     RETRO_EVERY_CYCLES,
     TERMINAL_STATUSES,
+    evaluator_digest,
     usable_tokens,
 )
 from anygarden.campaigns.service import (
@@ -78,6 +80,10 @@ from anygarden.tasks_status import TERMINAL_STATUSES as TASK_TERMINAL_STATUSES
 SYSTEM_ACTOR = "system:campaign"
 EVAL_GRACE_SECONDS = 120
 """Slack on top of the evaluator timeout before the server gives up."""
+EVAL_PENDING_WINDOW_SECONDS = 24 * 3600
+"""How long an evaluation may wait for a machine to accept it (agent not
+placed, machine offline or busy, a request the machine cannot parse)
+before the cycle closes as ``eval_failed``."""
 STRATEGY_CHANGE = STRATEGY_CHANGE_REASON
 """``Campaign.wake_reason`` flag: the next brief asks for a new strategy."""
 CYCLE_CLOSED_REASON = "CAMPAIGN_CYCLE_CLOSED"
@@ -431,17 +437,21 @@ async def request_eval(
     """Mark *attempt* as waiting for its evaluation and queue the request.
 
     ``eval_job_id`` (= the attempt id) is persisted so a result that
-    arrives after a server restart still finds its attempt. The server-side
-    deadline (``eval_deadline_at``) starts when the machine accepts the job
-    (``evaluation.dispatch_eval``): while the agent's machine is offline or
-    busy the attempt simply stays ``pending`` — the agent cannot run a next
-    cycle there either.
+    arrives after a server restart still finds its attempt. While the
+    agent's machine is offline or busy the attempt stays ``pending`` — the
+    agent cannot run a next cycle there either — but not forever: the
+    outer deadline is the evaluator timeout plus
+    ``EVAL_PENDING_WINDOW_SECONDS``. Once the machine accepts the job
+    (``evaluation.dispatch_eval``) the deadline becomes the run's own.
     """
     from anygarden.campaigns.evaluation import queue_dispatch_after_commit
 
+    timeout = int((campaign.evaluator or {}).get("timeout_sec") or DEFAULT_EVAL_TIMEOUT_SECONDS)
     attempt.eval_status = "pending"
     attempt.eval_job_id = attempt.id
-    attempt.eval_deadline_at = None
+    attempt.eval_deadline_at = clock() + timedelta(
+        seconds=timeout + EVAL_GRACE_SECONDS + EVAL_PENDING_WINDOW_SECONDS
+    )
     await db.flush()
     mark(db, attempt_id=attempt.id)
     await record_event(
@@ -575,9 +585,13 @@ async def on_eval_result(
     delta = await _sync_tokens(db, attempt)
     await _settle_cycle_work(db, attempt, reason=CYCLE_CLOSED_REASON, clock=clock)
     ended = campaign.status in TERMINAL_STATUSES
+    # Pins describe the evaluator the job ran; adopt them only while that
+    # is still the campaign's evaluator (an edit re-pins at the next run).
+    same_evaluator = attempt.eval_evaluator_digest == evaluator_digest(campaign.evaluator)
     await _after_close(
         db, campaign, attempt, verdict=None if ended else verdict, token_delta=delta,
-        clock=clock, pins=frame.get("pins") if status != "invalid" else None,
+        clock=clock,
+        pins=frame.get("pins") if status != "invalid" and same_evaluator else None,
     )
     return "recorded" if ended else "judged"
 
@@ -600,15 +614,23 @@ async def expire_eval_deadlines(db: AsyncSession, *, clock: Clock = utcnow) -> l
         if campaign is None:
             continue
         verdict = Verdict("eval_failed", "timed_out")
+        stage = attempt.eval_status
+        if stage == "pending":
+            excerpt = "[server] the machine never accepted the evaluation before the deadline"
+            if attempt.eval_excerpt:
+                excerpt = f"{excerpt}; {attempt.eval_excerpt}"
+        else:
+            excerpt = "[server] no evaluation result before the deadline"
         if not await _close(db, attempt, outcome=verdict.outcome, eval_status="timed_out",
                             clock=clock, finished_at=now, eval_finished_at=now,
-                            eval_excerpt="[server] no evaluation result before the deadline"):
+                            eval_excerpt=excerpt[:_EXCERPT_CHARS]):
             continue
         await record_event(
             db, campaign.id,
             key=f"campaign:{campaign.id}:cycle:{attempt.cycle_no}:eval_timed_out",
             type="eval_timed_out",
-            details={"cycle_no": attempt.cycle_no, "job_id": attempt.eval_job_id},
+            details={"cycle_no": attempt.cycle_no, "job_id": attempt.eval_job_id,
+                     "stage": stage},
             actor=SYSTEM_ACTOR, clock=clock,
         )
         delta = await _sync_tokens(db, attempt)
@@ -775,6 +797,7 @@ def cycle_task_is_open(task: Task) -> bool:
 
 __all__ = [
     "EVAL_GRACE_SECONDS",
+    "EVAL_PENDING_WINDOW_SECONDS",
     "STRATEGY_CHANGE",
     "TERMINAL_EXECUTION_EVENTS",
     "cancel_cycle_execution",

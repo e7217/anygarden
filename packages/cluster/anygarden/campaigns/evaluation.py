@@ -7,15 +7,23 @@ that transaction commits:
 - right away, through a dispatcher the scheduler installs at start-up
   (``install_dispatcher``) and that runs after the commit of any session
   that queued a request (``queue_dispatch_after_commit``),
-- again on every scheduler tick for attempts still ``pending`` on an
-  online machine (``request_pending_evals``) — a machine that was offline,
-  busy with another evaluation or reconnecting is asked again,
+- again on every scheduler tick for attempts still ``pending``
+  (``request_pending_evals``) — a machine that was offline, busy with
+  another evaluation or reconnecting is asked again; an attempt whose
+  agent has no machine records why it waits (``eval_waiting``),
 - and when a machine registers (reconnect).
 
 The request waits only for the machine's acknowledgement. An accepted job
 becomes ``running`` and keeps its server-side deadline; the result frame
 is matched by ``job_id`` (``handle_eval_result_frame``), so it is accepted
 after a server restart too.
+
+A result frame can be lost (the machine drops it while its socket is
+down). ``running`` attempts are therefore asked for again on reconnect
+and, throttled, on ticks once they have run for
+``RUNNING_RECHECK_AFTER_SECONDS``: the machine acknowledges a job it is
+still running and re-sends the cached result of one it finished. A
+repeat request never extends the run's deadline.
 """
 
 from __future__ import annotations
@@ -23,11 +31,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
-from sqlalchemy import event, select
+from sqlalchemy import and_, event, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
@@ -43,6 +51,18 @@ log = logging.getLogger(__name__)
 _QUEUE_KEY = "campaign_eval_dispatch"
 _dispatcher: Callable[[str], Awaitable[Any]] | None = None
 _background: set[asyncio.Task[Any]] = set()
+
+RUNNING_RECHECK_AFTER_SECONDS = 60
+"""A ``running`` evaluation without a result is asked for again on ticks
+once it has run this long…"""
+RUNNING_RECHECK_INTERVAL_SECONDS = 300
+"""…and then at most this often (a reconnect asks at once)."""
+_last_recheck: dict[str, datetime] = {}
+
+WAITING_REASONS = {
+    "agent_missing": "the campaign's agent no longer exists",
+    "agent_not_placed": "the campaign's agent is not placed on a machine",
+}
 
 
 # ── After-commit dispatch ───────────────────────────────────────────
@@ -114,10 +134,14 @@ async def dispatch_eval(
     *,
     clock: Clock = utcnow,
 ) -> str:
-    """Send one pending evaluation. Returns ``accepted`` or why it was not
-    sent (``not_pending``, ``offline``, ``busy``, ``timeout``…); anything
-    but ``accepted`` leaves the attempt pending for the next tick."""
+    """Send one pending evaluation, or ask again for a running one.
+
+    Returns ``accepted`` (a pending job started), ``re_requested`` (a
+    running job was asked for again) or why nothing was sent
+    (``not_pending``, ``offline``, ``waiting``, ``busy``, ``timeout``…);
+    anything else leaves the attempt as it was for the next tick."""
     from anygarden.campaigns.lifecycle import EVAL_GRACE_SECONDS
+    from anygarden.campaigns.policy import evaluator_digest
     from anygarden.scheduler.machine_bus import MachineRequestError
 
     if machine_bus is None:
@@ -126,22 +150,48 @@ async def dispatch_eval(
         attempt = await db.get(CampaignAttempt, attempt_id)
         if (
             attempt is None or attempt.closed_at is not None
-            or attempt.eval_status != "pending" or attempt.eval_job_id is None
+            or attempt.eval_status not in {"pending", "running"} or attempt.eval_job_id is None
         ):
             return "not_pending"
+        status = attempt.eval_status
         campaign = await db.get(Campaign, attempt.campaign_id)
-        agent = await db.get(Agent, campaign.agent_id) if campaign and campaign.agent_id else None
+        if campaign is None:
+            return "not_pending"
+        agent = await db.get(Agent, campaign.agent_id) if campaign.agent_id else None
         machine_id = agent.placed_on_machine_id if agent is not None else None
-        if machine_id is None or not machine_bus.is_connected(machine_id):
-            return "offline"
-        frame = eval_request_frame(campaign, attempt)
-        timeout = frame["timeout_sec"]
+        if machine_id is None:
+            waiting = "agent_missing" if agent is None else "agent_not_placed"
+            note = f"[server] waiting: {WAITING_REASONS[waiting]}"
+            stale = attempt.eval_excerpt != note
+    if machine_id is None:
+        if stale and status == "pending":
+            await _record_waiting(session_factory, attempt_id, waiting, note, clock=clock)
+        return "waiting"
+    if not machine_bus.is_connected(machine_id):
+        return "offline"
+    frame = eval_request_frame(campaign, attempt)
+    timeout = frame["timeout_sec"]
+    digest = evaluator_digest(campaign.evaluator)
     try:
         ack = await machine_bus.request_campaign_eval(machine_id, frame)
     except MachineRequestError as exc:
         return exc.reason
     if not ack.get("accepted"):
         return ack.get("reason") or "refused"
+    if status == "running":
+        _last_recheck[attempt_id] = clock()
+        if ack.get("reason") is None:
+            # The machine no longer knew the job (it restarted) and runs it
+            # afresh with the evaluator just sent; keep the run's deadline.
+            async with session_factory() as db:
+                await begin_write_transaction(db)
+                attempt = await db.get(CampaignAttempt, attempt_id, populate_existing=True)
+                if attempt is not None and attempt.closed_at is None:
+                    attempt.eval_evaluator_digest = digest
+                await db.commit()
+        log.info("campaign_eval_re_requested",
+                 extra={"attempt_id": attempt_id, "reason": ack.get("reason")})
+        return "re_requested"
     async with session_factory() as db:
         await begin_write_transaction(db)
         attempt = await db.get(CampaignAttempt, attempt_id, populate_existing=True)
@@ -151,6 +201,9 @@ async def dispatch_eval(
             attempt.eval_status = "running"
             attempt.eval_started_at = now
             attempt.eval_deadline_at = run_deadline
+            attempt.eval_evaluator_digest = digest
+            if attempt.eval_excerpt and attempt.eval_excerpt.startswith("[server] waiting"):
+                attempt.eval_excerpt = None
             from anygarden.campaigns.notify import mark
 
             mark(db, attempt_id=attempt.id)
@@ -161,6 +214,37 @@ async def dispatch_eval(
     return "accepted"
 
 
+async def _record_waiting(
+    session_factory: async_sessionmaker[AsyncSession],
+    attempt_id: str,
+    reason: str,
+    note: str,
+    *,
+    clock: Clock,
+) -> None:
+    """Say on the attempt (and once in the history) why its evaluation
+    cannot be sent; the outer pending deadline closes it eventually."""
+    from anygarden.campaigns.notify import mark
+    from anygarden.campaigns.service import record_event
+
+    async with session_factory() as db:
+        await begin_write_transaction(db)
+        attempt = await db.get(CampaignAttempt, attempt_id, populate_existing=True)
+        if attempt is None or attempt.closed_at is not None or attempt.eval_status != "pending":
+            await db.rollback()
+            return
+        attempt.eval_excerpt = note
+        mark(db, attempt_id=attempt.id)
+        await record_event(
+            db, attempt.campaign_id,
+            key=f"campaign:{attempt.campaign_id}:cycle:{attempt.cycle_no}:eval_waiting:{reason}",
+            type="eval_waiting",
+            details={"cycle_no": attempt.cycle_no, "reason": reason, "detail": note},
+            actor="system:campaign", clock=clock,
+        )
+        await db.commit()
+
+
 async def request_pending_evals(
     session_factory: async_sessionmaker[AsyncSession],
     machine_bus: MachineBus | None,
@@ -169,26 +253,55 @@ async def request_pending_evals(
     clock: Clock = utcnow,
     limit: int = 25,
 ) -> dict[str, str]:
-    """(Re)send every pending evaluation whose machine is online."""
+    """(Re)send every pending evaluation, and ask again for running ones.
+
+    With *machine_id* (the machine just registered) every open evaluation
+    of its agents is sent, running ones included. A tick (no
+    *machine_id*) also visits pending attempts whose agent has no machine
+    (they record why they wait) and asks for a running evaluation only
+    after ``RUNNING_RECHECK_AFTER_SECONDS``, then every
+    ``RUNNING_RECHECK_INTERVAL_SECONDS``."""
     if machine_bus is None:
         return {}
+    now = clock()
     async with session_factory() as db:
         stmt = (
-            select(CampaignAttempt.id)
+            select(CampaignAttempt.id, CampaignAttempt.eval_status)
             .join(Campaign, Campaign.id == CampaignAttempt.campaign_id)
-            .join(Agent, Agent.id == Campaign.agent_id)
+            .outerjoin(Agent, Agent.id == Campaign.agent_id)
             .where(
                 CampaignAttempt.closed_at.is_(None),
-                CampaignAttempt.eval_status == "pending",
                 CampaignAttempt.eval_job_id.is_not(None),
-                Agent.placed_on_machine_id.is_not(None),
             )
             .order_by(CampaignAttempt.opened_at)
             .limit(limit)
         )
         if machine_id is not None:
-            stmt = stmt.where(Agent.placed_on_machine_id == machine_id)
-        ids = list(await db.scalars(stmt))
+            stmt = stmt.where(
+                Agent.placed_on_machine_id == machine_id,
+                CampaignAttempt.eval_status.in_(("pending", "running")),
+            )
+        else:
+            recheck_before = now - timedelta(seconds=RUNNING_RECHECK_AFTER_SECONDS)
+            stmt = stmt.where(or_(
+                CampaignAttempt.eval_status == "pending",
+                and_(
+                    CampaignAttempt.eval_status == "running",
+                    CampaignAttempt.eval_started_at <= recheck_before,
+                ),
+            ))
+        rows = list(await db.execute(stmt))
+    if machine_id is None:
+        running = {attempt_id for attempt_id, status in rows if status == "running"}
+        for stale in set(_last_recheck) - running:
+            _last_recheck.pop(stale, None)
+    ids = []
+    for attempt_id, status in rows:
+        if machine_id is None and status == "running":
+            last = _last_recheck.get(attempt_id)
+            if last is not None and (now - last).total_seconds() < RUNNING_RECHECK_INTERVAL_SECONDS:
+                continue
+        ids.append(attempt_id)
     results = {}
     for attempt_id in ids:
         try:

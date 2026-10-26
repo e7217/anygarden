@@ -7,6 +7,8 @@ criteria that get stored on :class:`anygarden.db.models.Campaign`.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +36,12 @@ BRIEF_MAX_CHARS: int = 12_000
 MAX_EVAL_TIMEOUT_SECONDS: int = 6 * 3600
 DEFAULT_EVAL_TIMEOUT_SECONDS: int = 600
 DEFAULT_RETRO_RESERVE_RATIO: float = 0.05
+MAX_EVAL_COMMAND_CHARS: int = 8192
+MAX_EVAL_PATH_CHARS: int = 1024
+MAX_EVAL_PIN_PATHS: int = 100
+MAX_SCORE_KEY_CHARS: int = 120
+"""Evaluator limits — the same as ``CampaignEvalRequestFrame``'s, so an
+evaluator the server accepts is one the machine can parse."""
 MAX_RETRO_RESERVE_RATIO: float = 0.5
 
 # ── Vocabularies ────────────────────────────────────────────────────
@@ -96,7 +104,10 @@ def _is_number(value: Any) -> bool:
 
 def _relative_path(value: Any) -> bool:
     """A non-empty path that stays inside the workspace."""
-    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+    if (
+        not isinstance(value, str) or not value.strip() or "\x00" in value
+        or len(value) > MAX_EVAL_PATH_CHARS
+    ):
         return False
     path = PurePosixPath(value.replace("\\", "/"))
     return not path.is_absolute() and ".." not in path.parts
@@ -135,6 +146,11 @@ def _evaluator(raw: Any) -> dict[str, Any]:
     command = raw.get("command")
     if not isinstance(command, str) or not command.strip():
         raise CampaignPolicyError("INVALID_EVALUATOR", "evaluator.command is required")
+    if len(command.strip()) > MAX_EVAL_COMMAND_CHARS:
+        raise CampaignPolicyError(
+            "INVALID_EVALUATOR",
+            f"evaluator.command is longer than {MAX_EVAL_COMMAND_CHARS} characters",
+        )
     cwd = raw.get("cwd", ".")
     if not _relative_path(cwd):
         raise CampaignPolicyError(
@@ -151,9 +167,18 @@ def _evaluator(raw: Any) -> dict[str, Any]:
         raise CampaignPolicyError(
             "INVALID_EVALUATOR", "evaluator.pin_paths must be workspace paths"
         )
+    if len(pin_paths) > MAX_EVAL_PIN_PATHS:
+        raise CampaignPolicyError(
+            "INVALID_EVALUATOR", f"evaluator.pin_paths takes at most {MAX_EVAL_PIN_PATHS} paths"
+        )
     score_key = raw.get("score_key", "score")
     if not isinstance(score_key, str) or not score_key.strip():
         raise CampaignPolicyError("INVALID_EVALUATOR", "evaluator.score_key is required")
+    if len(score_key.strip()) > MAX_SCORE_KEY_CHARS:
+        raise CampaignPolicyError(
+            "INVALID_EVALUATOR",
+            f"evaluator.score_key is longer than {MAX_SCORE_KEY_CHARS} characters",
+        )
     return {
         "command": command.strip(),
         "cwd": cwd,
@@ -244,6 +269,13 @@ def validate_campaign_spec(
     )
 
 
+def evaluator_digest(evaluator: dict[str, Any] | None) -> str:
+    """Stable sha256 of an evaluator, to tell which evaluator a result
+    came from after the campaign's evaluator was edited."""
+    encoded = json.dumps(evaluator or {}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def usable_tokens(budget: dict[str, Any]) -> int:
     """Tokens cycles may spend; the rest is reserved for the retrospective."""
     cap = int(budget["max_total_tokens"])
@@ -260,8 +292,12 @@ __all__ = [
     "DIRECTIONS",
     "EVAL_FAILURE_BLOCK_THRESHOLD",
     "EVAL_STATUSES",
+    "MAX_EVAL_COMMAND_CHARS",
+    "MAX_EVAL_PATH_CHARS",
+    "MAX_EVAL_PIN_PATHS",
     "MAX_EVAL_TIMEOUT_SECONDS",
     "MAX_RETRO_RESERVE_RATIO",
+    "MAX_SCORE_KEY_CHARS",
     "MIN_GAP_SECONDS",
     "MODES",
     "OPEN_STATUSES",
@@ -273,6 +309,7 @@ __all__ = [
     "TRUSTED_EVAL_MODES",
     "CampaignPolicyError",
     "CampaignSpec",
+    "evaluator_digest",
     "usable_tokens",
     "validate_campaign_spec",
 ]

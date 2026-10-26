@@ -547,8 +547,10 @@ async def test_completed_run_requests_an_evaluation_with_a_persisted_job(env):
     cycle = await _completed_cycle(env, cid)
     attempt = await env.attempt(cycle)
     assert attempt.eval_status == "pending" and attempt.eval_job_id == attempt.id
-    # The server-side deadline starts once the machine accepts the job.
-    assert attempt.eval_deadline_at is None and attempt.closed_at is None
+    # Until the machine accepts the job only the outer pending bound applies
+    # (the terminal hook stamps the real clock, just before T0).
+    assert timedelta(hours=24) < attempt.eval_deadline_at - T0 < timedelta(hours=24, minutes=5)
+    assert attempt.closed_at is None
     assert await env.dispatch(cycle, T0 + timedelta(minutes=11)) == "accepted"
     frame = env.bus.frames[-1]
     assert frame["job_id"] == attempt.id and frame["agent_id"] == env.ids["agent"]
@@ -808,3 +810,170 @@ async def test_archive_endpoint_stops_the_rooms_campaigns(env):
     r = await env.client.post(f"/api/v1/rooms/{env.ids['room']}/archive", headers=env.auth)
     assert r.status_code == 200, r.text
     assert (await env.campaign(cid)).status == "stopped"
+
+
+# ═══ Review fixes ══════════════════════════════════════════════════
+
+
+class RunnerBus(FakeBus):
+    """A bus backed by the machine's real ``CampaignEvalRunner``: result
+    frames go through ``deliver``, which drops them while ``link_up`` is
+    off (the daemon drops a frame it cannot send on a closed socket)."""
+
+    def __init__(self, tmp_path) -> None:
+        from anygarden.machine.campaign_eval import CampaignEvalRunner, EvalResult
+
+        super().__init__()
+        self.release = asyncio.Event()
+        self.runs = 0
+        self.link_up = True
+        self.delivered: list[dict] = []
+
+        async def runner(agents_root, job, *, base_environment=None):
+            self.runs += 1
+            await self.release.wait()
+            return EvalResult(job_id=job.job_id, agent_id=job.agent_id, status="ok",
+                              exit_code=0, stdout_tail="ok",
+                              parsed={"score": 0.5, "valid": True}, pins={})
+
+        self.runner = CampaignEvalRunner(tmp_path, runner=runner)
+
+    async def deliver(self, frame: dict) -> None:
+        if self.link_up:
+            self.delivered.append(frame)
+
+    async def request_campaign_eval(self, machine_id: str, frame: dict, *, timeout: float = 5):
+        from anygarden.machine.campaign_eval import EvalJob
+
+        if machine_id not in self.online:
+            raise MachineRequestError("offline")
+        self.frames.append(frame)
+        job = EvalJob(job_id=frame["job_id"], agent_id=frame["agent_id"],
+                      command=frame["command"], timeout_sec=frame["timeout_sec"])
+        accepted, reason = await self.runner.submit(job, self.deliver)
+        return {"job_id": frame["job_id"], "accepted": accepted, "reason": reason}
+
+
+async def test_a_lost_result_is_recovered_by_asking_the_machine_again(env, tmp_path):
+    bus = RunnerBus(tmp_path)
+    bus.online.add(env.ids["machine"])
+    env.bus = bus
+    cycle = await _completed_cycle(env)
+    assert await env.dispatch(cycle, T0 + timedelta(minutes=11)) == "accepted"
+    assert (await env.attempt(cycle)).eval_status == "running"
+    # The socket drops while the job finishes: the result frame is lost.
+    bus.link_up = False
+    bus.release.set()
+    for _ in range(50):
+        if bus.runner.running_job_id is None:
+            break
+        await asyncio.sleep(0.01)
+    assert bus.delivered == []
+    bus.link_up = True
+    # The machine registers again: running jobs are asked for once more and
+    # the machine answers with its cached result instead of a second run.
+    sent = await request_pending_evals(env.factory, bus, machine_id=env.ids["machine"],
+                                       clock=lambda: T0 + timedelta(minutes=12))
+    assert list(sent.values()) == ["re_requested"]
+    assert bus.runs == 1 and len(bus.delivered) == 1
+    outcome = await handle_eval_result_frame(
+        env.factory, env.ids["machine"], bus.delivered[0],
+        clock=lambda: T0 + timedelta(minutes=12))
+    assert outcome == "judged"
+    attempt = await env.attempt(cycle)
+    assert (attempt.outcome, attempt.dev_score) == ("improved", 0.5)
+    # The run's deadline was not extended by the repeat request.
+    assert attempt.eval_started_at == T0 + timedelta(minutes=11)
+
+
+async def test_the_tick_asks_again_for_a_running_eval_without_a_result(env):
+    cycle = await _completed_cycle(env)
+    assert await env.dispatch(cycle, T0 + timedelta(minutes=11)) == "accepted"
+    env.bus.ack = {"accepted": True, "reason": "already_running"}
+    # Right after the start nothing is re-sent.
+    await env.scheduler(T0 + timedelta(minutes=11, seconds=10)).reconcile()
+    assert len(env.bus.frames) == 1
+    # A minute later without a result the tick asks the machine again.
+    await env.scheduler(T0 + timedelta(minutes=12, seconds=30)).reconcile()
+    assert len(env.bus.frames) == 2
+    attempt = await env.attempt(cycle)
+    assert attempt.eval_status == "running"
+    assert attempt.eval_deadline_at == T0 + timedelta(minutes=11, seconds=180)
+
+
+async def test_a_pending_eval_has_an_outer_deadline(env):
+    cid = await env.create()
+    cycle = await _completed_cycle(env, cid)
+    env.bus.online.clear()
+    attempt = await env.attempt(cycle)
+    assert attempt.eval_status == "pending"
+    # Requested now (just before T0): 60s timeout + 120s grace + the 24h window.
+    assert timedelta(hours=24) < attempt.eval_deadline_at - T0 < timedelta(hours=24, minutes=5)
+    await env.scheduler(T0 + timedelta(hours=12)).reconcile()
+    assert (await env.attempt(cycle)).closed_at is None
+    await env.scheduler(T0 + timedelta(hours=25)).reconcile()
+    attempt = await env.attempt(cycle)
+    assert (attempt.outcome, attempt.eval_status) == ("eval_failed", "timed_out")
+    assert "never accepted" in attempt.eval_excerpt
+    assert (await env.campaign(cid)).consecutive_eval_failures == 1
+
+
+async def test_an_unplaced_agent_says_why_the_eval_waits(env):
+    cid = await env.create()
+    cycle = await _completed_cycle(env, cid)
+    async with env.factory() as db:
+        (await db.get(Agent, env.ids["agent"])).placed_on_machine_id = None
+        await db.commit()
+    await env.scheduler(T0 + timedelta(minutes=11)).reconcile()
+    await env.scheduler(T0 + timedelta(minutes=12)).reconcile()
+    attempt = await env.attempt(cycle)
+    assert attempt.eval_status == "pending" and env.bus.frames == []
+    assert "not placed on a machine" in attempt.eval_excerpt
+    waiting = [e for e in await env.events(cid) if e.type == "eval_waiting"]
+    assert len(waiting) == 1 and waiting[0].details["reason"] == "agent_not_placed"
+
+
+async def test_an_evaluator_past_the_frame_limits_is_refused(env):
+    async with env.factory() as db:
+        room = await db.get(Room, env.ids["room"])
+        from anygarden.campaigns.policy import CampaignPolicyError
+
+        for evaluator in (
+            {"command": "x" * 8193},
+            {"command": "x", "cwd": "a" * 1025},
+            {"command": "x", "pin_paths": [f"f{i}" for i in range(101)]},
+            {"command": "x", "score_key": "k" * 121},
+        ):
+            with pytest.raises(CampaignPolicyError) as err:
+                await create_campaign(
+                    db, owner_id=env.ids["owner"], room=room, title="t", purpose="p",
+                    mode="target", metric={"name": "acc", "direction": "maximize", "target": 1},
+                    evaluator=evaluator, budget={"max_total_tokens": 1000},
+                )
+            assert err.value.code == "INVALID_EVALUATOR"
+
+
+async def test_a_closing_cycle_that_is_the_new_best_becomes_the_final_result(env):
+    cid = await env.create(max_total_tokens=10_000)
+    task = await env.run_cycle(T0, score=0.5, tokens=10_000)
+    campaign = await env.campaign(cid)
+    attempt = await env.attempt(task)
+    assert campaign.status == "budget_exhausted"
+    assert campaign.best_attempt_id == attempt.id
+    assert campaign.final_attempt_id == attempt.id
+
+
+async def test_a_result_of_an_edited_evaluator_does_not_pin_the_new_one(env):
+    from anygarden.campaigns import actions
+
+    cid = await env.create(pin_paths=["old.py"])
+    cycle = await _completed_cycle(env, cid)
+    assert await env.dispatch(cycle, T0 + timedelta(minutes=11)) == "accepted"
+    async with env.factory() as db:
+        campaign = await db.get(Campaign, cid)
+        await actions.edit_campaign(db, campaign, actor="user:x", changes={
+            "evaluator": {"command": "python new_bench.py", "pin_paths": ["new.py"]}})
+        await db.commit()
+    assert await env.result(cycle, score=0.5, now=T0 + timedelta(minutes=12),
+                            pins={"old.py": "a" * 64}) == "judged"
+    assert (await env.campaign(cid)).evaluator_pins is None

@@ -2615,6 +2615,10 @@ class CampaignAttempt(Base):
     )
     """pending | running | ok | failed | invalid | skipped | timed_out."""
     eval_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    eval_evaluator_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """sha256 of the evaluator the evaluation was sent with
+    (``policy.evaluator_digest``); its pins are adopted only while that is
+    still the campaign's evaluator."""
     eval_deadline_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     dev_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
