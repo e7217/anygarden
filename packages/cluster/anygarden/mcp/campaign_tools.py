@@ -42,11 +42,13 @@ CAMPAIGN_TOOL_SCHEMAS = [
     ),
     _tool(
         "schedule_campaign_wakeup",
-        "Ask for the next campaign cycle to start no earlier than a time — for waiting on "
-        "something outside (a long job, an external result). Give delay_seconds "
-        "(60 s to 7 days) or at (ISO timestamp), before the campaign deadline. The next "
-        "cycle opens at max(this cycle's close + 5 min, the wake time). The last call in "
-        "a cycle wins. Then finish the cycle as usual instead of idling.",
+        "Set when the NEXT campaign cycle may start, after this cycle ends — for waiting "
+        "on something outside the campaign (an external leaderboard or eval, a long job). "
+        "It does not pause or extend the current cycle and is not a way to wait for your "
+        "own child task (end the turn; the server resumes you when its result arrives). "
+        "Give delay_seconds (60 s to 7 days) or at (ISO timestamp), before the campaign "
+        "deadline. The next cycle opens at max(this cycle's close + 5 min, the wake time). "
+        "The last call in a cycle wins. Then finish this cycle as usual.",
         {
             "delay_seconds": {"type": "integer", "minimum": 60, "maximum": 604800},
             "at": {"type": "string", "format": "date-time"},
