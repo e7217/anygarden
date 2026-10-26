@@ -1,15 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import CampaignForm from '@/components/campaign/CampaignForm'
+import { campaignErrorMessage, campaignStatusDetail } from '@/components/campaign/campaignErrors'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import { useAuth } from '@/hooks/useAuth'
 import { useRoomCampaigns } from '@/hooks/useRoomCampaigns'
 import type { Room } from '@/hooks/useRooms'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
+import type { Participant } from '@/lib/participants'
 import {
   campaignActions,
   campaignStatusTone,
@@ -45,8 +47,8 @@ function useCampaignFormat() {
   const { t, formatNumber, formatDate } = useLocale()
   const score = (value: number | null | undefined) =>
     value == null ? '—' : formatNumber(value, { maximumFractionDigits: 4 })
-  const timeLeft = (iso: string): string => {
-    const ms = new Date(iso).getTime() - Date.now()
+  const timeLeft = (iso: string, now: number = Date.now()): string => {
+    const ms = new Date(iso).getTime() - now
     if (ms <= 0) return t('campaigns.time.passed')
     const minutes = Math.max(1, Math.round(ms / 60_000))
     const time = minutes < 60
@@ -81,12 +83,57 @@ function AttemptRow({ attempt }: { attempt: CampaignAttempt }) {
   )
 }
 
+/**
+ * Check an extension before sending it (``campaigns/service.py``
+ * ``extend_campaign``): a new deadline lies ahead of now and of the
+ * current one, a new budget is above the current one, and a campaign
+ * ended by its deadline or budget gets what clears that end.
+ */
+export function validateExtend(
+  campaign: Pick<Campaign, 'status' | 'deadline_at' | 'budget'>,
+  deadline: string,
+  budget: string,
+  initialDeadline: string,
+  initialBudget: string,
+  now: number = Date.now(),
+): { input: CampaignExtendInput } | { error: MessageKey } {
+  const input: CampaignExtendInput = {}
+  if (deadline && deadline !== initialDeadline) {
+    const at = new Date(deadline).getTime()
+    const current = campaign.deadline_at ? new Date(campaign.deadline_at).getTime() : null
+    if (Number.isNaN(at) || at <= now || (current != null && at <= current)) {
+      return { error: 'campaigns.error.invalidDeadline' }
+    }
+    input.deadline_at = new Date(at).toISOString()
+  }
+  if (budget.trim() !== initialBudget) {
+    const tokens = Number(budget.trim())
+    if (!Number.isInteger(tokens) || tokens <= 0) return { error: 'campaigns.form.positiveInteger' }
+    if (tokens <= campaign.budget.max_total_tokens) return { error: 'campaigns.error.invalidBudget' }
+    input.max_total_tokens = tokens
+  }
+  if (!input.deadline_at && input.max_total_tokens === undefined) {
+    if (campaign.status === 'deadline_reached') return { error: 'campaigns.extend.needDeadline' }
+    if (campaign.status === 'budget_exhausted') return { error: 'campaigns.extend.needBudget' }
+    return { error: 'campaigns.extend.nothing' }
+  }
+  // What ended the campaign must be cleared, or the server refuses.
+  const deadlinePassed = campaign.deadline_at != null && new Date(campaign.deadline_at).getTime() <= now
+  if (campaign.status === 'deadline_reached' && deadlinePassed && !input.deadline_at) {
+    return { error: 'campaigns.extend.needDeadline' }
+  }
+  if (campaign.status === 'budget_exhausted' && input.max_total_tokens === undefined) {
+    return { error: 'campaigns.extend.needBudget' }
+  }
+  return { input }
+}
+
 function ExtendForm({ campaign, onExtend, onCancel }: {
   campaign: Campaign
   onExtend: (input: CampaignExtendInput) => Promise<void>
   onCancel: () => void
 }) {
-  const { t } = useLocale()
+  const { t, formatNumber } = useLocale()
   const initialDeadline = toLocalInput(campaign.deadline_at)
   const initialBudget = String(campaign.budget.max_total_tokens)
   const [deadline, setDeadline] = useState(initialDeadline)
@@ -95,19 +142,18 @@ function ExtendForm({ campaign, onExtend, onCancel }: {
   const [busy, setBusy] = useState(false)
   const base = `campaign-extend-${campaign.id}`
 
+  const currentBudget = formatNumber(campaign.budget.max_total_tokens)
+
   const submit = async () => {
-    const input: CampaignExtendInput = {}
-    if (deadline && deadline !== initialDeadline) input.deadline_at = new Date(deadline).toISOString()
-    if (budget !== initialBudget) {
-      const tokens = Number(budget)
-      if (!Number.isInteger(tokens) || tokens <= 0) { setError(t('campaigns.form.positiveInteger')); return }
-      input.max_total_tokens = tokens
+    const result = validateExtend(campaign, deadline, budget, initialDeadline, initialBudget)
+    if ('error' in result) {
+      setError(t(result.error, { current: currentBudget }))
+      return
     }
-    if (!input.deadline_at && input.max_total_tokens === undefined) { setError(t('campaigns.extend.nothing')); return }
     setBusy(true)
     setError(null)
-    try { await onExtend(input) }
-    catch (e) { setError(t('campaigns.action.failed', { message: e instanceof Error ? e.message : String(e) })) }
+    try { await onExtend(result.input) }
+    catch (e) { setError(campaignErrorMessage(t, e, 'change', { current: currentBudget })) }
     finally { setBusy(false) }
   }
 
@@ -135,8 +181,9 @@ function ExtendForm({ campaign, onExtend, onCancel }: {
   )
 }
 
-function CampaignCard({ campaign, attempts, canManage, onAction, onExtend }: {
+function CampaignCard({ campaign, attempts, canManage, now, onAction, onExtend }: {
   campaign: Campaign
+  now: number
   attempts: CampaignAttempt[]
   canManage: boolean
   onAction: (action: CampaignAction) => Promise<void>
@@ -194,10 +241,10 @@ function CampaignCard({ campaign, attempts, canManage, onAction, onExtend }: {
       </p>
       <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="campaign-budget">
         {t('campaigns.budget.used', { percent })}
-        {campaign.deadline_at && !ended && <> · {timeLeft(campaign.deadline_at)}</>}
+        {campaign.deadline_at && !ended && <> · {timeLeft(campaign.deadline_at, now)}</>}
       </p>
       {campaign.status_detail && (
-        <p className="text-caption text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">{campaign.status_detail}</p>
+        <p className="text-caption text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">{campaignStatusDetail(t, campaign.status_detail)}</p>
       )}
       {allowed.decide && <p className="text-caption text-[var(--color-foreground)]">{t('campaigns.confirmPrompt')}</p>}
 
@@ -238,6 +285,20 @@ function CampaignCard({ campaign, attempts, canManage, onAction, onExtend }: {
 interface CampaignSectionProps {
   roomId: string
   room: Room | null
+  /** The room's roster; the viewer's role there gates starting one. */
+  participants?: Record<string, Participant>
+}
+
+/** "time left" is relative to now: re-render once a minute. */
+function useMinuteClock(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [active])
+  return now
 }
 
 /**
@@ -245,18 +306,23 @@ interface CampaignSectionProps {
  * campaigns or can host one (a project room with a lead agent). Changes
  * are offered to the campaign's owner and admins; others see state only.
  */
-export default function CampaignSection({ roomId, room }: CampaignSectionProps) {
+export default function CampaignSection({ roomId, room, participants = {} }: CampaignSectionProps) {
   const { t } = useLocale()
   const { notify } = useFeedback()
   const { user } = useAuth()
   const { campaigns, attempts, loading, error, create, act, extend } = useRoomCampaigns(roomId)
   const [formOpen, setFormOpen] = useState(false)
-  const canCreate = Boolean(room && room.project_id && !room.is_dm && room.representative_agent_id && user)
+  // Starting one needs the room's task-manage capability: a room admin or
+  // owner, or a global admin (``api/v1/campaigns.py`` → TASK_MANAGE). The
+  // evaluator rule (machine owner) is not known here; the form explains it.
+  const myRole = user ? Object.values(participants).find(p => p.user_id === user.id)?.role : undefined
+  const mayManageRoom = Boolean(user && (user.is_admin || myRole === 'owner' || myRole === 'admin'))
+  const canCreate = Boolean(room && room.project_id && !room.is_dm && room.representative_agent_id && mayManageRoom)
+  const now = useMinuteClock(campaigns.some(c => c.deadline_at && campaignActions(c.status).stop))
 
   if (!canCreate && campaigns.length === 0 && !error) return null
 
-  const report = (e: unknown) =>
-    notify({ message: t('campaigns.action.failed', { message: e instanceof Error ? e.message : String(e) }), tone: 'error' })
+  const report = (e: unknown) => notify({ message: campaignErrorMessage(t, e, 'change'), tone: 'error' })
 
   return (
     <section className="flex min-w-0 flex-col border-t border-[var(--color-border)]" data-testid="campaign-section" aria-labelledby="campaign-section-title">
@@ -280,6 +346,7 @@ export default function CampaignSection({ roomId, room }: CampaignSectionProps) 
             campaign={campaign}
             attempts={attempts[campaign.id] ?? []}
             canManage={Boolean(user && (user.is_admin || user.id === campaign.owner_id))}
+            now={now}
             onAction={action => act(campaign.id, action).catch(report)}
             onExtend={input => extend(campaign.id, input)}
           />

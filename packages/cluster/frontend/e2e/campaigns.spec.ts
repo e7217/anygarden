@@ -59,7 +59,7 @@ async function stubApi(page: Page) {
       return fulfillJson(route, 200, {
         ...room,
         participants: [
-          { id: 'part-me', display_name: 'e2e', kind: 'user', user_id: user.id },
+          { id: 'part-me', display_name: 'e2e', kind: 'user', user_id: user.id, role: 'owner' },
           { id: 'part-agent', display_name: 'Lead', kind: 'agent', agent_id: 'agent-1', online: true },
         ],
       })

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import CampaignSection from './CampaignSection'
+import CampaignSection, { validateExtend } from './CampaignSection'
+import type { Participant } from '@/lib/participants'
 import { FeedbackProvider } from '@/components/feedback/FeedbackProvider'
 import { attemptFixture, campaignFixture } from '@/lib/campaignFixtures'
 import type { Campaign } from '@/lib/campaigns'
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   user: { id: 'user-1', email: 'a@b.c', is_admin: false } as { id: string; email: string; is_admin: boolean } | null,
   campaigns: [] as Campaign[],
   act: vi.fn(async () => {}),
+  extend: vi.fn(async () => {}),
 }))
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }))
@@ -24,20 +26,26 @@ vi.mock('@/hooks/useRoomCampaigns', () => ({
     refresh: vi.fn(),
     create: vi.fn(),
     act: mocks.act,
-    extend: vi.fn(),
+    extend: mocks.extend,
   }),
 }))
 
 const projectRoom: Room = { id: 'room-1', name: 'r', project_id: 'p', is_dm: false, representative_agent_id: 'agent-1' }
 
-function renderSection(room: Room | null = projectRoom) {
-  return render(<FeedbackProvider><CampaignSection roomId="room-1" room={room} /></FeedbackProvider>)
+const ownerRoster: Record<string, Participant> = {
+  'part-me': { id: 'part-me', display_name: 'me', kind: 'user', user_id: 'user-1', role: 'owner' },
+}
+
+function renderSection(room: Room | null = projectRoom, participants: Record<string, Participant> = ownerRoster) {
+  return render(<FeedbackProvider><CampaignSection roomId="room-1" room={room} participants={participants} /></FeedbackProvider>)
 }
 
 beforeEach(() => {
   mocks.user = { id: 'user-1', email: 'a@b.c', is_admin: false }
   mocks.campaigns = []
   mocks.act.mockClear()
+  mocks.extend.mockReset()
+  mocks.extend.mockImplementation(async () => {})
 })
 afterEach(cleanup)
 
@@ -102,5 +110,93 @@ describe('CampaignSection', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Extend' }))
     expect(screen.getByLabelText('New token budget')).toHaveValue('100000')
+  })
+
+  it('offers to start one only to room admins, owners and global admins', () => {
+    const member = { 'part-me': { ...ownerRoster['part-me'], role: 'member' } }
+    const { unmount } = renderSection(projectRoom, member)
+    expect(screen.queryByTestId('campaign-section')).toBeNull()
+    unmount()
+    mocks.user = { id: 'user-1', email: 'a@b.c', is_admin: true }
+    renderSection(projectRoom, member)
+    expect(screen.getByRole('button', { name: 'New campaign' })).toBeInTheDocument()
+  })
+
+  it('shows campaigns to a member without offering to start one', () => {
+    mocks.campaigns = [campaignFixture()]
+    renderSection(projectRoom, { 'part-me': { ...ownerRoster['part-me'], role: 'member' } })
+    expect(screen.getByTestId('campaign-card-camp-1')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New campaign' })).toBeNull()
+  })
+
+  it('translates a known status detail', () => {
+    mocks.campaigns = [campaignFixture({ status: 'blocked', status_detail: 'The evaluation failed 3 times in a row; check the evaluator.' })]
+    renderSection()
+    expect(screen.getByText('The evaluation failed 3 times in a row. Check the evaluator.')).toBeInTheDocument()
+  })
+
+  it('checks an extension before sending it', async () => {
+    mocks.campaigns = [campaignFixture({ status: 'budget_exhausted' })]
+    renderSection()
+    fireEvent.click(screen.getByRole('button', { name: 'Extend' }))
+    fireEvent.change(screen.getByLabelText('New token budget'), { target: { value: '50000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Extend and resume' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('larger than the current one (100,000)')
+    expect(mocks.extend).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('New token budget'), { target: { value: '200000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Extend and resume' }))
+    await waitFor(() => expect(mocks.extend).toHaveBeenCalledWith('camp-1', { max_total_tokens: 200000 }))
+  })
+
+  it('explains a refused extension in words', async () => {
+    const { CampaignApiError } = await import('@/lib/campaigns')
+    mocks.extend.mockImplementation(async () => { throw new CampaignApiError('x', 422, 'CAMPAIGN_INVALID', 'EXTEND_DOES_NOT_REOPEN') })
+    mocks.campaigns = [campaignFixture({ status: 'budget_exhausted' })]
+    renderSection()
+    fireEvent.click(screen.getByRole('button', { name: 'Extend' }))
+    fireEvent.change(screen.getByLabelText('New token budget'), { target: { value: '200000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Extend and resume' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('does not clear what ended the campaign')
+  })
+
+  it('updates the time left as time passes', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-10-26T00:00:00Z'))
+      mocks.campaigns = [campaignFixture({ deadline_at: '2026-10-26T00:30:00Z' })]
+      renderSection()
+      expect(screen.getByTestId('campaign-budget')).toHaveTextContent('30m left')
+      act(() => { vi.advanceTimersByTime(10 * 60_000) })
+      expect(screen.getByTestId('campaign-budget')).toHaveTextContent('20m left')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('validateExtend', () => {
+  const now = new Date('2026-10-26T12:00:00Z').getTime()
+  const base = campaignFixture({ status: 'deadline_reached', deadline_at: '2026-10-26T10:00:00Z' })
+  const local = (iso: string) => {
+    const d = new Date(iso)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  const initial = local('2026-10-26T10:00:00Z')
+
+  it('needs a later deadline when the deadline ended it', () => {
+    expect(validateExtend(base, initial, '100000', initial, '100000', now)).toEqual({ error: 'campaigns.extend.needDeadline' })
+    expect(validateExtend(base, initial, '200000', initial, '100000', now)).toEqual({ error: 'campaigns.extend.needDeadline' })
+    expect(validateExtend(base, local('2026-10-26T11:00:00Z'), '100000', initial, '100000', now)).toEqual({ error: 'campaigns.error.invalidDeadline' })
+    expect(validateExtend(base, local('2026-10-27T11:00:00Z'), '100000', initial, '100000', now))
+      .toEqual({ input: { deadline_at: '2026-10-27T11:00:00.000Z' } })
+  })
+
+  it('needs a bigger budget when the budget ended it', () => {
+    const spent = campaignFixture({ status: 'budget_exhausted' })
+    expect(validateExtend(spent, '', '100000', '', '100000', now)).toEqual({ error: 'campaigns.extend.needBudget' })
+    expect(validateExtend(spent, local('2026-10-27T11:00:00Z'), '100000', '', '100000', now)).toEqual({ error: 'campaigns.extend.needBudget' })
+    expect(validateExtend(spent, '', '100000x', '', '100000', now)).toEqual({ error: 'campaigns.form.positiveInteger' })
+    expect(validateExtend(spent, '', '100001', '', '100000', now)).toEqual({ input: { max_total_tokens: 100001 } })
   })
 })

@@ -126,7 +126,7 @@ export default function RightContextRail({
           <ExecutionRequestsSection roomId={roomId} onNavigate={onClose} />
           <ExecutionApprovalsSection roomId={roomId} onNavigate={onClose} />
           <ProjectExecutionsSection roomId={roomId} onNavigate={onClose} />
-          <CampaignSection roomId={roomId} room={room} />
+          <CampaignSection roomId={roomId} room={room} participants={participants} />
           <TasksSection roomId={roomId} participants={participants} onNavigate={onClose} />
           <details className="min-w-0 border-t border-[var(--color-border)]">
             <summary className="min-h-11 cursor-pointer content-center px-3 py-2 text-sm font-semibold">{t('contextRail.resources')}</summary>
