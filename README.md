@@ -56,6 +56,7 @@ Stop with `anygarden stop`. Data is kept in `~/.anygarden`.
 - [Run agents on more machines](packages/cluster/docs/machine/operations.md)
 - [Lend this computer to another server](docs/runbook/local-node.md#serving-another-server-from-a-computer-that-runs-a-node-848)
 - [Local node details](docs/runbook/local-node.md) · [Model endpoints](docs/runbook/direct-model-endpoints.md)
+- [Campaigns: improve a metric in a loop](docs/campaigns.md) (Korean)
 - [Contributing](CONTRIBUTING.md)
 
 ## License
