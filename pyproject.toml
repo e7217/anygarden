@@ -12,3 +12,8 @@ members = ["packages/cluster"]
 
 [tool.uv.sources]
 anygarden = { workspace = true }
+
+[tool.ruff]
+# Resolve ``anygarden`` as first-party whether ruff runs from the repo root
+# (``make lint``) or from ``packages/cluster``, so import sorting agrees.
+src = ["packages/cluster"]

@@ -258,6 +258,26 @@ def _reject_execution_mutation(task: Task) -> None:
         )
 
 
+def _reject_open_cycle_mutation(task: Task) -> None:
+    """#930 — an open campaign cycle Task is driven by its campaign.
+
+    Changing its status or assignee, re-queueing or deleting it here would
+    leave the campaign's attempt history with a hole or a cycle that never
+    closes; stop (or pause) the campaign instead.
+    """
+    from anygarden.campaigns.lifecycle import cycle_task_is_open
+
+    if cycle_task_is_open(task):
+        raise make_api_error(
+            status_code=409,
+            code="CAMPAIGN_CYCLE_TASK_MANAGED",
+            message=(
+                "This task is an open campaign cycle; stop or pause the campaign "
+                "instead of changing or deleting the task"
+            ),
+        )
+
+
 def _raise_conflict(exc: TaskMutationConflict) -> None:
     raise HTTPException(status_code=409, detail=exc.api_detail()) from exc
 
@@ -638,6 +658,10 @@ async def update_task(
 
     previous_assignee = task.assignee_participant_id
     _reject_execution_mutation(task)
+    if (body.status is not None and body.status != task.status) or (
+        "assignee_participant_id" in body.model_fields_set
+    ):
+        _reject_open_cycle_mutation(task)
     new_assignee_participant: Optional[Participant] = None
     previous_status = task.status
 
@@ -923,6 +947,7 @@ async def requeue_task(
     )
     assignee: Participant | None = None
     _reject_execution_mutation(task)
+    _reject_open_cycle_mutation(task)
     if body.assignee_participant_id is not None:
         assignee = await _validate_assignee_in_room(
             db, task.room_id, body.assignee_participant_id
@@ -990,6 +1015,7 @@ async def delete_task(
     )
 
     _reject_execution_mutation(task)
+    _reject_open_cycle_mutation(task)
     if task.source_message_id is not None:
         raise HTTPException(
             status_code=409,

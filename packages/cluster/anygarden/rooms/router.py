@@ -1098,6 +1098,13 @@ async def archive_room(
         archived_at=now,
         archived_by=identity.id,
     )
+    # #930 — archiving stops the rooms' campaigns in the same transaction
+    # (CMP-12); a running cycle execution is cancelled through its stop
+    # protocol.
+    from anygarden.campaigns.lifecycle import stop_room_campaigns
+
+    for archived_room_id in [room_id, *descendant_ids]:
+        await stop_room_campaigns(db, archived_room_id, actor=f"user:{identity.id}")
     await db.commit()
     await db.refresh(access.room)
 

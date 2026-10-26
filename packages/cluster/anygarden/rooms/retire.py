@@ -111,6 +111,12 @@ async def retire_room(db: AsyncSession, *, room: Room, identity) -> RoomRetireRe
         if cancelled.changed:
             result.cancelled_turns.append((cancelled.turn, cancelled.stop_target))
 
+    # #930 — stop the room's campaigns and close their open cycles in this
+    # same transaction (CMP-12); cycle executions were cancelled above.
+    from anygarden.campaigns.lifecycle import stop_room_campaigns
+
+    await stop_room_campaigns(db, room.id, actor=f"user:{identity.id}")
+
     room.archived_at = datetime.now(UTC)
     room.archived_by = identity.id
     await archive_child_rooms(db, room.id)

@@ -9,13 +9,18 @@ import ExecutionApprovalsSection from '@/components/right-rail/ExecutionApproval
 import ProjectExecutionsSection from '@/components/right-rail/ProjectExecutionsSection'
 import FilesSection from '@/components/right-rail/FilesSection'
 import GoalsSection from '@/components/right-rail/GoalsSection'
+import CampaignSection from '@/components/right-rail/CampaignSection'
 import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
 import type { Participant } from '@/pages/ChatPage'
+import type { Room } from '@/hooks/useRooms'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 interface RightContextRailProps {
   roomId: string | null
   participants: Record<string, Participant>
+  /** The open room's record, when loaded; decides whether a campaign
+   *  can be started here (#930). */
+  room?: Room | null
   /** Mobile drawer flag. Desktop ignores this and uses the layout
    *  context's ``collapsed`` flag instead. */
   open: boolean
@@ -34,6 +39,7 @@ interface RightContextRailProps {
 export default function RightContextRail({
   roomId,
   participants,
+  room = null,
   open,
   onClose,
 }: RightContextRailProps) {
@@ -120,6 +126,7 @@ export default function RightContextRail({
           <ExecutionRequestsSection roomId={roomId} onNavigate={onClose} />
           <ExecutionApprovalsSection roomId={roomId} onNavigate={onClose} />
           <ProjectExecutionsSection roomId={roomId} onNavigate={onClose} />
+          <CampaignSection roomId={roomId} room={room} participants={participants} />
           <TasksSection roomId={roomId} participants={participants} onNavigate={onClose} />
           <details className="min-w-0 border-t border-[var(--color-border)]">
             <summary className="min-h-11 cursor-pointer content-center px-3 py-2 text-sm font-semibold">{t('contextRail.resources')}</summary>

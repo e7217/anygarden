@@ -341,3 +341,69 @@ async def test_broadcast_emits_task_updated_frame_per_failure(db):
     # ``TaskUpdateOut`` carries an ``event`` discriminator + payload.
     payload = frame.task if hasattr(frame, "task") else frame.get("task")
     assert payload["status"] == "failed"
+
+
+# ── Live turn guard (#930 Phase 0) ───────────────────────────────────
+
+
+async def _seed_overdue_in_progress(db) -> tuple[Task, Room, Participant, Agent]:
+    room, p, agent, user = await _seed_room_with_agent(db)
+    now = _utcnow()
+    task = Task(
+        room_id=room.id,
+        title="long turn",
+        status="in_progress",
+        assignee_participant_id=p.id,
+        assigned_at=now - timedelta(hours=1),
+        started_at=now - timedelta(seconds=TASK_EXECUTION_TIMEOUT_SECONDS + 60),
+        created_by=user.id,
+    )
+    db.add(task)
+    await db.flush()
+    return task, room, p, agent
+
+
+def _turn(task: Task, room: Room, p: Participant, agent: Agent, state: str):
+    import uuid
+
+    from anygarden.db.models import AgentTurn
+
+    return AgentTurn(
+        request_id=str(uuid.uuid4()),
+        room_id=room.id,
+        target_participant_id=p.id,
+        agent_id=agent.id,
+        task_id=task.id,
+        idempotency_key=f"test:{uuid.uuid4()}",
+        state=state,
+    )
+
+
+@pytest.mark.parametrize("state", ["pending", "leased", "retrying", "completing"])
+@pytest.mark.asyncio
+async def test_in_progress_with_open_turn_is_not_failed(db, state):
+    """A turn that runs longer than the execution timeout is still alive
+    while its durable turn is open — the sweeper must not fail its task."""
+    task, room, p, agent = await _seed_overdue_in_progress(db)
+    db.add(_turn(task, room, p, agent, state))
+    await db.commit()
+
+    n = await sweep_stuck_tasks(db, manager=None, now=_utcnow())
+    await db.refresh(task)
+    assert n == 0
+    assert task.status == "in_progress"
+
+
+@pytest.mark.parametrize("state", ["completed", "cancelled", "failed"])
+@pytest.mark.asyncio
+async def test_in_progress_with_only_terminal_turns_is_failed(db, state):
+    task, room, p, agent = await _seed_overdue_in_progress(db)
+    db.add(_turn(task, room, p, agent, state))
+    await db.commit()
+
+    n = await sweep_stuck_tasks(db, manager=None, now=_utcnow())
+    await db.commit()
+    await db.refresh(task)
+    assert n == 1
+    assert task.status == "failed"
+    assert task.error == "execution_timeout"

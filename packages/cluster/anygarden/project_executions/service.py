@@ -265,7 +265,22 @@ async def _event(
         ):
             raise
         return None
+    if event_type in _CAMPAIGN_TERMINAL_EVENTS:
+        # #930 — a campaign cycle's run ended: count its tokens and evaluate
+        # (completed) or close the cycle. Same transaction; the event key
+        # makes this fire once per terminal event.
+        from anygarden.campaigns.lifecycle import on_execution_terminal
+
+        await on_execution_terminal(db, execution, event_type)
     return event
+
+
+_CAMPAIGN_TERMINAL_EVENTS = frozenset({
+    "execution_completed",
+    "execution_usage_limit_stopped",
+    "execution_deadline_stopped",
+    "execution_cancelled",
+})
 
 
 async def _input_snapshot(
@@ -398,9 +413,10 @@ async def begin_execution(
             "Execution must be linked to its actual operating-room request",
         )
     # A scheduled Goal may be promoted without copying its goal_id to children.
+    # A campaign cycle Task (#930) is the same kind of server-scheduled root.
     if (author is None or author.user_id is None) and (
         root is None
-        or root.goal_id is None
+        or (root.goal_id is None and root.campaign_id is None)
         or root.source_message_id not in {None, source.id}
     ):
         _reject(
@@ -436,6 +452,18 @@ async def begin_execution(
         or root.assignee_participant_id != turn.target_participant_id
     ):
         _reject("TURN_TASK_CONFLICT", "Existing turn task is not an unbound lead root")
+    campaign = None
+    if root is not None and root.campaign_id is not None:
+        # #930 CMP-03 — a cycle spends what its campaign has left.
+        from anygarden.campaigns.policy import CampaignPolicyError
+        from anygarden.campaigns.service import cycle_execution_limits
+
+        try:
+            campaign, run_limits, deadline = await cycle_execution_limits(
+                db, root=root, limits=run_limits, deadline_at=deadline, clock=_now,
+            )
+        except CampaignPolicyError as exc:
+            _reject(exc.code, exc.message)
     if root is None:
         root = await db.scalar(select(Task).where(Task.source_message_id == source.id))
         if root is not None and (
@@ -477,7 +505,11 @@ async def begin_execution(
         project_id=room.project_id,
         operating_room_id=room.id,
         lead_agent_id=agent_id,
-        owner_user_id=author.user_id if author else None,
+        owner_user_id=(
+            author.user_id if author and author.user_id
+            else campaign.owner_id if campaign is not None
+            else None
+        ),
         source_message_id=source.id,
         root_task_id=root.id,
         goal_id=root.goal_id,
@@ -499,6 +531,10 @@ async def begin_execution(
     root.status = "in_progress"
     root.started_at = root.started_at or _now()
     turn.task_id = root.id
+    if campaign is not None:
+        from anygarden.campaigns.service import attach_cycle_execution
+
+        await attach_cycle_execution(db, root=root, execution_id=execution.id)
     revision = ExecutionInputRevision(
             execution_id=execution.id,
             revision=1,
@@ -1866,7 +1902,11 @@ async def seal_plan(
     if root.status != "in_progress":
         _reject("ROOT_TASK_NOT_ACTIVE", "Only the claimed lead task can seal its plan")
     ids = list(dict.fromkeys(required_task_ids))
-    if not ids or execution.root_task_id in ids:
+    # #930 — a campaign cycle (work or retrospective) may be done by the
+    # lead alone: its plan may seal with no child task. Every other
+    # execution still needs concrete delegated work.
+    lead_only = root.campaign_id is not None and not ids
+    if execution.root_task_id in ids or (not ids and not lead_only):
         _reject("REQUIRED_PLAN_EMPTY", "Seal at least one concrete required child task")
     tasks = list(
         (await db.scalars(select(Task).where(Task.execution_id == execution.id))).all()
@@ -1916,7 +1956,8 @@ async def seal_plan(
         .values(
             required_task_ids=ids,
             plan_sealed=True,
-            status="waiting_children",
+            # Nothing to wait for when the lead does the work itself.
+            status=execution.status if lead_only else "waiting_children",
             state_revision=ProjectExecution.state_revision + 1,
             updated_at=_now(),
         )
@@ -1953,7 +1994,9 @@ async def finish_execution(
     if execution.status == "completed":
         return execution
     _active(execution)
-    if not execution.plan_sealed or not execution.required_task_ids:
+    root = await db.get(Task, execution.root_task_id)
+    lead_only = root is not None and root.campaign_id is not None
+    if not execution.plan_sealed or not (execution.required_task_ids or lead_only):
         _reject(
             "EXECUTION_PLAN_NOT_SEALED",
             "Seal concrete required work before completing the execution",

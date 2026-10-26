@@ -18,8 +18,9 @@ Every instructions write goes through :func:`write_instructions`:
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import structlog
@@ -43,7 +44,7 @@ SKILLS_PREFIX = "skills/"
 INSTRUCTION_REVISIONS_KEPT = 50
 
 InstructionsMode = Literal["disk", "disk_offline", "server"]
-Source = Literal["user", "agent", "system"]
+Source = Literal["user", "agent", "system", "campaign"]
 Operation = Literal["write_agents_md", "write_skill", "delete_skill", "replace"]
 
 
@@ -113,8 +114,12 @@ async def record_snapshot(
     source: Source,
     by_user_id: str | None = None,
     restored_from: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> int:
-    """Store ``snapshot`` as the agent's next revision (caller commits)."""
+    """Store ``snapshot`` as the agent's next revision (caller commits).
+
+    ``context`` records why the revision was made (a campaign
+    retrospective stores ``{campaign_id, attempt_id, rationale}``)."""
     snapshot = _validated(snapshot)
     agent.agents_md = snapshot.agents_md or None
     existing = {
@@ -138,7 +143,7 @@ async def record_snapshot(
             row.content = content
     revision = int(agent.instructions_revision or 0) + 1
     agent.instructions_revision = revision
-    agent.instructions_synced_at = datetime.now(timezone.utc)
+    agent.instructions_synced_at = datetime.now(UTC)
     db.add(
         AgentInstructionRevision(
             agent_id=agent.id,
@@ -146,6 +151,7 @@ async def record_snapshot(
             source=source,
             by_user_id=by_user_id,
             restored_from=restored_from,
+            context=context,
             agents_md=snapshot.agents_md,
             skills=snapshot.skills,
         )
@@ -237,12 +243,20 @@ async def write_instructions(
     text: str | None = None,
     replacement: Snapshot | None = None,
     restored_from: int | None = None,
+    source: Source = "user",
+    context: dict[str, Any] | None = None,
+    before_commit: Callable[[int], Awaitable[None]] | None = None,
 ) -> int:
     """Change an agent's instructions and record the new revision.
 
     Commits. Raises ``HTTPException`` 409 while the agent's machine is
     offline or when the agent changed its instructions after the version
     the person was editing.
+
+    ``source`` / ``context`` are stored on the revision (#930: a campaign
+    retrospective writes ``source="campaign"`` with its reason).
+    ``before_commit(revision)`` runs in the same transaction right before
+    the commit, so a caller's own records land atomically with the change.
     """
     if path is not None:
         try:
@@ -282,10 +296,13 @@ async def write_instructions(
                 db,
                 agent,
                 Snapshot(result.snapshot.agents_md, dict(result.snapshot.skills)),
-                source="user",
+                source=source,
                 by_user_id=by_user_id,
                 restored_from=restored_from,
+                context=context,
             )
+            if before_commit is not None:
+                await before_commit(revision)
             await db.commit()
             await bus.send(machine.id, {
                 "type": "agent_instructions_ack",
@@ -312,10 +329,13 @@ async def write_instructions(
         db,
         agent,
         _apply_locally(current, operation, path, text, replacement),
-        source="user",
+        source=source,
         by_user_id=by_user_id,
         restored_from=restored_from,
+        context=context,
     )
+    if before_commit is not None:
+        await before_commit(revision)
     await db.commit()
     return revision
 

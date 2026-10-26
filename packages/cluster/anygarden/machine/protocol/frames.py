@@ -435,7 +435,28 @@ class WorkspaceTransferResultFrame(BaseModel):
     skipped: list[str] = Field(default_factory=list, max_length=50)
 
 
+class CampaignEvalRequestFrame(BaseModel):
+    """#930 — run a campaign's evaluator in an agent's workspace.
+
+    The machine acknowledges at once (``campaign_eval_ack``) and reports
+    ``campaign_eval_result`` when the job ends. ``job_id`` is stable per
+    attempt, so a re-request after a disconnect or restart is idempotent.
+    """
+
+    type: Literal["campaign_eval_request"] = "campaign_eval_request"
+    request_id: str = Field(min_length=1, max_length=64)
+    job_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    cwd: str = Field(default=".", max_length=1024)
+    command: str = Field(min_length=1, max_length=8192)
+    timeout_sec: int = Field(ge=1, le=6 * 3600)
+    pin_paths: list[str] = Field(default_factory=list, max_length=100)
+    expected_pins: dict[str, str] | None = None
+    score_key: str = Field(default="score", min_length=1, max_length=120)
+
+
 ServerFrame = Union[
+    CampaignEvalRequestFrame,
     WorkspaceTransferRequestFrame,
     AgentInstructionsAckFrame,
     AgentInstructionsRequestFrame,
@@ -717,7 +738,34 @@ class WorkspaceRevokeReceiptFrame(BaseModel):
     signature: str | None = None
 
 
+class CampaignEvalAckFrame(BaseModel):
+    """#930 — the machine took (or refused) a campaign evaluation job."""
+
+    type: Literal["campaign_eval_ack"] = "campaign_eval_ack"
+    request_id: str = Field(min_length=1, max_length=64)
+    job_id: str = Field(min_length=1, max_length=64)
+    accepted: bool
+    reason: str | None = Field(default=None, max_length=64)
+
+
+class CampaignEvalResultFrame(BaseModel):
+    """#930 — outcome of a campaign evaluation job."""
+
+    type: Literal["campaign_eval_result"] = "campaign_eval_result"
+    job_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    status: Literal["ok", "failed", "invalid", "timed_out"]
+    exit_code: int | None = None
+    stdout_tail: str = Field(default="", max_length=4096)
+    stderr_tail: str = Field(default="", max_length=4096)
+    parsed: dict[str, float | int | bool | str | None] | None = None
+    pins: dict[str, str] = Field(default_factory=dict)
+    error: str | None = Field(default=None, max_length=64)
+
+
 MachineFrame = Union[
+    CampaignEvalAckFrame,
+    CampaignEvalResultFrame,
     ManagedWorkspaceResultFrame,
     RegisterFrame,
     ReportActualStateFrame,
@@ -740,6 +788,7 @@ MachineFrame = Union[
 # ── Frame parsing ─────────────────────────────────────────────────────
 
 _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
+    "campaign_eval_request": CampaignEvalRequestFrame,
     "workspace_transfer_request": WorkspaceTransferRequestFrame,
     "agent_instructions_ack": AgentInstructionsAckFrame,
     "agent_instructions_request": AgentInstructionsRequestFrame,

@@ -296,6 +296,16 @@ async def inject_task_assignment_message(
             '`status="failed"`와 이유를 보고하세요. 정보가 더 필요하면 request_task_input으로 '
             "다시 질문하세요."
         )
+    elif task.campaign_id and not task.execution_id:
+        # #930 — a campaign cycle runs as a project execution rooted at this
+        # task; completion goes through the execution, not mark_task_status.
+        content = (
+            f"<@user:{assignee_pid}> [TASK] {task.title}\n"
+            "\n"
+            "**REQUIRED ACTIONS** - 캠페인 사이클이 당신에게 배정되었습니다. "
+            "첫 동작으로 `begin_project_execution`을 호출하세요. 이 task가 실행의 루트가 됩니다. "
+            "아래 브리프의 규칙(시도 기록은 사이클당 한 번, 평가기·고정 파일 수정 금지)을 따르세요."
+        )
     else:
         content = (
             f"<@user:{assignee_pid}> [TASK] {task.title}\n"

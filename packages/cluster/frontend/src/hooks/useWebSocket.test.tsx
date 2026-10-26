@@ -186,6 +186,24 @@ describe('useWebSocket reconnect guards', () => {
 
     expect(sockets).toHaveLength(1)
   })
+
+  it('announces a reconnect, not the first open, so REST views can refetch', () => {
+    const seen: unknown[] = []
+    const listener = (event: Event) => seen.push((event as CustomEvent).detail)
+    window.addEventListener('anygarden:ws:reconnected', listener)
+    try {
+      render(<Harness />)
+      act(() => { sockets[0].onopen?.(new Event('open')) })
+      expect(seen).toEqual([])
+      act(() => { sockets[0].onclose?.(closeEvent(1006)) })
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(sockets).toHaveLength(2)
+      act(() => { sockets[1].onopen?.(new Event('open')) })
+      expect(seen).toEqual([{ room_id: 'room-1' }])
+    } finally {
+      window.removeEventListener('anygarden:ws:reconnected', listener)
+    }
+  })
 })
 
 function deferred<T>() {
