@@ -18,6 +18,7 @@ from websockets.asyncio.client import connect
 from anygarden.machine import __version__, managed_workspace
 from anygarden.machine import instructions as disk_instructions
 from anygarden.machine import workspace_transfer
+from anygarden.machine.campaign_eval import CampaignEvalRunner, EvalJob
 from anygarden.machine.config import save_token
 from anygarden.machine.crash_budget import CrashBudget
 from anygarden.machine.detector import detect_engines
@@ -35,6 +36,8 @@ from anygarden.machine.protocol.frames import (
     AgentMemorySharedFileWriteFrame,
     AgentMemoryUpdateAckFrame,
     AgentRoomMemorySnapshotFrame,
+    CampaignEvalAckFrame,
+    CampaignEvalRequestFrame,
     EngineCheckResultFrame,
     EnginesReportFrame,
     EngineUpdateResultFrame,
@@ -254,6 +257,11 @@ class MachineDaemon:
         # #914 — in-flight HTTP work-file transfers.
         self._transfer_tasks: set[asyncio.Task] = set()
         self._transfer_client_factory = _transfer_client
+        # #930 — campaign evaluations: one job at a time per machine, run
+        # with an allowlisted env (no agent token, no engine secrets).
+        self._campaign_evals = CampaignEvalRunner(
+            self._manifest_store.agents_root, base_environment=agent_environment,
+        )
 
         # Issue #290 — per-(agent_id, filename) sha256 cache for the
         # ``memory/outbox/`` watcher. Same idea as the notes hash but
@@ -529,6 +537,8 @@ class MachineDaemon:
                 await self._handle_workspace_attach_request(frame)
             case "workspace_revoke":
                 await self._handle_workspace_revoke(frame)
+            case "campaign_eval_request":
+                await self._handle_campaign_eval_request(frame)
 
     def _transfer_url(self, ticket_id: str) -> str:
         base = _base_url_from_machine_url(self.server_url)
@@ -555,6 +565,24 @@ class MachineDaemon:
         )
         await self._send(WorkspaceTransferResultFrame(
             request_id=frame.request_id, agent_id=frame.agent_id, **outcome,
+        ).model_dump())
+
+    async def _handle_campaign_eval_request(self, frame: CampaignEvalRequestFrame) -> None:
+        """#930 — acknowledge at once; the job reports its result later."""
+        job = EvalJob(
+            job_id=frame.job_id,
+            agent_id=frame.agent_id,
+            command=frame.command,
+            timeout_sec=frame.timeout_sec,
+            cwd=frame.cwd,
+            pin_paths=tuple(frame.pin_paths),
+            expected_pins=frame.expected_pins,
+            score_key=frame.score_key,
+        )
+        accepted, reason = await self._campaign_evals.submit(job, self._send)
+        await self._send(CampaignEvalAckFrame(
+            request_id=frame.request_id, job_id=frame.job_id,
+            accepted=accepted, reason=reason,
         ).model_dump())
 
     async def _handle_managed_workspace(self, frame: ManagedWorkspaceRequestFrame) -> None:
@@ -1751,6 +1779,7 @@ class MachineDaemon:
         from anygarden.machine.proc_kill import is_group_alive
 
         groups = [agent.pid for agent in self._spawner._agents.values()]
+        await self._campaign_evals.close()
         await self._spawner.drain()
         if self._spawn_failed_unconfirmed or any(is_group_alive(pid) for pid in groups):
             raise RuntimeError("Local agent process cleanup could not be confirmed")
