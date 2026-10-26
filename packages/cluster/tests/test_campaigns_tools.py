@@ -348,3 +348,45 @@ async def test_learning_is_refused_outside_a_retrospective(flow_harness):
     error = await _error(h, cycle["turn"], "apply_campaign_learning", target="agents_md",
                          text="- Small changes win", rationale="seen twice")
     assert error["code"] == "CAMPAIGN_NOT_RETROSPECTIVE"
+
+
+@pytest.mark.req("CMP-13")
+async def test_an_api_edit_reaches_the_open_cycle_as_a_follow_up(flow_harness):
+    """Phase 7 → Phase 5: a person edits the campaign through the REST API
+    while the cycle runs; the agent sees it when it records the attempt."""
+    h = flow_harness
+    cycle = await _open_cycle(h, deadline=datetime.now(UTC) + timedelta(days=2))
+    cid = cycle["campaign_id"]
+    edit = await h.client.patch(f"/api/v1/campaigns/{cid}", headers=h.user(), json={
+        "purpose": "Reach 0.95 without new dependencies.", "metric": {"target": 0.95},
+    })
+    assert edit.status_code == 200, edit.text
+    later = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    extended = await h.client.post(f"/api/v1/campaigns/{cid}/extend", headers=h.user(),
+                                   json={"deadline_at": later})
+    assert extended.status_code == 200, extended.text
+    outsider = await h.client.post(f"/api/v1/campaigns/{cid}/pause",
+                                   headers=h.user("outsider"))
+    assert outsider.status_code == 403
+
+    result = await _record(h, cycle["turn"])
+    follow_up = result["follow_up"]
+    assert [d["type"] for d in follow_up] == ["edited", "status_changed"]
+    assert "metric.target: 0.9 → 0.95" in follow_up[0]["instruction"]
+    assert "purpose" in follow_up[0]["details"]["changes"]
+    assert "extended" in follow_up[1]["instruction"]
+    assert result["campaign"]["metric"]["target"] == 0.95
+    assert result["campaign"]["purpose"] == "Reach 0.95 without new dependencies."
+
+
+async def test_follow_ups_of_an_earlier_cycle_are_not_repeated(flow_harness):
+    h = flow_harness
+    cycle = await _open_cycle(h)
+    cid = cycle["campaign_id"]
+    async with h.sessions() as db:
+        db.add(CampaignEvent(campaign_id=cid, event_key=f"{cid}:old", type="edited",
+                             details={"changes": {"title": {"from": "a", "to": "b"}},
+                                      "open_cycle_no": 0},
+                             actor="user:x", created_at=datetime.now(UTC) + timedelta(hours=1)))
+        await db.commit()
+    assert (await _record(h, cycle["turn"]))["follow_up"] == []

@@ -189,7 +189,8 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     # #806 added ``claim_current_request`` / ``request_task_input``
     # (test_general_tasks.py). #866 added ``read_room_messages``
     # (test_mcp_read_room_messages.py). #901 added ``delegate_to_subroom``
-    # (test_project_execution_flow.py).
+    # (test_project_execution_flow.py). #930 added the campaign cycle tools
+    # (test_campaigns_tools.py).
     assert names == {
         "begin_project_execution",
         "delegate_to_subroom",
@@ -215,6 +216,11 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "clear_task_blocker",
         "ask_peer",
         "read_room_messages",
+        "record_campaign_attempt",
+        "schedule_campaign_wakeup",
+        "report_campaign_blocked",
+        "read_campaign_attempts",
+        "apply_campaign_learning",
     }
 
 

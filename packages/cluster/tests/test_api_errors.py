@@ -68,6 +68,26 @@ STRING_DETAIL_CASES = (
         ),
         {},
     ),
+    # #930 — campaigns (``reason`` carries the specific rule on 409/422).
+    ("CAMPAIGN_NOT_FOUND", 404, "Campaign not found", {}),
+    ("CAMPAIGN_ATTEMPT_NOT_FOUND", 404, "Campaign attempt not found", {}),
+    ("CAMPAIGN_FORBIDDEN", 403, "Only the campaign's owner or an admin can change it", {}),
+    (
+        "CAMPAIGN_EVALUATOR_FORBIDDEN",
+        403,
+        (
+            "The evaluator command runs on the agent's machine: only that machine's "
+            "owner or an admin can set it"
+        ),
+        {},
+    ),
+    ("CAMPAIGN_INVALID", 422, "metric.target must be a number", {"reason": "INVALID_METRIC"}),
+    (
+        "CAMPAIGN_CONFLICT",
+        409,
+        "Not possible while the campaign is stopped",
+        {"reason": "ILLEGAL_TRANSITION"},
+    ),
 )
 
 
@@ -138,7 +158,7 @@ def test_machine_task_call_sites_match_public_error_registry() -> None:
     """Adding a migrated error requires an explicit snapshot and registry entry."""
     api_dir = Path(__file__).parents[1] / "anygarden" / "api" / "v1"
     observed: set[tuple[str, int]] = set()
-    for filename in ("machines.py", "tasks.py", "system.py"):
+    for filename in ("machines.py", "tasks.py", "system.py", "campaigns.py"):
         tree = ast.parse((api_dir / filename).read_text())
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
