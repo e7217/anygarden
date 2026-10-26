@@ -73,22 +73,12 @@ async def _attempt(h: Harness, campaign_id: str) -> CampaignAttempt:
 
 
 async def _complete_and_score(h: Harness, cycle: dict, turn, *, score: float = 0.5) -> str:
-    """Begin was called on *turn*; finish the run and deliver its score."""
-    from anygarden.project_executions.service import _event
-
+    """Begin was called on *turn*; finish the run the way the agent does —
+    seal a plan with no child task, complete it — and deliver its score."""
     execution_id = (await _attempt(h, cycle["campaign_id"])).execution_id
-    async with h.sessions() as db:
-        # The run's own completion path needs a sealed plan; end it through
-        # the same terminal event instead.
-        execution = await db.get(ProjectExecution, execution_id)
-        task = await db.get(Task, execution.root_task_id)
-        now = datetime.now(UTC)
-        execution.status, execution.finished_at = "completed", now
-        task.status, task.finished_at = "done", now
-        await db.flush()
-        await _event(db, execution, f"execution:{execution.id}:completed",
-                     "execution_completed", task_id=task.id)
-        await db.commit()
+    await h.tool(turn, "seal_project_plan", execution_id=execution_id, required_task_ids=[])
+    await h.tool(turn, "complete_project_execution", execution_id=execution_id,
+                 summary="Tried two new features.")
     attempt = await _attempt(h, cycle["campaign_id"])
     assert attempt.eval_status == "pending"
     async with h.sessions() as db:
@@ -391,3 +381,37 @@ async def test_follow_ups_of_an_earlier_cycle_are_not_repeated(flow_harness):
                              actor="user:x", created_at=datetime.now(UTC) + timedelta(hours=1)))
         await db.commit()
     assert (await _record(h, cycle["turn"]))["follow_up"] == []
+
+
+@pytest.mark.req("CMP-13")
+async def test_a_cycle_completes_without_a_child_task(flow_harness):
+    """A project room with no sub-room: the lead does the work itself and
+    the real begin → record → seal (no children) → complete path requests
+    the evaluation."""
+    h = flow_harness
+    cycle = await _open_cycle(h)
+    turn = cycle["turn"]
+    begun = await h.tool(turn, "begin_project_execution", objective="Improve accuracy")
+    await _record(h, turn)
+    await h.tool(turn, "seal_project_plan", execution_id=begun["execution_id"],
+                 required_task_ids=[])
+    await h.tool(turn, "complete_project_execution", execution_id=begun["execution_id"],
+                 summary="Added two features.")
+    attempt = await _attempt(h, cycle["campaign_id"])
+    assert attempt.eval_status == "pending" and attempt.eval_job_id
+    async with h.sessions() as db:
+        assert (await db.get(ProjectExecution, begun["execution_id"])).status == "completed"
+        assert (await db.get(Task, cycle["task_id"])).status == "done"
+
+
+async def test_an_ordinary_execution_still_needs_a_child_task(flow_harness):
+    h = flow_harness
+    await h.user_request("Fix the login bug")
+    turn = await h.deliver("lead")
+    begun = await h.tool(turn, "begin_project_execution", objective="Fix the login bug")
+    refused = await _error(h, turn, "seal_project_plan", execution_id=begun["execution_id"],
+                           required_task_ids=[])
+    assert "at least one concrete required child task" in str(refused)
+    refused = await _error(h, turn, "complete_project_execution",
+                           execution_id=begun["execution_id"], summary="Done.")
+    assert "Seal concrete required work" in str(refused)

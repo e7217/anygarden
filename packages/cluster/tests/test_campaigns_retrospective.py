@@ -392,3 +392,18 @@ async def test_record_is_refused_in_a_retrospective(flow_harness):
     result = await h.tool_error_or_ok(retro["turn"], "record_campaign_attempt",
                                       outcome="attempted", hypothesis="x", change_summary="y")
     assert result["structuredContent"]["code"] == "CAMPAIGN_RETROSPECTIVE_CYCLE"
+
+
+async def test_a_retrospective_completes_without_a_child_task(flow_harness):
+    h = flow_harness
+    retro = await _open_retrospective(h)
+    await h.tool(retro["turn"], "seal_project_plan", execution_id=retro["execution_id"],
+                 required_task_ids=[])
+    await h.tool(retro["turn"], "complete_project_execution",
+                 execution_id=retro["execution_id"], summary="Kept two lessons.")
+    async with h.sessions() as db:
+        execution = await db.get(ProjectExecution, retro["execution_id"])
+        assert execution.status == "completed"
+        attempt = await db.scalar(select(CampaignAttempt).where(
+            CampaignAttempt.task_id == retro["task_id"]))
+        assert attempt.closed_at is not None

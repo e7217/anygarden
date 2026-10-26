@@ -77,14 +77,14 @@
 | 도구 | 용도 |
 |---|---|
 | `record_campaign_attempt` | 이번 사이클에서 시도한 것(가설·변경·산출물·교훈)을 기록. 사이클당 한 번, 평가 시작 전에만. 응답에 사이클 시작 뒤 들어온 후속 지시가 담김 |
-| `schedule_campaign_wakeup` | 다음 사이클을 특정 시각 이후로 미룸(60초–7일, 마감 전) |
+| `schedule_campaign_wakeup` | 이번 사이클이 끝난 뒤 **다음** 사이클을 특정 시각 이후로 미룸(60초–7일, 마감 전). 외부 리더보드·평가 결과를 기다릴 때 씀. 이번 사이클 안에서 자기 하위 작업을 기다리는 용도가 아님(턴을 끝내면 서버가 결과 도착 시 다시 깨움) |
 | `report_campaign_blocked` | 사람의 도움 없이는 진행할 수 없음을 알림. 사이클이 닫히면 `막힘` |
 | `read_campaign_attempts` | 지난 시도를 최신순으로 읽음 |
 | `apply_campaign_learning` | 회고 사이클에서만. AGENTS.md 학습 섹션이나 스킬을 갱신 |
 
 기록 없이 끝난 사이클은 `기록 없음`으로 남습니다.
 
-현재 `complete_project_execution`은 확정(seal)된 하위 작업이 하나 이상 있어야 실행을 끝냅니다. 따라서 캠페인 방에는 하위 방과 그 방의 담당 에이전트가 있어야 하고, 대표 에이전트는 사이클마다 하위 작업을 하나 이상 맡긴 뒤 계획을 확정해야 합니다. 하위 방이 없으면 사이클이 끝나지 못해 에이전트가 `report_campaign_blocked`로 알리게 됩니다.
+캠페인 사이클은 하위 방 없이 대표 에이전트가 직접 일해도 됩니다. 최소 순서는 `begin_project_execution` → 작업 → `record_campaign_attempt` → `seal_project_plan`(`required_task_ids=[]`) → `complete_project_execution`이며, 회고도 기록 없이 같은 순서로 끝납니다. 하위 작업 없이 계획을 확정할 수 있는 것은 캠페인 사이클뿐이고, 일반 프로젝트 실행은 여전히 하위 작업이 하나 이상 있어야 합니다.
 
 ## 한계와 보안
 

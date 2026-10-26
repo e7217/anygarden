@@ -139,9 +139,10 @@ PROJECT_TOOL_SCHEMAS = [
         "Do not omit unfinished work to make a plan appear complete. When required "
         "tasks are still waiting, the server resumes the lead automatically after results "
         "arrive: end this turn with a brief status instead of polling or waiting. "
-        "Mark the root done only after all required outputs and QA are verified.",
+        "Mark the root done only after all required outputs and QA are verified. "
+        "A campaign cycle you did yourself seals with an empty list.",
         {"execution_id": _string, "required_task_ids": {
-            "type": "array", "items": _string, "minItems": 1,
+            "type": "array", "items": _string,
         }}, ["execution_id", "required_task_ids"],
     ),
     _tool(

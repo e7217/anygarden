@@ -1902,7 +1902,11 @@ async def seal_plan(
     if root.status != "in_progress":
         _reject("ROOT_TASK_NOT_ACTIVE", "Only the claimed lead task can seal its plan")
     ids = list(dict.fromkeys(required_task_ids))
-    if not ids or execution.root_task_id in ids:
+    # #930 — a campaign cycle (work or retrospective) may be done by the
+    # lead alone: its plan may seal with no child task. Every other
+    # execution still needs concrete delegated work.
+    lead_only = root.campaign_id is not None and not ids
+    if execution.root_task_id in ids or (not ids and not lead_only):
         _reject("REQUIRED_PLAN_EMPTY", "Seal at least one concrete required child task")
     tasks = list(
         (await db.scalars(select(Task).where(Task.execution_id == execution.id))).all()
@@ -1952,7 +1956,8 @@ async def seal_plan(
         .values(
             required_task_ids=ids,
             plan_sealed=True,
-            status="waiting_children",
+            # Nothing to wait for when the lead does the work itself.
+            status=execution.status if lead_only else "waiting_children",
             state_revision=ProjectExecution.state_revision + 1,
             updated_at=_now(),
         )
@@ -1989,7 +1994,9 @@ async def finish_execution(
     if execution.status == "completed":
         return execution
     _active(execution)
-    if not execution.plan_sealed or not execution.required_task_ids:
+    root = await db.get(Task, execution.root_task_id)
+    lead_only = root is not None and root.campaign_id is not None
+    if not execution.plan_sealed or not (execution.required_task_ids or lead_only):
         _reject(
             "EXECUTION_PLAN_NOT_SEALED",
             "Seal concrete required work before completing the execution",

@@ -142,6 +142,13 @@ def test_rules_name_the_tools():
     for tool in ("begin_project_execution", "record_campaign_attempt", "schedule_campaign_wakeup"):
         assert tool in rules
     assert "bench.py" in rules  # pinned evaluator files must not be edited
+    # The minimal sequence, in order: begin → record → seal (no children) → complete.
+    order = [rules.index(t) for t in ("begin_project_execution", "record_campaign_attempt",
+                                      "seal_project_plan", "complete_project_execution")]
+    assert order == sorted(order)
+    assert "required_task_ids=[]" in rules
+    # A wake-up schedules the NEXT cycle; it is not a way to wait inside this one.
+    assert "next cycle" in rules and "not a way to wait" in rules
 
 
 def test_brief_is_capped_and_keeps_the_rules():

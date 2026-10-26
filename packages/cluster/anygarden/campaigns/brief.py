@@ -170,16 +170,26 @@ def _rules(campaign: Campaign) -> str:
     return "\n".join([
         "1. Call `begin_project_execution` as your first action; this task is its root.",
         (
-            "2. Before finishing, call `record_campaign_attempt` exactly once with what you"
-            " tried, then read the follow-up instructions in its response."
+            "2. Do the work yourself (delegating is optional). Before finishing, call"
+            " `record_campaign_attempt` exactly once with what you tried, then read the"
+            " follow-up instructions in its response."
         ),
         (
-            "3. The system runs the evaluator and decides the score. Do not modify the"
+            "3. Finish with `seal_project_plan` — `required_task_ids=[]` when you delegated"
+            " nothing — then `complete_project_execution`."
+        ),
+        (
+            "4. The system runs the evaluator and decides the score. Do not modify the"
             f" evaluator command or the pinned files ({pin_text})."
         ),
-        "4. If you must wait for something, use `schedule_campaign_wakeup` instead of idling.",
         (
-            "5. If you cannot make progress without a person, call `report_campaign_blocked`"
+            "5. `schedule_campaign_wakeup` sets when the next cycle may start after this one"
+            " ends (e.g. an external leaderboard or a long job). It is not a way to wait"
+            " inside this cycle: for your own child task, end the turn and the server"
+            " resumes you."
+        ),
+        (
+            "6. If you cannot make progress without a person, call `report_campaign_blocked`"
             " with what would unblock you; older attempts are in `read_campaign_attempts`."
         ),
     ])
@@ -285,7 +295,7 @@ def _retro_rules() -> str:
         ),
         (
             "5. Do not call `record_campaign_attempt` or run the evaluator. Finish with"
-            " `complete_project_execution`."
+            " `seal_project_plan` (`required_task_ids=[]`), then `complete_project_execution`."
         ),
     ])
 
