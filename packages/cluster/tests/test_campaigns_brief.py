@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from anygarden.campaigns.brief import SECTION_TITLES, render_brief
 from anygarden.campaigns.policy import BRIEF_MAX_CHARS, PLATEAU_WINDOW
 from anygarden.db.models import Campaign, CampaignAttempt
@@ -112,6 +114,7 @@ def test_no_directives_when_nothing_is_unusual():
     assert "None." in directives
 
 
+@pytest.mark.req("CMP-08")
 def test_optimize_plateau_asks_for_a_strategy_change():
     campaign = _campaign(mode="optimize", metric={"name": "loss", "direction": "minimize",
                                                   "target": None, "min_delta": 0.0},

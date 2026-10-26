@@ -45,6 +45,7 @@ def _py(code: str) -> str:
     return f"{sys.executable} -c {json.dumps(code)}"
 
 
+@pytest.mark.req("CMP-04")
 async def test_success_parses_the_last_json_line(agents_root):
     (agents_root / AGENT / "bench").mkdir()
     command = _py(
@@ -66,6 +67,7 @@ async def test_custom_score_key(agents_root):
     assert result.parsed == {"acc": 3.0, "valid": False}
 
 
+@pytest.mark.req("CMP-04")
 async def test_timeout_kills_the_whole_process_group(agents_root, tmp_path):
     pid_file = tmp_path / "child.pid"
     # The shell starts a background sleeper (a grandchild), then waits.
@@ -97,6 +99,7 @@ async def test_parse_failures_fail_the_job(agents_root, code, error):
     assert result.error == error
 
 
+@pytest.mark.req("CMP-04")
 async def test_non_zero_exit_fails_even_with_a_score(agents_root):
     command = _py("import sys; print('{\"score\": 1, \"valid\": true}'); sys.exit(3)")
     result = await run_eval(agents_root, _job(command))
@@ -113,6 +116,7 @@ def test_parse_ignores_trailing_blank_lines_and_bounds_extras():
     assert len(parsed["big"]) == 200 and "obj" not in parsed
 
 
+@pytest.mark.req("CMP-05")
 async def test_pin_mismatch_is_invalid_and_does_not_run(agents_root, tmp_path):
     workspace = agents_root / AGENT
     (workspace / "bench.py").write_text("print('v1')")

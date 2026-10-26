@@ -104,6 +104,7 @@ async def test_create_binds_the_room_lead_and_broadcasts(env):  # noqa: F811
     assert one.json()["title"] == "Win the contest"
 
 
+@pytest.mark.req("CMP-01")
 async def test_create_validation_uses_the_error_envelope(env):  # noqa: F811
     resp = await env.client.post(
         f"/api/v1/rooms/{env.ids['room']}/campaigns",
@@ -206,6 +207,7 @@ async def test_resume_from_blocked_resets_the_failure_streak(env):  # noqa: F811
     assert resumed.json()["status_detail"] is None
 
 
+@pytest.mark.req("CMP-06")
 async def test_reject_then_confirm(env):  # noqa: F811
     cid = await env.create()
     await env.run_cycle(T0, score=0.95)
@@ -224,6 +226,7 @@ async def test_reject_then_confirm(env):  # noqa: F811
     assert not_now.status_code == 409
 
 
+@pytest.mark.req("CMP-07")
 async def test_a_trusted_score_at_the_target_achieves(env):  # noqa: F811
     cid = await env.create(trusted_eval="external")
     task_id = await env.run_cycle(T0, score=0.95)
@@ -247,6 +250,7 @@ async def test_a_trusted_score_at_the_target_achieves(env):  # noqa: F811
     assert types.count("trusted_score_recorded") == 2
 
 
+@pytest.mark.req("CMP-09")
 async def test_select_final_after_the_deadline(env):  # noqa: F811
     cid = await env.create(mode="optimize", target=None, deadline_at=T0 + timedelta(hours=3))
     first = await env.run_cycle(T0, score=0.5)
@@ -262,6 +266,7 @@ async def test_select_final_after_the_deadline(env):  # noqa: F811
     assert "final_selected" in [e.type for e in await env.events(cid)]
 
 
+@pytest.mark.req("CMP-09")
 async def test_extend_reopens_a_campaign_that_reached_its_deadline(env):  # noqa: F811
     cid = await env.create(mode="optimize", target=None, deadline_at=T0 + timedelta(hours=2))
     await env.run_cycle(T0, score=0.2)

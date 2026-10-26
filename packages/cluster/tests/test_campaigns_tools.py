@@ -139,6 +139,7 @@ async def test_record_needs_an_explicit_outcome_and_fields(flow_harness):
     assert (await _attempt(h, cycle["campaign_id"])).recorded_at is None
 
 
+@pytest.mark.req("CMP-13")
 async def test_record_is_refused_once_the_evaluation_started(flow_harness):
     h = flow_harness
     cycle = await _open_cycle(h)

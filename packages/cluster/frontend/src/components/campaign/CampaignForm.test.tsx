@@ -17,7 +17,7 @@ function renderForm(onSubmit = vi.fn(async () => campaignFixture())) {
 const fill = (label: RegExp, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } })
 
 describe('CampaignForm', () => {
-  it('target mode shows a required target and an optional deadline', () => {
+  it('[CMP-01] target mode shows a required target and an optional deadline', () => {
     renderForm()
     expect(screen.getByRole('radio', { name: /Reach a target score/ })).toBeChecked()
     expect(screen.getByLabelText('Target score')).toBeRequired()
@@ -25,7 +25,7 @@ describe('CampaignForm', () => {
     expect(deadline).not.toBeRequired()
   })
 
-  it('optimize mode hides the target and requires the deadline', () => {
+  it('[CMP-01] optimize mode hides the target and requires the deadline', () => {
     renderForm()
     fireEvent.click(screen.getByRole('radio', { name: /Improve until a deadline/ }))
     expect(screen.queryByLabelText('Target score')).toBeNull()
@@ -40,7 +40,7 @@ describe('CampaignForm', () => {
     expect(screen.getByLabelText(/time limit/)).toHaveValue('600')
   })
 
-  it('shows field errors instead of submitting an incomplete campaign', async () => {
+  it('[CMP-01] shows field errors instead of submitting an incomplete campaign', async () => {
     const { onSubmit } = renderForm()
     fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
     expect(onSubmit).not.toHaveBeenCalled()

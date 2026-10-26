@@ -117,7 +117,7 @@ test.beforeEach(async ({ page }) => {
   await stubWebSocket(page)
 })
 
-test('start a campaign, see it in the rail and pause it', async ({ page }) => {
+test('[CMP-01] start a campaign, see it in the rail and pause it', async ({ page }) => {
   const state = await stubApi(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/login')

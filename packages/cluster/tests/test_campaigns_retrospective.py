@@ -100,6 +100,7 @@ async def test_deadline_end_runs_one_retrospective(env):  # noqa: F811
     assert [o.action for o in later] == []
 
 
+@pytest.mark.req("CMP-10")
 async def test_budget_end_runs_a_retrospective(env):  # noqa: F811
     cid = await env.create(max_total_tokens=100_000)
     now = T0
@@ -216,6 +217,7 @@ async def _learn_error(h: Harness, retro: dict, **arguments) -> dict:
     return result["structuredContent"]
 
 
+@pytest.mark.req("CMP-10")
 async def test_a_retrospective_runs_on_the_reserve_after_the_deadline(flow_harness):
     h = flow_harness
     retro = await _open_retrospective(h, tokens_used=95_000)
@@ -270,6 +272,7 @@ async def test_text_outside_the_section_is_refused(flow_harness):
             "# garden-pm\n\nI lead the garden project.")
 
 
+@pytest.mark.req("CMP-14")
 async def test_at_most_three_changes_and_sixteen_kb(flow_harness):
     h = flow_harness
     retro = await _open_retrospective(h)

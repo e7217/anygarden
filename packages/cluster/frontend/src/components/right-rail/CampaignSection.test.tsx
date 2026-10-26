@@ -95,7 +95,7 @@ describe('CampaignSection', () => {
     await waitFor(() => expect(mocks.act).toHaveBeenCalledWith('camp-1', 'stop'))
   })
 
-  it('offers extend only once the deadline or budget ended it', () => {
+  it('[CMP-10] offers extend only once the deadline or budget ended it', () => {
     mocks.campaigns = [campaignFixture({ status: 'budget_exhausted' })]
     renderSection()
     expect(screen.getByRole('button', { name: 'Extend' })).toBeInTheDocument()

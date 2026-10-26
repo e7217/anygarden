@@ -97,6 +97,7 @@ async def _counts(sessions, campaign_id: str) -> tuple[int, int]:
         return tasks, attempts
 
 
+@pytest.mark.req("CMP-02")
 async def test_tick_opens_one_cycle_task_assigned_to_the_lead(sessions):
     ids = await _seed(sessions)
     outcomes = await _scheduler(sessions)._tick()
@@ -126,6 +127,7 @@ async def test_tick_opens_one_cycle_task_assigned_to_the_lead(sessions):
         assert "cycle_opened" in types
 
 
+@pytest.mark.req("CMP-02")
 async def test_open_cycle_blocks_the_next_one_across_restarts(sessions):
     ids = await _seed(sessions)
     await _scheduler(sessions)._tick()
@@ -152,6 +154,7 @@ async def test_next_cycle_opens_after_the_previous_closes(sessions):
     assert keys == {cycle_idempotency_key(ids["campaign"], 1), cycle_idempotency_key(ids["campaign"], 2)}
 
 
+@pytest.mark.req("CMP-02")
 @pytest.mark.parametrize("round_", range(5))
 async def test_concurrent_ticks_open_exactly_one_cycle(sessions, round_):
     ids = await _seed(sessions)
@@ -176,6 +179,7 @@ async def test_concurrent_advances_serialise_without_errors(sessions, round_):
     assert await _counts(sessions, ids["campaign"]) == (1, 1)
 
 
+@pytest.mark.req("CMP-02")
 async def test_duplicate_cycle_key_is_refused_by_the_task_index(sessions):
     from sqlalchemy.exc import IntegrityError
 
@@ -231,6 +235,7 @@ async def test_passed_deadline_ends_the_campaign_without_a_cycle(sessions):
     assert await _counts(sessions, ids["campaign"]) == (0, 0)
 
 
+@pytest.mark.req("CMP-12")
 async def test_archived_room_stops_the_campaign(sessions):
     ids = await _seed(sessions)
     async with sessions() as db:

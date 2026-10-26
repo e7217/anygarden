@@ -15,23 +15,23 @@ function draft(overrides: Partial<CampaignDraft> = {}): CampaignDraft {
 }
 
 describe('campaignFormFields (plan §3.9 condition table)', () => {
-  it('target mode: target required, deadline optional', () => {
+  it('[CMP-01] target mode: target required, deadline optional', () => {
     expect(campaignFormFields('target')).toEqual({ target: 'required', deadline: 'optional' })
   })
-  it('optimize mode: target hidden, deadline required', () => {
+  it('[CMP-01] optimize mode: target hidden, deadline required', () => {
     expect(campaignFormFields('optimize')).toEqual({ target: 'hidden', deadline: 'required' })
   })
 })
 
 describe('buildCampaignInput', () => {
-  it('target mode needs a target and accepts no deadline', () => {
+  it('[CMP-01] target mode needs a target and accepts no deadline', () => {
     expect(buildCampaignInput(draft({ mode: 'target' }), NOW).errors).toEqual({ target: 'campaigns.form.required' })
     const { input } = buildCampaignInput(draft({ mode: 'target', target: '0.9' }), NOW)
     expect(input?.metric).toEqual({ name: 'accuracy', direction: 'maximize', target: 0.9 })
     expect(input).not.toHaveProperty('deadline_at')
   })
 
-  it('optimize mode needs a future deadline and never sends a target', () => {
+  it('[CMP-01] optimize mode needs a future deadline and never sends a target', () => {
     expect(buildCampaignInput(draft({ mode: 'optimize' }), NOW).errors).toEqual({ deadline: 'campaigns.form.required' })
     expect(buildCampaignInput(draft({ mode: 'optimize', deadline: '2026-10-01T10:00' }), NOW).errors)
       .toEqual({ deadline: 'campaigns.form.deadlinePast' })
@@ -54,7 +54,7 @@ describe('buildCampaignInput', () => {
     })
   })
 
-  it('reports required fields, a bad budget and a bad timeout', () => {
+  it('[CMP-01] reports required fields, a bad budget and a bad timeout', () => {
     const { errors, input } = buildCampaignInput(
       draft({ title: ' ', purpose: '', target: 'x', budgetTokens: '0', timeoutSec: '99999' }), NOW,
     )

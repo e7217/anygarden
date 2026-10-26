@@ -70,6 +70,7 @@ def test_valid_target_spec_is_normalised_with_defaults():
 @pytest.mark.parametrize("budget", [None, {}, {"max_total_tokens": 0},
                                     {"max_total_tokens": -5}, {"max_total_tokens": True},
                                     {"max_total_tokens": "100"}])
+@pytest.mark.req("CMP-01")
 def test_budget_max_total_tokens_is_required_and_positive(budget):
     assert _code(budget=budget) == "BUDGET_REQUIRED"
 
@@ -79,11 +80,13 @@ def test_retro_reserve_ratio_range(ratio):
     assert _code(budget={"max_total_tokens": 10, "retro_reserve_ratio": ratio}) == "INVALID_BUDGET"
 
 
+@pytest.mark.req("CMP-01")
 def test_target_or_deadline_is_required():
     # Target mode without a target, and no deadline either.
     assert _code(metric={"name": "m", "direction": "maximize"}) == "TARGET_OR_DEADLINE_REQUIRED"
 
 
+@pytest.mark.req("CMP-01")
 def test_target_mode_requires_a_target_even_with_a_deadline():
     assert _code(
         metric={"name": "m", "direction": "maximize"},
@@ -96,12 +99,14 @@ def test_target_mode_with_target_and_deadline_is_valid():
     assert spec.deadline_at == NOW + timedelta(days=3)
 
 
+@pytest.mark.req("CMP-01")
 def test_optimize_mode_requires_a_deadline():
     assert _code(
         mode="optimize", metric={"name": "m", "direction": "minimize"}
     ) == "TARGET_OR_DEADLINE_REQUIRED"
 
 
+@pytest.mark.req("CMP-01")
 def test_optimize_mode_rejects_a_target():
     assert _code(
         mode="optimize", metric={"name": "m", "direction": "minimize", "target": 1.0},
@@ -167,6 +172,7 @@ def test_title_and_purpose_required(title, purpose):
     assert _code(title=title, purpose=purpose) == "INVALID_CAMPAIGN"
 
 
+@pytest.mark.req("CMP-10")
 def test_usable_tokens_keeps_the_retro_reserve():
     assert usable_tokens({"max_total_tokens": 1000, "retro_reserve_ratio": 0.05}) == 950
     assert usable_tokens({"max_total_tokens": 1000}) == 950

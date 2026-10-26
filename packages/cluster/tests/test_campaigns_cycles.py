@@ -350,6 +350,7 @@ async def test_s2b_unpicked_cycle_is_swept_and_campaign_moves_on(env):
     assert (await env.campaign(cid)).status == "active"
 
 
+@pytest.mark.req("CMP-02")
 async def test_s3_restart_mid_cycle_no_duplicate(env):
     cid = await env.create()
     first = await env.tick(T0)
@@ -365,6 +366,7 @@ async def test_s3_restart_mid_cycle_no_duplicate(env):
     assert campaign.cycles_run == 1 and await env.best_score(cid) == pytest.approx(0.3)
 
 
+@pytest.mark.req("CMP-02")
 async def test_s4_concurrent_ticks_create_one_cycle(env):
     await env.create()
     results = await asyncio.gather(*(env.tick(T0) for _ in range(4)))
@@ -375,6 +377,7 @@ async def test_s4_concurrent_ticks_create_one_cycle(env):
     assert n == 1
 
 
+@pytest.mark.req("CMP-04")
 async def test_s5_eval_after_stop_does_not_reopen_or_score(env):
     cid = await env.create()
     cycle = (await env.tick(T0))[0]
@@ -394,6 +397,7 @@ async def test_s5_eval_after_stop_does_not_reopen_or_score(env):
     assert await env.tick(T0 + timedelta(hours=2)) == []
 
 
+@pytest.mark.req("CMP-11")
 async def test_s6_unknown_cycle_is_not_rerun_and_loop_continues(env):
     cid = await env.create()
     first = await env.run_cycle(T0, outcome="deadline")
@@ -411,6 +415,7 @@ async def test_s6_unknown_cycle_is_not_rerun_and_loop_continues(env):
     assert await env.best_score(cid) == pytest.approx(0.4)
 
 
+@pytest.mark.req("CMP-12")
 async def test_s7_retiring_the_room_stops_the_campaign_in_the_same_transaction(env):
     cid = await env.create()
     cycle = (await env.tick(T0))[0]
@@ -448,6 +453,7 @@ async def test_s8b_agent_tasks_endpoint_ok(env):
     assert r.status_code == 200, r.text
 
 
+@pytest.mark.req("CMP-12")
 async def test_s8c_task_api_refuses_an_open_cycle_and_history_survives(env):
     cid = await env.create()
     cycle = (await env.tick(T0))[0]
@@ -484,6 +490,7 @@ async def test_s8c_task_api_refuses_an_open_cycle_and_history_survives(env):
     assert len(nxt) == 1
 
 
+@pytest.mark.req("CMP-12")
 async def test_s8d_agent_cannot_mark_its_cycle_task_done(env):
     from anygarden.mcp.tools import mark_task_status
 
@@ -503,6 +510,7 @@ async def test_s8d_agent_cannot_mark_its_cycle_task_done(env):
     assert (await env.attempt(cycle)).closed_at is None
 
 
+@pytest.mark.req("CMP-10")
 async def test_s9a_budget_exhausted(env):
     cid = await env.create(max_total_tokens=100_000)
     now = T0
@@ -515,6 +523,7 @@ async def test_s9a_budget_exhausted(env):
     assert await env.tick(now) == []
 
 
+@pytest.mark.req("CMP-09")
 async def test_s9b_deadline_reached(env):
     cid = await env.create(mode="optimize", target=None, deadline_at=T0 + timedelta(hours=2))
     await env.run_cycle(T0, score=0.2)
@@ -593,6 +602,7 @@ async def test_busy_machine_keeps_the_eval_pending_and_the_tick_retries(env):
     assert len(env.bus.frames) == 2
 
 
+@pytest.mark.req("CMP-04")
 async def test_server_side_eval_deadline_closes_as_eval_failed(env):
     cid = await env.create()
     cycle = await _completed_cycle(env, cid)
@@ -612,6 +622,7 @@ async def test_server_side_eval_deadline_closes_as_eval_failed(env):
     assert campaign.best_attempt_id is None
 
 
+@pytest.mark.req("CMP-04")
 async def test_result_from_another_machine_is_ignored(env):
     cycle = await _completed_cycle(env)
     assert await env.dispatch(cycle, T0 + timedelta(minutes=11)) == "accepted"
@@ -623,6 +634,7 @@ async def test_result_from_another_machine_is_ignored(env):
 # ═══ Judging (Phase 4) ════════════════════════════════════════════
 
 
+@pytest.mark.req("CMP-05")
 async def test_first_result_records_pins_and_sets_the_next_cycle(env):
     cid = await env.create()
     cycle = await _completed_cycle(env, cid)
@@ -655,6 +667,7 @@ async def test_invalid_score_is_a_guardrail_violation_and_keeps_the_best(env):
     assert (await env.campaign(cid)).cycles_since_improvement == 1
 
 
+@pytest.mark.req("CMP-04")
 async def test_three_eval_failures_in_a_row_block_and_a_success_resets(env):
     cid = await env.create()
     now = T0
@@ -673,6 +686,7 @@ async def test_three_eval_failures_in_a_row_block_and_a_success_resets(env):
     assert await env.tick(now + timedelta(hours=1)) == []
 
 
+@pytest.mark.req("CMP-05")
 async def test_pin_mismatch_is_invalid_and_blocks(env):
     cid = await env.create()
     task = await env.run_cycle(T0, status="invalid")
@@ -682,6 +696,7 @@ async def test_pin_mismatch_is_invalid_and_blocks(env):
     assert campaign.status == "blocked" and "pinned" in campaign.status_detail
 
 
+@pytest.mark.req("CMP-06")
 @pytest.mark.parametrize("trusted_eval", ["none", "external"])
 async def test_dev_target_only_awaits_confirmation(env, trusted_eval):
     cid = await env.create(trusted_eval=trusted_eval)
@@ -692,6 +707,7 @@ async def test_dev_target_only_awaits_confirmation(env, trusted_eval):
                                           else "confirmation")
 
 
+@pytest.mark.req("CMP-08")
 async def test_target_mode_plateaus_after_the_window(env):
     cid = await env.create()
     now = T0
@@ -703,6 +719,7 @@ async def test_target_mode_plateaus_after_the_window(env):
     assert campaign.status == "plateau" and campaign.cycles_since_improvement == 5
 
 
+@pytest.mark.req("CMP-08")
 async def test_optimize_mode_keeps_going_and_asks_for_a_new_strategy(env):
     cid = await env.create(mode="optimize", target=None, deadline_at=T0 + timedelta(days=5))
     now = T0
@@ -757,6 +774,7 @@ async def test_stop_cancels_a_running_cycle_execution(env):
     assert attempt.closed_at is not None and attempt.outcome == "unknown"
 
 
+@pytest.mark.req("CMP-11")
 async def test_reconcile_closes_a_cycle_whose_task_disappeared(env):
     cid = await env.create()
     cycle = (await env.tick(T0))[0]
@@ -770,6 +788,7 @@ async def test_reconcile_closes_a_cycle_whose_task_disappeared(env):
     assert attempt.closed_at is not None and attempt.outcome == "unknown"
 
 
+@pytest.mark.req("CMP-12")
 async def test_reconcile_stops_a_campaign_whose_room_was_archived_mid_cycle(env):
     cid = await env.create()
     cycle = (await env.tick(T0))[0]
@@ -782,6 +801,7 @@ async def test_reconcile_stops_a_campaign_whose_room_was_archived_mid_cycle(env)
     assert (await env.attempt(cycle)).closed_at is not None
 
 
+@pytest.mark.req("CMP-12")
 async def test_archive_endpoint_stops_the_rooms_campaigns(env):
     cid = await env.create()
     await env.tick(T0)

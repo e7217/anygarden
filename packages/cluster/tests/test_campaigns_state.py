@@ -265,6 +265,7 @@ async def test_extend_keeps_an_open_status_and_records_the_change(db):
     assert event.details["max_total_tokens"] == {"from": 100_000, "to": 200_000}
 
 
+@pytest.mark.req("CMP-10")
 async def test_extend_reopens_a_budget_exhausted_campaign(db):
     owner, _, room = await _project_room(db)
     campaign = await create_campaign(db, **_create_args(owner, room))
@@ -283,6 +284,7 @@ async def test_extend_reopens_a_budget_exhausted_campaign(db):
     assert campaign.next_cycle_at == NOW
 
 
+@pytest.mark.req("CMP-09")
 async def test_extend_reopens_a_deadline_reached_campaign_only_with_a_later_deadline(db):
     owner, _, room = await _project_room(db)
     campaign = await create_campaign(

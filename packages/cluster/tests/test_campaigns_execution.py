@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from anygarden.campaigns.scheduler import CampaignScheduler
@@ -52,6 +53,7 @@ def _iso(value: datetime) -> str:
     return value.isoformat()
 
 
+@pytest.mark.req("CMP-03")
 async def test_cycle_execution_is_clamped_to_the_campaign_budget_and_deadline(flow_harness):
     deadline = datetime.now(UTC) + timedelta(hours=2)
     cycle = await _open_cycle(flow_harness, deadline=deadline)
@@ -74,6 +76,7 @@ async def test_cycle_execution_is_clamped_to_the_campaign_budget_and_deadline(fl
         assert attempt.execution_id == execution.id
 
 
+@pytest.mark.req("CMP-03")
 async def test_smaller_requested_limits_are_kept(flow_harness):
     cycle = await _open_cycle(flow_harness, deadline=datetime.now(UTC) + timedelta(days=2))
     soon = datetime.now(UTC) + timedelta(hours=1)
@@ -87,6 +90,7 @@ async def test_smaller_requested_limits_are_kept(flow_harness):
         assert execution.deadline_at == soon
 
 
+@pytest.mark.req("CMP-03")
 async def test_without_requested_limits_the_campaign_limits_apply(flow_harness):
     deadline = datetime.now(UTC) + timedelta(hours=3)
     cycle = await _open_cycle(flow_harness, deadline=deadline, tokens_used=0)
@@ -106,6 +110,7 @@ async def test_no_deadline_campaign_sets_no_deadline(flow_harness):
         assert "deadline_at" not in execution.limits
 
 
+@pytest.mark.req("CMP-03")
 async def test_cycle_cannot_begin_once_the_budget_is_spent(flow_harness):
     cycle = await _open_cycle(flow_harness, deadline=None)
     async with flow_harness.sessions() as db:
@@ -138,6 +143,7 @@ async def test_closed_cycle_cannot_begin(flow_harness):
     assert "not the campaign's open cycle" in error
 
 
+@pytest.mark.req("CMP-04")
 async def test_completed_cycle_is_evaluated_through_the_machine_handler(flow_harness):
     """Real path: cycle turn → execution → completion hook → evaluation
     request → machine result frame → judged (CMP-04)."""
