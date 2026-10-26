@@ -15,8 +15,12 @@ import pytest
 from sqlalchemy import select
 
 from anygarden.campaigns import lifecycle
+from anygarden.campaigns.agent_actions import CampaignToolError
 from anygarden.campaigns.retrospective import (
+    LEARNINGS_END,
     LEARNINGS_HEADING,
+    LEARNINGS_START,
+    check_section_body,
     replace_learnings_section,
 )
 from anygarden.campaigns.scheduler import CampaignScheduler
@@ -48,23 +52,78 @@ flow_harness = _flow.harness
 # ═══ The AGENTS.md section ═════════════════════════════════════════
 
 
+START, END = LEARNINGS_START, LEARNINGS_END
+
+
+def _section(body: str) -> str:
+    return f"{LEARNINGS_HEADING}\n{START}\n{body}\n{END}"
+
+
 def test_the_section_is_appended_when_absent():
     text = replace_learnings_section("# Me\n\nI help.\n", "- Small steps win")
-    assert text == f"# Me\n\nI help.\n\n{LEARNINGS_HEADING}\n- Small steps win"
+    assert text == f"# Me\n\nI help.\n\n{_section('- Small steps win')}"
 
 
-def test_only_the_section_body_is_replaced():
+def test_an_empty_file_gets_just_the_section():
+    assert replace_learnings_section("", "- a") == _section("- a")
+
+
+def test_only_the_text_between_the_markers_is_replaced():
+    before = f"# Me\n\n{_section('- old\n## not a heading here')}\n\n## Tools\nUse ruff.\n"
+    after = replace_learnings_section(before, "- new")
+    assert after == f"# Me\n\n{_section('- new')}\n\n## Tools\nUse ruff.\n"
+
+
+def test_a_marker_less_section_is_migrated():
     before = (
         "# Me\n\nIntro\n\n"
         f"{LEARNINGS_HEADING}\n- old lesson\n### Detail\nold\n\n"
         "## Tools\nUse ruff.\n"
     )
     after = replace_learnings_section(before, "- new lesson")
-    assert after == f"# Me\n\nIntro\n\n{LEARNINGS_HEADING}\n- new lesson\n\n## Tools\nUse ruff.\n"
+    assert after == f"# Me\n\nIntro\n\n{_section('- new lesson')}\n\n## Tools\nUse ruff.\n"
 
 
-def test_an_empty_file_gets_just_the_section():
-    assert replace_learnings_section("", "- a") == f"{LEARNINGS_HEADING}\n- a"
+@pytest.mark.parametrize("following", [
+    "   ## Indented heading\nkept\n",
+    "Setext heading\n==============\nkept\n",
+    "Setext two\n---\nkept\n",
+])
+def test_a_marker_less_section_ends_at_any_top_level_heading(following):
+    before = f"{LEARNINGS_HEADING}\n- old\n\n{following}"
+    after = replace_learnings_section(before, "- new")
+    assert after == f"{_section('- new')}\n\n{following}"
+
+
+def test_a_marker_less_section_ignores_headings_inside_code_fences():
+    before = (
+        f"{LEARNINGS_HEADING}\n- old\n```sh\n# a comment\n```\n- more\n\n## Tools\nkept\n"
+    )
+    after = replace_learnings_section(before, "- new")
+    assert after == f"{_section('- new')}\n\n## Tools\nkept\n"
+
+
+@pytest.mark.parametrize("text", [
+    "- ok\n## Tools",
+    "- ok\n   # Indented",
+    "Title\n=====",
+    "Title\n---",
+    "- ok\n```\nunclosed fence",
+    f"- ok\n{LEARNINGS_END}\n## Tools",
+])
+def test_section_text_that_would_leave_the_section_is_refused(text):
+    with pytest.raises(CampaignToolError) as err:
+        check_section_body(text)
+    assert err.value.code == "CAMPAIGN_LEARNING_OUTSIDE_SECTION"
+
+
+@pytest.mark.parametrize("text", [
+    "- ok\n### Sub heading\nmore",
+    "- ok\n```sh\n# a comment\n## another\n```",
+    "- ok\n\n---\n\n- after a rule",
+])
+def test_section_text_with_sub_headings_fences_and_rules_is_fine(text):
+    check_section_body(text)
 
 
 # ═══ Triggers (scheduler) ══════════════════════════════════════════
@@ -250,7 +309,7 @@ async def test_agents_md_learning_applies_without_approval_and_is_recorded(flow_
     async with h.sessions() as db:
         lead = await db.get(Agent, h.ids["lead"])
         assert lead.agents_md == (
-            f"# garden-pm\n\nI lead the garden project.\n\n{LEARNINGS_HEADING}\n- Keep changes small."
+            f"# garden-pm\n\nI lead the garden project.\n\n{_section('- Keep changes small.')}"
         )
         revision = await db.scalar(select(AgentInstructionRevision).where(
             AgentInstructionRevision.agent_id == lead.id,
@@ -349,6 +408,17 @@ async def test_a_learning_is_undone_with_the_revision_restore(flow_harness):
 
     h.app.state.agent_lifecycle = SimpleNamespace(bump_generation=bump_generation)
     h.app.state.machine_bus = None
+    # The history says why the campaign's revision was made.
+    history = await h.client.get(
+        f"/api/v1/agents/{h.ids['lead']}/instructions/revisions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert history.status_code == 200, history.text
+    by_revision = {row["revision"]: row for row in history.json()}
+    campaign_row = by_revision[result["revision"]]
+    assert campaign_row["source"] == "campaign"
+    assert campaign_row["context"]["rationale"] == "oops"
+    assert by_revision[before]["context"] is None
     resp = await h.client.post(
         f"/api/v1/agents/{h.ids['lead']}/instructions/revisions/{before}/restore",
         headers={"Authorization": f"Bearer {token}"},

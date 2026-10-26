@@ -12,8 +12,9 @@ know-how: its AGENTS.md and skills. Per decision 6 the change is applied
 
 Safety limits: at most ``MAX_CHANGES_PER_RETROSPECTIVE`` changes per
 retrospective, each ≤ ``MAX_CHANGE_BYTES``; AGENTS.md changes only replace
-the body of the ``## Campaign learnings`` section (created at the end when
-absent — the rest of the file is never rewritten); a skill is either new or
+the body of the ``## Campaign learnings`` section, between its marker
+comments (created at the end when absent — the rest of the file is never
+rewritten); a skill is either new or
 one this campaign created earlier.
 
 Writes go through ``instructions.service.write_instructions``, so the
@@ -37,44 +38,115 @@ from anygarden.campaigns.service import Clock, record_event, utcnow
 from anygarden.db.models import Agent, CampaignEvent, Message
 
 LEARNINGS_HEADING = "## Campaign learnings"
+LEARNINGS_START = "<!-- campaign-learnings:start -->"
+LEARNINGS_END = "<!-- campaign-learnings:end -->"
 MAX_CHANGES_PER_RETROSPECTIVE = 3
 MAX_CHANGE_BYTES = 16 * 1024
 RATIONALE_MAX = 2000
 TARGETS = frozenset({"agents_md", "skill"})
 _SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_SECTION_BREAK = re.compile(r"^#{1,2}\s")
+# CommonMark: an ATX heading may be indented up to three spaces; levels 1–2
+# end the ``##`` section. A setext underline makes the line above an h1/h2.
+_TOP_ATX = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
+_SETEXT = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 def skill_path(name: str) -> str:
     return f"skills/{name}/SKILL.md"
 
 
+def _scan(lines: list[str]) -> tuple[list[bool], list[int], bool]:
+    """Classify *lines* outside code fences.
+
+    Returns ``(in_fence, top_heading_starts, unclosed)``: whether each line
+    is inside (or delimits) a fence, the indexes where a level 1–2 heading
+    starts (an ATX line, or the text line above a setext underline) and
+    whether a fence is left open at the end.
+    """
+    in_fence = [False] * len(lines)
+    starts: list[int] = []
+    fence: str | None = None
+    for i, line in enumerate(lines):
+        if fence is not None:
+            in_fence[i] = True
+            stripped = line.strip()
+            if stripped.startswith(fence) and set(stripped) == {fence[0]} and \
+                    len(line) - len(line.lstrip(" ")) <= 3:
+                fence = None
+            continue
+        opened = _FENCE.match(line)
+        if opened:
+            in_fence[i] = True
+            fence = opened.group(1)
+            continue
+        if _TOP_ATX.match(line):
+            starts.append(i)
+        elif (
+            _SETEXT.match(line) and i > 0 and lines[i - 1].strip() and not in_fence[i - 1]
+            and not _TOP_ATX.match(lines[i - 1]) and not _SETEXT.match(lines[i - 1])
+        ):
+            starts.append(i - 1)
+    return in_fence, starts, fence is not None
+
+
 def replace_learnings_section(agents_md: str, body: str) -> str:
     """Return *agents_md* with the ``## Campaign learnings`` body set to
-    *body*; everything outside that section is kept byte for byte."""
+    *body*; everything outside that section is kept byte for byte.
+
+    The body sits between ``LEARNINGS_START`` / ``LEARNINGS_END`` marker
+    lines, and only what is between them is replaced. A section written
+    before the markers existed ends at the next level 1–2 heading outside a
+    code fence; it is rewritten with markers. A missing section is
+    appended."""
     lines = agents_md.split("\n") if agents_md else []
     body_lines = body.strip("\n").split("\n") if body.strip() else []
-    start = next((i for i, line in enumerate(lines) if line.strip() == LEARNINGS_HEADING), None)
+    block = [LEARNINGS_START, *body_lines, LEARNINGS_END]
+    marks = [i for i, line in enumerate(lines) if line.strip() == LEARNINGS_START]
+    if marks:
+        open_at = marks[0]
+        close_at = next(
+            (j for j in range(open_at + 1, len(lines)) if lines[j].strip() == LEARNINGS_END),
+            None,
+        )
+        if close_at is not None:
+            return "\n".join([*lines[:open_at], *block, *lines[close_at + 1:]])
+    in_fence, starts, _ = _scan(lines)
+    start = next(
+        (i for i, line in enumerate(lines)
+         if line.strip() == LEARNINGS_HEADING and not in_fence[i]),
+        None,
+    )
     if start is None:
         prefix = list(lines)
         while prefix and not prefix[-1].strip():
             prefix.pop()
-        return "\n".join([*prefix, *([""] if prefix else []), LEARNINGS_HEADING, *body_lines])
-    end = next(
-        (j for j in range(start + 1, len(lines)) if _SECTION_BREAK.match(lines[j])), len(lines)
-    )
+        return "\n".join([*prefix, *([""] if prefix else []), LEARNINGS_HEADING, *block])
+    end = next((j for j in starts if j > start), len(lines))
     rest = lines[end:]
-    return "\n".join([*lines[: start + 1], *body_lines, *([""] + rest if rest else [])])
+    return "\n".join([*lines[: start + 1], *block, *([""] + rest if rest else [])])
 
 
-def _check_section_body(text: str) -> None:
-    for line in text.split("\n"):
-        if _SECTION_BREAK.match(line):
-            raise CampaignToolError(
-                "CAMPAIGN_LEARNING_OUTSIDE_SECTION",
-                f"text may not start another top-level section ({line.strip()[:60]!r}); "
-                f"it is the body of {LEARNINGS_HEADING} only — use ### sub-headings",
-            )
+def check_section_body(text: str) -> None:
+    """Refuse text that would end the section or break its markers: a
+    level 1–2 heading (ATX up to three spaces in, or setext) outside a
+    code fence, an unclosed fence, or a marker line."""
+    lines = text.split("\n")
+    _, starts, unclosed = _scan(lines)
+    problem: str | None = None
+    if any(line.strip() in {LEARNINGS_START, LEARNINGS_END} for line in lines):
+        problem = "the section markers"
+    elif starts:
+        problem = repr(lines[starts[0]].strip()[:60])
+    elif unclosed:
+        problem = "an unclosed code fence"
+    if problem is not None:
+        raise CampaignToolError(
+            "CAMPAIGN_LEARNING_OUTSIDE_SECTION",
+            f"text may not contain {problem}: it would start another top-level section. "
+            f"It is the body of {LEARNINGS_HEADING} only — use ### sub-headings and "
+            "close every code fence",
+        )
 
 
 async def _learning_events(db: AsyncSession, campaign_id: str) -> list[CampaignEvent]:
@@ -146,7 +218,7 @@ async def apply_learning(
     created = False
     path: str | None = None
     if target == "agents_md":
-        _check_section_body(text)
+        check_section_body(text)
         new_text = replace_learnings_section(snapshot.agents_md, text)
         operation = "write_agents_md"
         if new_text.strip() == snapshot.agents_md.strip():
@@ -233,11 +305,14 @@ async def apply_learning(
 
 
 __all__ = [
+    "LEARNINGS_END",
     "LEARNINGS_HEADING",
+    "LEARNINGS_START",
     "MAX_CHANGES_PER_RETROSPECTIVE",
     "MAX_CHANGE_BYTES",
     "apply_learning",
     "campaign_created_skills",
+    "check_section_body",
     "replace_learnings_section",
     "skill_path",
 ]
