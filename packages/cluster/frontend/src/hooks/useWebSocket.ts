@@ -63,6 +63,9 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
   // connection for the same participant took over. Retrying on a timer would
   // just knock that one off in turn, so we wait for the user to come back.
   const supersededRef = useRef(false);
+  // Whether a socket of this visit has opened before: a later open is a
+  // reconnect, after which REST-backed views refetch what they missed.
+  const openedRef = useRef(false);
   // Debounced typing expire timers — one per participant.
   // Each new typing=true RESETS the timer instead of stacking.
   const typingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -98,6 +101,10 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
       if (!isCurrentSocket()) return;
       updateState(() => ({ connected: true }));
       reconnectRef.current = 1;
+      if (openedRef.current) {
+        window.dispatchEvent(new CustomEvent('anygarden:ws:reconnected', { detail: { room_id: roomId } }));
+      }
+      openedRef.current = true;
     };
     ws.onclose = (evt) => {
       if (!isCurrentSocket()) return;
@@ -285,6 +292,7 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
     updateState(() => ({ messages: [], connected: false }));
     clearTyping();
     seqRef.current = 0;
+    openedRef.current = false;
     suppressReconnectRef.current = false;
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);

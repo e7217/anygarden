@@ -74,9 +74,48 @@ describe('useRoomCampaigns', () => {
     }
     expect(result.current.attempts['camp-1'].map(a => a.cycle_no)).toEqual([7, 6, 5, 4, 3])
 
-    // Frames for a campaign this room does not show are ignored.
-    dispatch('anygarden:campaign:attempt_updated', { type: 'campaign.attempt_updated', campaign_id: 'nope', attempt: attemptFixture() })
-    expect(result.current.attempts.nope).toBeUndefined()
+    // A frame for a campaign not listed yet is kept for when it shows up.
+    dispatch('anygarden:campaign:attempt_updated', { type: 'campaign.attempt_updated', campaign_id: 'nope', attempt: attemptFixture({ id: 'att-x' }) })
+    expect(result.current.attempts.nope.map(a => a.id)).toEqual(['att-x'])
+    expect(result.current.campaigns.map(c => c.id)).toEqual(['camp-1'])
+  })
+
+  it('keeps a newer frame that arrived while the list request was in flight', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    vi.mocked(globalThis.fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url === '/api/v1/rooms/room-1/campaigns') { await gate; return json([campaignFixture({ state_revision: 1 })]) }
+      if (url.startsWith('/api/v1/campaigns/camp-1/attempts')) {
+        return json({ items: [attemptFixture()], total: 1, next_offset: null })
+      }
+      return json({}, 404)
+    })
+    const { result } = renderHook(() => useRoomCampaigns('room-1'))
+    dispatch('anygarden:campaign:updated', { type: 'campaign.updated', campaign: campaignFixture({ status: 'paused', state_revision: 2 }) })
+    dispatch('anygarden:campaign:attempt_updated', {
+      type: 'campaign.attempt_updated', campaign_id: 'camp-1',
+      attempt: attemptFixture({ id: 'att-2', cycle_no: 2 }),
+    })
+    await act(async () => { release() })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.campaigns).toHaveLength(1)
+    expect(result.current.campaigns[0].status).toBe('paused')
+    expect(result.current.attempts['camp-1'].map(a => a.id)).toEqual(['att-2', 'att-1'])
+  })
+
+  it('reloads after the room socket reconnects', async () => {
+    const { result } = renderHook(() => useRoomCampaigns('room-1'))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    vi.mocked(globalThis.fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url === '/api/v1/rooms/room-1/campaigns') return json([campaignFixture({ status: 'blocked', state_revision: 5 })])
+      return json({ items: [], total: 0, next_offset: null })
+    })
+    dispatch('anygarden:ws:reconnected', { room_id: 'room-2' })
+    expect(result.current.campaigns[0].status).toBe('active')
+    dispatch('anygarden:ws:reconnected', { room_id: 'room-1' })
+    await waitFor(() => expect(result.current.campaigns[0].status).toBe('blocked'))
   })
 
   it('applies the response of an action', async () => {

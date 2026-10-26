@@ -52,6 +52,39 @@ export function upsertAttempt(list: CampaignAttempt[], incoming: CampaignAttempt
 }
 
 /**
+ * Fold the copies already held (*held*, e.g. from WebSocket frames that
+ * arrived while the list request was in flight) into a fresh REST *list*:
+ * the higher ``state_revision`` wins, and a campaign the list does not have
+ * yet (created after its snapshot) stays on top.
+ */
+export function mergeCampaigns(list: Campaign[], held: Campaign[]): Campaign[] {
+  return held.reduceRight((acc, campaign) => upsertCampaign(acc, campaign), list)
+}
+
+function attemptProgress(a: CampaignAttempt): number {
+  return (a.trusted_score != null ? 8 : 0) + (a.outcome ? 4 : 0) + (a.closed_at ? 2 : 0) + (a.eval_status !== 'pending' ? 1 : 0)
+}
+
+/** Union of fetched and held attempts per campaign, newest first, capped. */
+export function mergeAttempts(
+  fetched: Record<string, CampaignAttempt[]>,
+  held: Record<string, CampaignAttempt[]>,
+): Record<string, CampaignAttempt[]> {
+  const out: Record<string, CampaignAttempt[]> = { ...held }
+  for (const [id, items] of Object.entries(fetched)) {
+    const byId = new Map<string, CampaignAttempt>()
+    for (const a of items) byId.set(a.id, a)
+    for (const a of held[id] ?? []) {
+      const other = byId.get(a.id)
+      // Attempts carry no revision: keep the copy that got further.
+      if (!other || attemptProgress(a) > attemptProgress(other)) byId.set(a.id, a)
+    }
+    out[id] = [...byId.values()].sort((a, b) => b.cycle_no - a.cycle_no).slice(0, RECENT_ATTEMPTS)
+  }
+  return out
+}
+
+/**
  * The room's campaigns and their recent attempts (#930), kept current by
  * the ``campaign.updated`` / ``campaign.attempt_updated`` frames that
  * ``useWebSocket`` rebroadcasts on ``window``. ``null`` suspends it.
@@ -81,12 +114,28 @@ export function useRoomCampaigns(roomId: string | null): UseRoomCampaignsValue {
         campaigns.map(c => listCampaignAttempts(c.id, RECENT_ATTEMPTS).then(p => p.items).catch(() => [])),
       )
       if (!accepts()) return
-      const attempts: Record<string, CampaignAttempt[]> = {}
-      campaigns.forEach((c, i) => { attempts[c.id] = pages[i] })
-      setState({ roomId, campaigns, attempts, loading: false, error: null })
+      const fetched: Record<string, CampaignAttempt[]> = {}
+      campaigns.forEach((c, i) => { fetched[c.id] = pages[i] })
+      setState(prev => {
+        const held = prev.roomId === roomId
+        return {
+          roomId,
+          campaigns: held ? mergeCampaigns(campaigns, prev.campaigns) : campaigns,
+          attempts: held ? mergeAttempts(fetched, prev.attempts) : fetched,
+          loading: false,
+          error: null,
+        }
+      })
     } catch (error) {
       if (!accepts()) return
-      setState({ roomId, campaigns: [], attempts: {}, loading: false, error: error instanceof Error ? error.message : String(error) })
+      // Keep what is already shown (e.g. a refetch after a reconnect failed).
+      setState(prev => ({
+        roomId,
+        campaigns: prev.roomId === roomId ? prev.campaigns : [],
+        attempts: prev.roomId === roomId ? prev.attempts : {},
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      }))
     }
   }, [roomId])
 
@@ -105,17 +154,25 @@ export function useRoomCampaigns(roomId: string | null): UseRoomCampaignsValue {
       const attempt = detail?.attempt
       if (!id || !attempt) return
       setState(prev => {
-        if (prev.roomId !== roomId || !prev.campaigns.some(c => c.id === id)) return prev
+        // Kept even before its campaign is known (the frame may beat the
+        // list response); only attempts of listed campaigns are shown.
+        if (prev.roomId !== roomId) return prev
         return { ...prev, attempts: { ...prev.attempts, [id]: upsertAttempt(prev.attempts[id] ?? [], attempt) } }
       })
     }
+    // Frames sent while the socket was down are lost: reload on reconnect.
+    const onReconnect = (event: Event) => {
+      if ((event as CustomEvent<{ room_id?: string }>).detail?.room_id === roomId) void refresh()
+    }
     window.addEventListener('anygarden:campaign:updated', onCampaign)
     window.addEventListener('anygarden:campaign:attempt_updated', onAttempt)
+    window.addEventListener('anygarden:ws:reconnected', onReconnect)
     return () => {
       window.removeEventListener('anygarden:campaign:updated', onCampaign)
       window.removeEventListener('anygarden:campaign:attempt_updated', onAttempt)
+      window.removeEventListener('anygarden:ws:reconnected', onReconnect)
     }
-  }, [roomId])
+  }, [roomId, refresh])
 
   const apply = useCallback((campaign: Campaign) => {
     if (currentRoom.current !== campaign.room_id) return
