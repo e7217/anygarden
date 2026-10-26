@@ -16,6 +16,7 @@ which cycle they act on, so a stale turn of an earlier cycle is refused.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -309,6 +310,13 @@ async def record_attempt(
     }
 
 
+def _closed_meanwhile() -> CampaignToolError:
+    return CampaignToolError(
+        "CAMPAIGN_CYCLE_CLOSED",
+        "This campaign cycle closed meanwhile. Nothing more is recorded for it; end this turn.",
+    )
+
+
 def _parse_at(value: Any) -> datetime:
     if not isinstance(value, str):
         raise CampaignToolError("CAMPAIGN_INVALID_ARGUMENT", "at must be an ISO timestamp")
@@ -346,11 +354,20 @@ async def schedule_wakeup(
     if delay_seconds is not None:
         if isinstance(delay_seconds, bool) or not isinstance(delay_seconds, int | float):
             raise CampaignToolError("CAMPAIGN_INVALID_ARGUMENT", "delay_seconds must be a number")
-        wake_at = now + timedelta(seconds=float(delay_seconds))
+        delay = float(delay_seconds)
+        if not math.isfinite(delay):
+            raise CampaignToolError(
+                "CAMPAIGN_INVALID_ARGUMENT", "delay_seconds must be a finite number"
+            )
+        # Check the range before building a timedelta: a huge value overflows.
+        wake_at = (
+            now + timedelta(seconds=delay)
+            if MIN_WAKEUP_SECONDS <= delay <= MAX_WAKEUP_SECONDS else None
+        )
     else:
         wake_at = _parse_at(at)
-    delay = (wake_at - now).total_seconds()
-    if not MIN_WAKEUP_SECONDS <= delay <= MAX_WAKEUP_SECONDS:
+        delay = (wake_at - now).total_seconds()
+    if wake_at is None or not MIN_WAKEUP_SECONDS <= delay <= MAX_WAKEUP_SECONDS:
         raise CampaignToolError(
             "CAMPAIGN_WAKEUP_OUT_OF_RANGE",
             f"The wake-up must be {MIN_WAKEUP_SECONDS}s to {MAX_WAKEUP_SECONDS // 86400} days away",
@@ -360,12 +377,14 @@ async def schedule_wakeup(
             "CAMPAIGN_WAKEUP_AFTER_DEADLINE", "The wake-up must be before the campaign deadline"
         )
     text = _text(reason, field="reason", limit=WAKE_REASON_MAX)
-    await db.execute(
+    result = await db.execute(
         update(CampaignAttempt)
         .where(CampaignAttempt.id == attempt.id, CampaignAttempt.closed_at.is_(None))
         .values(wake_at=wake_at, wake_reason=text)
         .execution_options(synchronize_session=False)
     )
+    if result.rowcount != 1:
+        raise _closed_meanwhile()
     attempt.wake_at, attempt.wake_reason = wake_at, text
     mark(db, attempt_id=attempt.id)
     await record_event(
@@ -406,12 +425,14 @@ async def report_blocked(
     campaign, attempt = ctx.campaign, ctx.attempt
     reason_text = _text(reason, field="reason", limit=REASON_MAX)
     hint = _text(unblock_hint, field="unblock_hint", limit=REASON_MAX)
-    await db.execute(
+    result = await db.execute(
         update(CampaignAttempt)
         .where(CampaignAttempt.id == attempt.id, CampaignAttempt.closed_at.is_(None))
         .values(block_reason=reason_text, unblock_hint=hint)
         .execution_options(synchronize_session=False)
     )
+    if result.rowcount != 1:
+        raise _closed_meanwhile()
     attempt.block_reason, attempt.unblock_hint = reason_text, hint
     mark(db, attempt_id=attempt.id)
     await record_event(

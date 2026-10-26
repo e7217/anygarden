@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from anygarden.campaigns import lifecycle
 from anygarden.campaigns.scheduler import CampaignScheduler
@@ -415,3 +415,54 @@ async def test_an_ordinary_execution_still_needs_a_child_task(flow_harness):
     refused = await _error(h, turn, "complete_project_execution",
                            execution_id=begun["execution_id"], summary="Done.")
     assert "Seal concrete required work" in str(refused)
+
+
+@pytest.mark.parametrize("delay", [1e20, -1e300])
+async def test_a_huge_wakeup_is_refused_not_a_crash(flow_harness, delay):
+    h = flow_harness
+    cycle = await _open_cycle(h)
+    error = await _error(h, cycle["turn"], "schedule_campaign_wakeup", delay_seconds=delay,
+                         reason="later")
+    assert error["code"] == "CAMPAIGN_WAKEUP_OUT_OF_RANGE"
+
+
+@pytest.mark.parametrize("delay", [float("inf"), float("-inf"), float("nan")])
+async def test_a_non_finite_wakeup_is_an_invalid_argument(flow_harness, delay):
+    from anygarden.campaigns import agent_actions
+    from anygarden.campaigns.agent_actions import CampaignToolError, CycleContext
+
+    h = flow_harness
+    cycle = await _open_cycle(h)
+    async with h.sessions() as db:
+        campaign = await db.get(Campaign, cycle["campaign_id"])
+        attempt = await db.scalar(select(CampaignAttempt).where(
+            CampaignAttempt.campaign_id == campaign.id))
+        ctx = CycleContext(campaign=campaign, attempt=attempt, turn=None)
+        with pytest.raises(CampaignToolError) as err:
+            await agent_actions.schedule_wakeup(db, ctx, delay_seconds=delay, reason="r")
+        assert err.value.code == "CAMPAIGN_INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize("tool", ["schedule_wakeup", "report_blocked"])
+async def test_a_cycle_closed_meanwhile_refuses_wakeup_and_block_reports(flow_harness, tool):
+    from anygarden.campaigns import agent_actions
+    from anygarden.campaigns.agent_actions import CampaignToolError, CycleContext
+
+    h = flow_harness
+    cycle = await _open_cycle(h)
+    async with h.sessions() as db:
+        campaign = await db.get(Campaign, cycle["campaign_id"])
+        attempt = await db.scalar(select(CampaignAttempt).where(
+            CampaignAttempt.campaign_id == campaign.id))
+        ctx = CycleContext(campaign=campaign, attempt=attempt, turn=None)
+        # Another writer closes the cycle after the guard read it as open.
+        await db.execute(update(CampaignAttempt).where(CampaignAttempt.id == attempt.id)
+                         .values(closed_at=datetime.now(UTC))
+                         .execution_options(synchronize_session=False))
+        with pytest.raises(CampaignToolError) as err:
+            if tool == "schedule_wakeup":
+                await agent_actions.schedule_wakeup(db, ctx, delay_seconds=600, reason="r")
+            else:
+                await agent_actions.report_blocked(db, ctx, reason="r", unblock_hint="h")
+        assert err.value.code == "CAMPAIGN_CYCLE_CLOSED"
+        assert attempt.wake_at is None and attempt.block_reason is None
