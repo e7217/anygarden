@@ -398,9 +398,10 @@ async def begin_execution(
             "Execution must be linked to its actual operating-room request",
         )
     # A scheduled Goal may be promoted without copying its goal_id to children.
+    # A campaign cycle Task (#930) is the same kind of server-scheduled root.
     if (author is None or author.user_id is None) and (
         root is None
-        or root.goal_id is None
+        or (root.goal_id is None and root.campaign_id is None)
         or root.source_message_id not in {None, source.id}
     ):
         _reject(
@@ -436,6 +437,18 @@ async def begin_execution(
         or root.assignee_participant_id != turn.target_participant_id
     ):
         _reject("TURN_TASK_CONFLICT", "Existing turn task is not an unbound lead root")
+    campaign = None
+    if root is not None and root.campaign_id is not None:
+        # #930 CMP-03 — a cycle spends what its campaign has left.
+        from anygarden.campaigns.policy import CampaignPolicyError
+        from anygarden.campaigns.service import cycle_execution_limits
+
+        try:
+            campaign, run_limits, deadline = await cycle_execution_limits(
+                db, root=root, limits=run_limits, deadline_at=deadline, clock=_now,
+            )
+        except CampaignPolicyError as exc:
+            _reject(exc.code, exc.message)
     if root is None:
         root = await db.scalar(select(Task).where(Task.source_message_id == source.id))
         if root is not None and (
@@ -477,7 +490,11 @@ async def begin_execution(
         project_id=room.project_id,
         operating_room_id=room.id,
         lead_agent_id=agent_id,
-        owner_user_id=author.user_id if author else None,
+        owner_user_id=(
+            author.user_id if author and author.user_id
+            else campaign.owner_id if campaign is not None
+            else None
+        ),
         source_message_id=source.id,
         root_task_id=root.id,
         goal_id=root.goal_id,
@@ -499,6 +516,10 @@ async def begin_execution(
     root.status = "in_progress"
     root.started_at = root.started_at or _now()
     turn.task_id = root.id
+    if campaign is not None:
+        from anygarden.campaigns.service import attach_cycle_execution
+
+        await attach_cycle_execution(db, root=root, execution_id=execution.id)
     revision = ExecutionInputRevision(
             execution_id=execution.id,
             revision=1,

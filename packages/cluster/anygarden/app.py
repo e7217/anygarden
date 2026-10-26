@@ -1325,6 +1325,18 @@ async def _startup_server(app: FastAPI) -> None:
     if hasattr(app.state.goal_scheduler, "start"):
         app.state.goal_scheduler.start()
 
+    # #930 — metric-driven campaigns: opens each campaign's next cycle
+    # Task. Same lifespan and stub convention as the goal scheduler.
+    if not getattr(app.state, "campaign_scheduler", None):
+        from anygarden.campaigns.scheduler import CampaignScheduler
+
+        app.state.campaign_scheduler = CampaignScheduler(
+            app.state.session_factory,
+            manager=getattr(app.state, "connection_manager", None),
+        )
+    if hasattr(app.state.campaign_scheduler, "start"):
+        app.state.campaign_scheduler.start()
+
     # SYS-06 — periodic PyPI update check filling the ``/updates`` cache.
     # ``ANYGARDEN_UPDATE_CHECK_INTERVAL_HOURS=0`` disables it (air-gapped
     # installs, tests); a pre-set ``app.state.update_check_task`` is kept.
@@ -1370,14 +1382,15 @@ async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    # #302 — stop the goal scheduler. ``stop`` is idempotent and
-    # safe to call when no scheduler ever started.
-    scheduler = getattr(app.state, "goal_scheduler", None)
-    if scheduler is not None and hasattr(scheduler, "stop"):
-        try:
-            await scheduler.stop()
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+    # #302 / #930 — stop the goal and campaign schedulers. ``stop`` is
+    # idempotent and safe to call when a scheduler never started.
+    for scheduler_attr in ("goal_scheduler", "campaign_scheduler"):
+        scheduler = getattr(app.state, scheduler_attr, None)
+        if scheduler is not None and hasattr(scheduler, "stop"):
+            try:
+                await scheduler.stop()
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
     if not engine_provided and getattr(app.state, "engine", None) is not None:
         await app.state.engine.dispose()
@@ -2014,6 +2027,7 @@ def create_app(
             ("orphan_sweeper", "orphan_sweeper_task"),
             ("span_reaper", "span_reaper_task"),
             ("goal_scheduler", "goal_scheduler"),
+            ("campaign_scheduler", "campaign_scheduler"),
         ):
             obj = getattr(app.state, attr, None)
             if obj is None:
