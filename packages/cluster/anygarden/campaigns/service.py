@@ -247,7 +247,10 @@ async def apply_transition(
         # is due (never after ``stopped``).
         values.setdefault("retro_due", new_status)
         if "final_attempt_id" not in values:
-            values["final_attempt_id"] = await default_final_attempt_id(db, campaign)
+            # A closing cycle may become the best in this same write.
+            values["final_attempt_id"] = await default_final_attempt_id(
+                db, campaign, best_attempt_id=values.get("best_attempt_id", campaign.best_attempt_id)
+            )
     if not await cas_update(
         db, campaign, clock=clock, expected_revision=expected_revision,
         status=new_status, **values,
@@ -269,9 +272,14 @@ RETRO_STATUSES: frozenset[str] = frozenset({"achieved", "deadline_reached", "bud
 """Ends that run a retrospective cycle (``stopped`` does not)."""
 
 
-async def default_final_attempt_id(db: AsyncSession, campaign: Campaign) -> str | None:
+async def default_final_attempt_id(
+    db: AsyncSession, campaign: Campaign, *, best_attempt_id: str | None = None
+) -> str | None:
     """The final result when the loop ends (§3.3): the best trusted score
-    among valid cycles, otherwise the best dev score (shown unverified)."""
+    among valid cycles, otherwise the best dev score (shown unverified).
+
+    *best_attempt_id* overrides ``campaign.best_attempt_id`` when the
+    transition that ends the loop also writes a new best."""
     from anygarden.campaigns.judge import gain
 
     rows = list(await db.scalars(
@@ -290,7 +298,7 @@ async def default_final_attempt_id(db: AsyncSession, campaign: Campaign) -> str 
             best = attempt
     if best is not None:
         return best.id
-    return campaign.best_attempt_id
+    return best_attempt_id if best_attempt_id is not None else campaign.best_attempt_id
 
 
 # ── Creation ────────────────────────────────────────────────────────
