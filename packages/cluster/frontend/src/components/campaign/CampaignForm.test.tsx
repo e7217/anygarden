@@ -64,6 +64,34 @@ describe('CampaignForm', () => {
     }))
   })
 
+  it('focuses the first invalid field after a failed submit', () => {
+    renderForm()
+    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    expect(screen.getByLabelText(/^Title$/)).toHaveFocus()
+    expect(screen.getByTestId('campaign-form-advanced')).not.toHaveAttribute('open')
+  })
+
+  it('unfolds "Advanced" when one of its fields is invalid', () => {
+    renderForm()
+    fill(/^Title$/, 'T'); fill(/Purpose/, 'P'); fill(/Metric name/, 'm'); fill(/Target score/, '1'); fill(/Evaluator command/, 'c')
+    fill(/time limit/, '0')
+    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    expect(screen.getByTestId('campaign-form-advanced')).toHaveAttribute('open')
+    expect(screen.getByLabelText(/time limit/)).toHaveFocus()
+    expect(screen.getByText('Enter 1 to 21600 seconds.')).toBeInTheDocument()
+  })
+
+  it.each([
+    [new CampaignApiError('Task management requires a room admin or owner', 403, null, null), 'Only a room admin or owner can start a campaign'],
+    [new CampaignApiError('no', 409, 'CAMPAIGN_CONFLICT', 'ROOM_ARCHIVED'), 'The room is archived'],
+    [new CampaignApiError('Server exploded', 500, null, null), "Couldn't start the campaign: Server exploded"],
+  ])('explains a create failure (%#)', async (error, text) => {
+    renderForm(vi.fn(async () => { throw error }))
+    fill(/^Title$/, 'T'); fill(/Purpose/, 'P'); fill(/Metric name/, 'm'); fill(/Target score/, '1'); fill(/Evaluator command/, 'c')
+    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(text)
+  })
+
   it('explains an evaluator permission error', async () => {
     const onSubmit = vi.fn(async () => { throw new CampaignApiError('no', 403, 'CAMPAIGN_EVALUATOR_FORBIDDEN', null) })
     renderForm(onSubmit)

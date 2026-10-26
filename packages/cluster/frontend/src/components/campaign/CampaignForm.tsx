@@ -5,9 +5,12 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useLocale } from '@/i18n/LocaleProvider'
-import { CampaignApiError, type Campaign, type CampaignCreateInput, type CampaignMode } from '@/lib/campaigns'
+import type { Campaign, CampaignCreateInput, CampaignMode } from '@/lib/campaigns'
+import { campaignErrorMessage } from './campaignErrors'
 import {
+  ADVANCED_FIELDS,
   buildCampaignInput,
+  firstInvalidField,
   campaignFormFields,
   emptyCampaignDraft,
   type CampaignDraft,
@@ -40,13 +43,22 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated }
   const [errors, setErrors] = useState<DraftErrors>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  // The field to focus once a failed submit has rendered its errors.
+  const [focusField, setFocusField] = useState<{ field: DraftField } | null>(null)
 
   useEffect(() => {
     if (!open) return
     setDraft(emptyCampaignDraft())
     setErrors({})
     setSubmitError(null)
+    setAdvancedOpen(false)
   }, [open])
+
+  useEffect(() => {
+    if (!focusField) return
+    document.getElementById(`${id}-${focusField.field}`)?.focus()
+  }, [focusField, id])
 
   const rules = campaignFormFields(draft.mode)
   const set = <K extends keyof CampaignDraft>(key: K, value: CampaignDraft[K]) =>
@@ -73,20 +85,20 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated }
     const { errors: next, input } = buildCampaignInput(draft)
     setErrors(next)
     setSubmitError(null)
-    if (!input) return
+    if (!input) {
+      // An error inside the folded "Advanced" group would be invisible.
+      if (ADVANCED_FIELDS.some(name => next[name])) setAdvancedOpen(true)
+      const first = firstInvalidField(next)
+      if (first) setFocusField({ field: first })
+      return
+    }
     setSubmitting(true)
     try {
       const campaign = await onSubmit(input)
       onOpenChange(false)
       onCreated?.(campaign)
     } catch (error) {
-      if (error instanceof CampaignApiError && error.code === 'CAMPAIGN_EVALUATOR_FORBIDDEN') {
-        setSubmitError(t('campaigns.error.evaluatorForbidden'))
-      } else if (error instanceof CampaignApiError && error.reason === 'ROOM_LEAD_REQUIRED') {
-        setSubmitError(t('campaigns.error.leadRequired'))
-      } else {
-        setSubmitError(t('campaigns.error.createFailed', { message: error instanceof Error ? error.message : String(error) }))
-      }
+      setSubmitError(campaignErrorMessage(t, error, 'create'))
     } finally {
       setSubmitting(false)
     }
@@ -169,7 +181,12 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated }
             </div>
           </fieldset>
 
-          <details className="group rounded-[var(--radius-sm)] border border-[var(--color-border)]" data-testid="campaign-form-advanced">
+          <details
+            className="group rounded-[var(--radius-sm)] border border-[var(--color-border)]"
+            data-testid="campaign-form-advanced"
+            open={advancedOpen}
+            onToggle={event => setAdvancedOpen(event.currentTarget.open)}
+          >
             <summary className="min-h-11 cursor-pointer content-center px-3 text-caption font-medium">{t('campaigns.form.advanced')}</summary>
             <div className="flex flex-col gap-4 border-t border-[var(--color-border)] p-3">
               <div className="grid gap-4 sm:grid-cols-2">

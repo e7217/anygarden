@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildCampaignInput, campaignFormFields, emptyCampaignDraft, type CampaignDraft } from './campaignDraft'
+import { buildCampaignInput, campaignFormFields, emptyCampaignDraft, firstInvalidField, type CampaignDraft } from './campaignDraft'
 
 const NOW = new Date('2026-10-26T00:00:00Z')
 
@@ -70,5 +70,13 @@ describe('buildCampaignInput', () => {
 
   it('maps the trusted checkbox to trusted_eval external', () => {
     expect(buildCampaignInput(draft({ target: '1', trustedExternal: true }), NOW).input?.trusted_eval).toBe('external')
+  })
+})
+
+describe('firstInvalidField', () => {
+  it('follows the form order', () => {
+    expect(firstInvalidField({ timeoutSec: 'campaigns.form.timeoutRange', purpose: 'campaigns.form.required' })).toBe('purpose')
+    expect(firstInvalidField({ cwd: 'campaigns.form.required' })).toBe('cwd')
+    expect(firstInvalidField({})).toBeNull()
   })
 })

@@ -68,6 +68,19 @@ export type DraftField =
 
 export type DraftErrors = Partial<Record<DraftField, MessageKey>>
 
+/** Fields in the form's order, so the first invalid one gets focus. */
+export const DRAFT_FIELD_ORDER: readonly DraftField[] = [
+  'title', 'purpose', 'metricName', 'target', 'deadline',
+  'command', 'scoreKey', 'budgetTokens', 'cwd', 'timeoutSec',
+]
+
+/** Fields folded under "Advanced"; an error there must unfold it. */
+export const ADVANCED_FIELDS: readonly DraftField[] = ['cwd', 'timeoutSec']
+
+export function firstInvalidField(errors: DraftErrors): DraftField | null {
+  return DRAFT_FIELD_ORDER.find(field => errors[field]) ?? null
+}
+
 const MAX_TIMEOUT_SEC = 6 * 3600
 
 /** Check *draft* and build the request body the server accepts. */
