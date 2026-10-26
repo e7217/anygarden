@@ -29,7 +29,10 @@ from sqlalchemy import func, select
 from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.campaigns import evaluation, lifecycle
-from anygarden.campaigns.evaluation import handle_eval_result_frame, request_pending_evals
+from anygarden.campaigns.evaluation import (
+    handle_eval_result_frame,
+    request_pending_evals,
+)
 from anygarden.campaigns.scheduler import CampaignScheduler
 from anygarden.campaigns.service import attach_cycle_execution, create_campaign
 from anygarden.config import AnygardenSettings

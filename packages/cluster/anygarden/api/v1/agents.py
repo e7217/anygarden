@@ -22,7 +22,6 @@ from anygarden.agent_availability import (
     render_unavailable_message,
 )
 from anygarden.agent_files import AgentFilePathError, validate_agent_file_path
-from anygarden.workspaces import moves
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import (
     ActivityLog,
@@ -47,6 +46,7 @@ from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.rooms.roster import broadcast_roster, broadcast_roster_for_agent
 from anygarden.task_service import release_participant_tasks, source_thread_root_id
+from anygarden.workspaces import moves
 from anygarden.workspaces.managed_router import router as managed_workspace_router
 
 if TYPE_CHECKING:

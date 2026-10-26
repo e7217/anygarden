@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 
 from anygarden.api.v1.agents import router as agents_api_router
 from anygarden.api.v1.budgets import router as budgets_router
+from anygarden.api.v1.campaigns import router as campaigns_router
 from anygarden.api.v1.engine_endpoints import (
     probe_router as engine_endpoint_probe_router,
 )
@@ -22,7 +23,6 @@ from anygarden.api.v1.engine_endpoints import (
 )
 from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
 from anygarden.api.v1.goals import router as goals_router
-from anygarden.api.v1.campaigns import router as campaigns_router
 from anygarden.api.v1.graph import router as graph_router
 from anygarden.api.v1.invites import router as invites_router
 from anygarden.api.v1.machine_links import router as machine_links_router
