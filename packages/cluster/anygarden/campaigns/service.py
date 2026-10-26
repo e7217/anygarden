@@ -99,6 +99,11 @@ for _status in OPEN_STATUSES:
     _TRANSITIONS[(_status, "edit")] = _status
     _TRANSITIONS[(_status, "extend")] = _status
 del _status
+# #930 — an extension that raises the deadline or the budget past what
+# ended the loop reopens it; ``extend_campaign`` checks that it does.
+# ``achieved`` and ``stopped`` stay final.
+_TRANSITIONS[("deadline_reached", "extend")] = "active"
+_TRANSITIONS[("budget_exhausted", "extend")] = "active"
 
 EVENTS: frozenset[str] = frozenset(event for _, event in _TRANSITIONS)
 
@@ -334,6 +339,76 @@ async def find_agent_participant(
     )
 
 
+# ── Extension ───────────────────────────────────────────────────────
+
+
+async def extend_campaign(
+    db: AsyncSession,
+    campaign: Campaign,
+    *,
+    actor: str,
+    deadline_at: datetime | None = None,
+    max_total_tokens: int | None = None,
+    clock: Clock = utcnow,
+) -> bool:
+    """Raise the deadline and/or the token budget. Caller commits.
+
+    On an open campaign the status stays. A ``deadline_reached`` or
+    ``budget_exhausted`` campaign returns to ``active`` only when the
+    extension clears what ended it (a later deadline, a budget above what
+    was used); otherwise :class:`CampaignPolicyError`. ``achieved`` and
+    ``stopped`` refuse with :class:`IllegalTransition`. Returns ``False``
+    when the CAS lost.
+    """
+    now = clock()
+    transition(campaign.status, "extend")  # refuse final statuses early
+    if deadline_at is None and max_total_tokens is None:
+        raise CampaignPolicyError("EXTEND_NOTHING", "Give a new deadline or token budget")
+    values: dict[str, Any] = {}
+    details: dict[str, Any] = {}
+    deadline = _aware(campaign.deadline_at) if campaign.deadline_at is not None else None
+    if deadline_at is not None:
+        if deadline_at.tzinfo is None or deadline_at <= now or (
+            deadline is not None and deadline_at <= deadline
+        ):
+            raise CampaignPolicyError(
+                "INVALID_DEADLINE", "The new deadline must be later than now and the current one"
+            )
+        values["deadline_at"] = deadline_at
+        details["deadline_at"] = {"from": deadline.isoformat() if deadline else None,
+                                  "to": deadline_at.isoformat()}
+        deadline = deadline_at
+    budget = dict(campaign.budget)
+    if max_total_tokens is not None:
+        if (
+            not isinstance(max_total_tokens, int) or isinstance(max_total_tokens, bool)
+            or max_total_tokens <= int(budget["max_total_tokens"])
+        ):
+            raise CampaignPolicyError(
+                "INVALID_BUDGET", "The new token budget must be larger than the current one"
+            )
+        details["max_total_tokens"] = {"from": budget["max_total_tokens"], "to": max_total_tokens}
+        budget["max_total_tokens"] = max_total_tokens
+        values["budget"] = budget
+    if campaign.status in {"deadline_reached", "budget_exhausted"}:
+        deadline_clear = deadline is None or deadline > now
+        budget_clear = usable_tokens(budget) > int(campaign.tokens_used or 0)
+        if not (deadline_clear and budget_clear):
+            raise CampaignPolicyError(
+                "EXTEND_DOES_NOT_REOPEN",
+                "The extension does not clear both the deadline and the budget",
+            )
+        values["stop_reason"] = None
+        values["final_attempt_id"] = None
+        current_next = campaign.next_cycle_at
+        values["next_cycle_at"] = (
+            now if current_next is None or _aware(current_next) < now else current_next
+        )
+    return await apply_transition(
+        db, campaign, "extend", actor=actor, clock=clock, details=details, **values,
+    )
+
+
 # ── Budget ──────────────────────────────────────────────────────────
 
 
@@ -422,6 +497,7 @@ __all__ = [
     "create_campaign",
     "cycle_closed_at",
     "cycle_execution_limits",
+    "extend_campaign",
     "find_agent_participant",
     "next_cycle_at",
     "open_attempt_for_task",

@@ -27,6 +27,10 @@ SECTION_TITLES: tuple[str, ...] = (
     "## Rules",
 )
 
+STRATEGY_CHANGE_REASON = "change_strategy"
+"""``Campaign.wake_reason`` set by the judge when an optimize campaign
+plateaus (mirrors ``lifecycle.STRATEGY_CHANGE``)."""
+
 RECENT_ATTEMPTS = 5
 RECENT_LESSONS = 5
 DEADLINE_CLOSE_RATIO = 0.10
@@ -131,7 +135,12 @@ def _patterns(cycles: Sequence[CampaignAttempt]) -> str:
 
 def _directives(campaign: Campaign, cycles: Sequence[CampaignAttempt], now: datetime) -> str:
     items: list[str] = []
-    if campaign.mode == "optimize" and (campaign.cycles_since_improvement or 0) >= PLATEAU_WINDOW:
+    if campaign.wake_reason == STRATEGY_CHANGE_REASON:
+        items.append(
+            f"- **Change strategy.** {PLATEAU_WINDOW} cycles in a row brought no improvement:"
+            " try a substantially different approach instead of tuning the current one."
+        )
+    elif campaign.mode == "optimize" and (campaign.cycles_since_improvement or 0) >= PLATEAU_WINDOW:
         items.append(
             f"- **Change strategy.** {campaign.cycles_since_improvement} cycles without improvement:"
             " try a substantially different approach instead of tuning the current one."

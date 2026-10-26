@@ -236,11 +236,17 @@ async def test_archived_room_stops_the_campaign(sessions):
     async with sessions() as db:
         (await db.get(Room, ids["room"])).archived_at = NOW - timedelta(minutes=1)
         await db.commit()
-    outcomes = await _scheduler(sessions)._tick()
-    assert [o.action for o in outcomes] == ["stopped"]
+    # The tick's reconcile step stops it before any cycle could open.
+    assert await _scheduler(sessions)._tick() == []
     async with sessions() as db:
         campaign = await db.get(Campaign, ids["campaign"])
         assert (campaign.status, campaign.stop_reason) == ("stopped", "room_archived")
+    # ``advance`` on its own still refuses an archived room.
+    async with sessions() as db:
+        campaign = await db.get(Campaign, ids["campaign"])
+        campaign.status = "active"
+        await db.commit()
+    assert (await _scheduler(sessions).advance(ids["campaign"], now=NOW)).action == "stopped"
     assert await _counts(sessions, ids["campaign"]) == (0, 0)
 
 

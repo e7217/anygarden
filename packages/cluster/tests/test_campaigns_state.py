@@ -14,6 +14,7 @@ from anygarden.campaigns.service import (
     apply_transition,
     create_campaign,
     cycle_closed_at,
+    extend_campaign,
     next_cycle_at,
     record_event,
     transition,
@@ -56,6 +57,9 @@ for _status in _ANY_OPEN:
     EXPECTED[(_status, "stop")] = "stopped"
     EXPECTED[(_status, "edit")] = _status
     EXPECTED[(_status, "extend")] = _status
+# An extension that clears the deadline/budget reopens those two.
+EXPECTED[("deadline_reached", "extend")] = "active"
+EXPECTED[("budget_exhausted", "extend")] = "active"
 
 
 def test_status_vocabulary():
@@ -77,9 +81,11 @@ def test_full_transition_table(status, event):
         assert transition(status, event) == expected
 
 
-def test_terminal_statuses_accept_no_event():
+def test_terminal_statuses_accept_no_event_but_extend():
     for status in TERMINAL_STATUSES:
         for event in EVENTS:
+            if event == "extend" and status in {"deadline_reached", "budget_exhausted"}:
+                continue
             with pytest.raises(IllegalTransition):
                 transition(status, event)
 
@@ -243,3 +249,64 @@ async def test_apply_transition_raises_on_an_illegal_event(db):
     with pytest.raises(IllegalTransition):
         await apply_transition(db, campaign, "confirm", actor="user:x", clock=lambda: NOW)
     assert isinstance(campaign, Campaign) and campaign.status == "active"
+
+
+# ── extend (coordinator decision: reopen deadline/budget ends) ──────
+
+
+async def test_extend_keeps_an_open_status_and_records_the_change(db):
+    owner, _, room = await _project_room(db)
+    campaign = await create_campaign(db, **_create_args(owner, room))
+    assert await extend_campaign(db, campaign, actor="user:x", max_total_tokens=200_000,
+                                 clock=lambda: NOW)
+    assert campaign.status == "active" and campaign.budget["max_total_tokens"] == 200_000
+    event = await db.scalar(select(CampaignEvent).where(CampaignEvent.type == "status_changed"))
+    assert event.details["event"] == "extend"
+    assert event.details["max_total_tokens"] == {"from": 100_000, "to": 200_000}
+
+
+async def test_extend_reopens_a_budget_exhausted_campaign(db):
+    owner, _, room = await _project_room(db)
+    campaign = await create_campaign(db, **_create_args(owner, room))
+    campaign.tokens_used = 96_000
+    campaign.status = "budget_exhausted"
+    campaign.stop_reason = "budget"
+    await db.flush()
+    with pytest.raises(CampaignPolicyError) as exc:
+        # 101k × 0.95 is still below what was used.
+        await extend_campaign(db, campaign, actor="user:x", max_total_tokens=101_000,
+                              clock=lambda: NOW)
+    assert exc.value.code == "EXTEND_DOES_NOT_REOPEN"
+    assert await extend_campaign(db, campaign, actor="user:x", max_total_tokens=150_000,
+                                 clock=lambda: NOW)
+    assert (campaign.status, campaign.stop_reason) == ("active", None)
+    assert campaign.next_cycle_at == NOW
+
+
+async def test_extend_reopens_a_deadline_reached_campaign_only_with_a_later_deadline(db):
+    owner, _, room = await _project_room(db)
+    campaign = await create_campaign(
+        db, **{**_create_args(owner, room), "deadline_at": NOW + timedelta(hours=1)}
+    )
+    campaign.status = "deadline_reached"
+    await db.flush()
+    later = NOW + timedelta(days=1)
+    with pytest.raises(CampaignPolicyError):
+        await extend_campaign(db, campaign, actor="user:x", max_total_tokens=200_000,
+                              clock=lambda: NOW + timedelta(hours=2))
+    with pytest.raises(CampaignPolicyError):
+        await extend_campaign(db, campaign, actor="user:x", deadline_at=NOW + timedelta(minutes=30),
+                              clock=lambda: NOW)
+    assert await extend_campaign(db, campaign, actor="user:x", deadline_at=later,
+                                 clock=lambda: NOW + timedelta(hours=2))
+    assert campaign.status == "active" and campaign.deadline_at == later
+
+
+@pytest.mark.parametrize("status", ["achieved", "stopped"])
+async def test_extend_refuses_final_statuses(db, status):
+    owner, _, room = await _project_room(db)
+    campaign = await create_campaign(db, **_create_args(owner, room))
+    campaign.status = status
+    with pytest.raises(IllegalTransition):
+        await extend_campaign(db, campaign, actor="user:x", max_total_tokens=200_000,
+                              clock=lambda: NOW)

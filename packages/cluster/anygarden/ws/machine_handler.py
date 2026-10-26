@@ -148,6 +148,20 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
         await _handle_register(session_factory, machine_id, data)
         # Place any orphaned agents (desired=running, no machine)
         await _place_orphaned_agents(session_factory, lifecycle)
+        # #930 — re-send campaign evaluations that waited for this machine.
+        from anygarden.campaigns.evaluation import request_pending_evals_soon
+
+        request_pending_evals_soon(app, machine_id)
+
+    elif frame_type == "campaign_eval_ack":
+        # #930 — the machine took (or refused) an evaluation job.
+        machine_bus.resolve_campaign_eval_ack(machine_id, data)
+
+    elif frame_type == "campaign_eval_result":
+        # #930 — score the cycle; matched by the persisted job id.
+        from anygarden.campaigns.evaluation import handle_eval_result_frame
+
+        await handle_eval_result_frame(session_factory, machine_id, data)
 
     elif frame_type == "report_actual_state":
         agents_data = data.get("agents", [])

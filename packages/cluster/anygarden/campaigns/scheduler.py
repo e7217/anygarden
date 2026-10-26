@@ -33,6 +33,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anygarden.campaigns.brief import render_brief
+from anygarden.campaigns.evaluation import (
+    dispatch_eval,
+    install_dispatcher,
+    request_pending_evals,
+    uninstall_dispatcher,
+)
+from anygarden.campaigns.lifecycle import expire_eval_deadlines, reconcile_open_cycles
 from anygarden.campaigns.service import (
     Clock,
     apply_transition,
@@ -47,6 +54,7 @@ from anygarden.db.models import Campaign, CampaignAttempt, Room
 from anygarden.task_materialize import materialize_assigned_task
 
 if TYPE_CHECKING:
+    from anygarden.scheduler.machine_bus import MachineBus
     from anygarden.ws.manager import ConnectionManager
 
 log = logging.getLogger(__name__)
@@ -89,11 +97,13 @@ class CampaignScheduler:
         *,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         manager: ConnectionManager | None = None,
+        machine_bus: MachineBus | None = None,
         clock: Clock = utcnow,
     ) -> None:
         self._session_factory = session_factory
         self._poll_interval = poll_interval_seconds
         self._manager = manager
+        self._machine_bus = machine_bus
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -102,10 +112,12 @@ class CampaignScheduler:
         if self._task is not None and not self._task.done():
             return
         self._stop_event.clear()
+        install_dispatcher(self.dispatch_eval)
         self._task = asyncio.create_task(self._run(), name="anygarden-campaign-scheduler")
         log.info("campaign_scheduler_started", extra={"interval": self._poll_interval})
 
     async def stop(self) -> None:
+        uninstall_dispatcher(self.dispatch_eval)
         if self._task is None:
             return
         self._stop_event.set()
@@ -131,8 +143,32 @@ class CampaignScheduler:
             else:
                 break
 
+    async def dispatch_eval(self, attempt_id: str) -> str:
+        """Send one pending evaluation to its machine (after-commit hook)."""
+        return await dispatch_eval(
+            self._session_factory, self._machine_bus, attempt_id, clock=self._clock
+        )
+
+    async def reconcile(self, *, now: datetime | None = None) -> None:
+        """Safety net before opening cycles (Phase 4 hooks react at once;
+        this only catches what they missed): expire evaluation deadlines,
+        close cycles whose run or Task already ended, stop campaigns of
+        archived rooms, and re-send pending evaluations."""
+        now = now or self._clock()
+        clock: Clock = lambda: now
+        async with self._session_factory() as db:
+            await begin_write_transaction(db)
+            await expire_eval_deadlines(db, clock=clock)
+            await reconcile_open_cycles(db, clock=clock)
+            await db.commit()
+        await request_pending_evals(self._session_factory, self._machine_bus, clock=self._clock)
+
     async def _tick(self) -> list[TickOutcome]:
         now = self._clock()
+        try:
+            await self.reconcile(now=now)
+        except Exception:  # pragma: no cover — defensive; opening still runs
+            log.exception("campaign_reconcile_failed")
         async with self._session_factory() as db:
             due_ids = (await db.execute(
                 select(Campaign.id)
@@ -230,15 +266,19 @@ class CampaignScheduler:
             select(func.coalesce(func.max(CampaignAttempt.cycle_no), 0))
             .where(CampaignAttempt.campaign_id == campaign_id)
         )) + 1
-        # The claim: only the writer that still sees this revision opens
-        # the cycle.
-        if not await cas_update(db, campaign, clock=clock, cycles_run=campaign.cycles_run + 1):
-            return skipped
-
         attempts = list(await db.scalars(
             select(CampaignAttempt).where(CampaignAttempt.campaign_id == campaign_id)
         ))
+        # Render before the claim: the claim consumes ``wake_reason`` (e.g.
+        # the optimize-mode strategy-change flag the brief turns into a
+        # directive).
         brief = render_brief(campaign, attempts, cycle_no=cycle_no, now=now)
+        # The claim: only the writer that still sees this revision opens
+        # the cycle.
+        if not await cas_update(
+            db, campaign, clock=clock, cycles_run=campaign.cycles_run + 1, wake_reason=None,
+        ):
+            return skipped
         task = await materialize_assigned_task(
             db,
             room=room,

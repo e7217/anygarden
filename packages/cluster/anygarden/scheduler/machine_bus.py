@@ -237,6 +237,50 @@ class MachineBus:
         future.set_result(data)
         return True
 
+    async def request_campaign_eval(
+        self, machine_id: str, frame: dict[str, Any], *, timeout: float = 5
+    ) -> dict[str, Any]:
+        """#930 — hand a campaign evaluation job to the machine.
+
+        Waits only for the machine's acknowledgement, never for the run:
+        the result arrives later as a ``campaign_eval_result`` frame and is
+        matched by ``job_id`` (persisted on the attempt), so it is accepted
+        even after a server restart.
+        """
+        if len(self._pending) >= 32:
+            raise MachineRequestError("busy")
+        request_id = str(uuid4())
+        future = asyncio.get_running_loop().create_future()
+        # Generation -3 keeps these acks apart from the other requests.
+        self._pending[request_id] = (machine_id, frame["agent_id"], -3, future)
+        try:
+            try:
+                async with asyncio.timeout(timeout):
+                    sent = await self.send(machine_id, {
+                        **frame, "type": "campaign_eval_request", "request_id": request_id,
+                    })
+                    if not sent:
+                        raise MachineRequestError("offline")
+                    return await future
+            except TimeoutError as exc:
+                raise MachineRequestError("timeout") from exc
+        finally:
+            self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
+            elif not future.cancelled():
+                future.exception()
+
+    def resolve_campaign_eval_ack(self, machine_id: str, data: dict[str, Any]) -> bool:
+        pending = self._pending.get(data.get("request_id", ""))
+        if pending is None:
+            return False
+        owner, _agent_id, generation, future = pending
+        if future.done() or generation != -3 or owner != machine_id:
+            return False
+        future.set_result(data)
+        return True
+
     def connected_ids(self) -> set[str]:
         """Return the set of currently connected machine IDs."""
         return set(self._connections) | set(self._local)

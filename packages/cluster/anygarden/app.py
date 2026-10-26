@@ -1333,6 +1333,8 @@ async def _startup_server(app: FastAPI) -> None:
         app.state.campaign_scheduler = CampaignScheduler(
             app.state.session_factory,
             manager=getattr(app.state, "connection_manager", None),
+            # Sends cycle evaluations to the agent's machine.
+            machine_bus=getattr(app.state, "machine_bus", None),
         )
     if hasattr(app.state.campaign_scheduler, "start"):
         app.state.campaign_scheduler.start()
