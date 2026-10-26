@@ -207,6 +207,13 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
         window.dispatchEvent(
           new CustomEvent('anygarden:task:updated', { detail: data }),
         );
+      } else if (data.type === 'campaign.updated') {
+        // #930 — the right rail's CampaignSection replaces its copy.
+        // Detail: { type, campaign: CampaignOut }.
+        window.dispatchEvent(new CustomEvent('anygarden:campaign:updated', { detail: data }));
+      } else if (data.type === 'campaign.attempt_updated') {
+        // Detail: { type, campaign_id, attempt: CampaignAttemptOut }.
+        window.dispatchEvent(new CustomEvent('anygarden:campaign:attempt_updated', { detail: data }));
       } else if (data.type === 'execution.updated') {
         window.dispatchEvent(new CustomEvent('anygarden:execution:updated', { detail: data }));
       } else if (data.type === 'room_artifact.added') {

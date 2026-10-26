@@ -13,6 +13,8 @@ const badgeVariants = cva(
           "bg-[var(--color-surface-alt)] text-[var(--color-foreground-muted)]",
         success:
           "bg-[var(--color-success-soft)] text-[var(--color-success)]",
+        warning:
+          "bg-[var(--color-warning-soft)] text-[var(--color-warning)]",
         destructive:
           "bg-[var(--color-danger-soft)] text-[var(--color-danger)]",
         outline:

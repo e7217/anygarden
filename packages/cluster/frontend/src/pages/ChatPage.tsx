@@ -878,6 +878,7 @@ function LocalChatPage() {
         <RightContextRail
           roomId={selectedRoom}
           participants={participants}
+          room={currentRoom}
           open={rightRailOpen}
           onClose={() => setRightRailOpen(false)}
         />
