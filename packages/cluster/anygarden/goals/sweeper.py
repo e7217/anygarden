@@ -21,10 +21,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import Room, Task
+from anygarden.db.models import AgentTurn, Room, Task
 from anygarden.goals.executor import apply_completion
 from anygarden.goals.policy import (
     TASK_EXECUTION_TIMEOUT_SECONDS,
@@ -81,13 +81,25 @@ async def sweep_stuck_tasks(
     )
     stuck_todo = (await db.execute(pickup_stmt)).scalars().all()
 
-    # Execution timeout: started but never finished.
+    # Execution timeout: started but never finished. A task whose agent
+    # turn is still open (pending / leased / retrying / completing) is not
+    # wedged — the turn has its own lease recovery, and a long turn (e.g. a
+    # promoted general task or a campaign cycle before it opens an
+    # execution) would otherwise be failed while the agent is working
+    # (#930 Phase 0).
+    from anygarden.turns.service import OPEN_TURN_STATES
+
+    live_turn = exists().where(
+        AgentTurn.task_id == Task.id,
+        AgentTurn.state.in_(OPEN_TURN_STATES),
+    )
     exec_stmt = select(Task).join(Room, Task.room_id == Room.id).where(
         Room.archived_at.is_(None),
         Task.execution_id.is_(None),
         Task.status == "in_progress",
         Task.started_at.is_not(None),
         Task.started_at < exec_threshold,
+        ~live_turn,
     )
     stuck_running = (await db.execute(exec_stmt)).scalars().all()
 
