@@ -228,6 +228,18 @@ async def test_a_retrospective_runs_on_the_reserve_after_the_deadline(flow_harne
         assert execution.deadline_at <= datetime.now(UTC) + timedelta(hours=2)
 
 
+@pytest.mark.parametrize(("tokens_used", "cap"), [
+    (50_000, 50_000),  # 45k usable left + the 5k reserve
+    (97_000, 3_000),   # cycles overshot the usable 95k: only what is left of the reserve
+])
+async def test_a_retrospective_gets_what_is_left_plus_the_reserve(flow_harness, tokens_used, cap):
+    h = flow_harness
+    retro = await _open_retrospective(h, status="achieved", tokens_used=tokens_used)
+    async with h.sessions() as db:
+        execution = await db.get(ProjectExecution, retro["execution_id"])
+        assert execution.limits["max_total_tokens"] == cap
+
+
 @pytest.mark.req("CMP-14")
 async def test_agents_md_learning_applies_without_approval_and_is_recorded(flow_harness):
     h = flow_harness

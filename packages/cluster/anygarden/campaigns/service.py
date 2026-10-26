@@ -496,8 +496,10 @@ async def cycle_execution_limits(
     """Clamp a cycle execution's limits to what the campaign has left (CMP-03).
 
     ``max_total_tokens`` becomes ``min(requested, remaining budget minus
-    the retro reserve)`` and ``deadline_at`` ``min(requested, campaign
-    deadline)``. Raises :class:`CampaignPolicyError` when the Task is not
+    the retro reserve)`` (a retrospective: ``remaining budget``, reserve
+    included) and ``deadline_at`` ``min(requested, campaign deadline)``.
+    The token limit is observed, not reserved: it is checked as native
+    calls settle, so a call in flight can overshoot it. Raises :class:`CampaignPolicyError` when the Task is not
     the campaign's open cycle or nothing is left to spend.
     """
     campaign = await db.get(Campaign, root.campaign_id)
@@ -513,8 +515,10 @@ async def cycle_execution_limits(
         )
     now = clock()
     if retrospective:
-        # Phase 6 — a retrospective spends the reserve the cycles left
-        # (``retro_reserve_ratio``) and runs after the deadline too.
+        # Phase 6 — a retrospective may spend what the cycles left plus the
+        # reserve (``retro_reserve_ratio``): ``budget - tokens_used``. Once
+        # the usable budget is spent that is only what is left of the
+        # reserve. It runs after the deadline too.
         remaining = max(0, int(campaign.budget["max_total_tokens"]) - int(campaign.tokens_used or 0))
         if remaining <= 0:
             raise _limit_error("CAMPAIGN_BUDGET_EXHAUSTED", "The campaign budget is used up")
