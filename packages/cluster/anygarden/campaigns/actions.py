@@ -218,10 +218,14 @@ async def reject_campaign(
                       details={"reason": _clip(reason)} if reason else None, **values)
 
 
+class CampaignAttemptNotFound(Exception):
+    """The attempt id is not one of this campaign's attempts."""
+
+
 async def _cycle_attempt(db: AsyncSession, campaign: Campaign, attempt_id: str) -> CampaignAttempt:
     attempt = await db.get(CampaignAttempt, attempt_id, populate_existing=True)
     if attempt is None or attempt.campaign_id != campaign.id:
-        raise LookupError(attempt_id)
+        raise CampaignAttemptNotFound(attempt_id)
     return attempt
 
 

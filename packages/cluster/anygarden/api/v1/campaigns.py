@@ -37,7 +37,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.api.v1.errors import make_api_error
 from anygarden.auth.dependencies import Identity
 from anygarden.campaigns import actions, notify
-from anygarden.campaigns.policy import CampaignPolicyError
+from anygarden.campaigns.policy import (
+    MAX_EVAL_COMMAND_CHARS,
+    MAX_EVAL_PATH_CHARS,
+    MAX_EVAL_PIN_PATHS,
+    MAX_EVAL_TIMEOUT_SECONDS,
+    MAX_SCORE_KEY_CHARS,
+    CampaignPolicyError,
+)
 from anygarden.campaigns.service import IllegalTransition
 from anygarden.campaigns.views import attempt_view, campaign_view
 from anygarden.db.models import (
@@ -86,11 +93,16 @@ class MetricIn(_Strict):
 
 
 class EvaluatorIn(_Strict):
-    command: str = Field(min_length=1)
-    cwd: str = "."
-    timeout_sec: int = 600
-    pin_paths: list[str] = Field(default_factory=list)
-    score_key: str = "score"
+    """Limits match ``CampaignEvalRequestFrame``: an evaluator the server
+    stores must be one the machine can parse."""
+
+    command: str = Field(min_length=1, max_length=MAX_EVAL_COMMAND_CHARS)
+    cwd: str = Field(default=".", max_length=MAX_EVAL_PATH_CHARS)
+    timeout_sec: int = Field(default=600, ge=1, le=MAX_EVAL_TIMEOUT_SECONDS)
+    pin_paths: list[Annotated[str, Field(max_length=MAX_EVAL_PATH_CHARS)]] = Field(
+        default_factory=list, max_length=MAX_EVAL_PIN_PATHS
+    )
+    score_key: str = Field(default="score", min_length=1, max_length=MAX_SCORE_KEY_CHARS)
 
 
 class BudgetIn(_Strict):
@@ -290,6 +302,14 @@ def _invalid(exc: CampaignPolicyError):
     )
 
 
+def _policy_error(exc: CampaignPolicyError):
+    """A broken campaign rule: an archived room is a conflict (409), any
+    other rule an invalid request (422)."""
+    if exc.code == "ROOM_ARCHIVED":
+        return _conflict(exc.code, exc.message)
+    return _invalid(exc)
+
+
 def _conflict(reason: str, message: str):
     return make_api_error(
         code="CAMPAIGN_CONFLICT", status_code=409, message=message, reason=reason
@@ -353,9 +373,7 @@ async def _run(request: Request, db: AsyncSession, campaign: Campaign, action) -
     try:
         await action()
     except CampaignPolicyError as exc:
-        if exc.code == "ROOM_ARCHIVED":
-            raise _conflict(exc.code, exc.message) from None
-        raise _invalid(exc) from None
+        raise _policy_error(exc) from None
     except IllegalTransition as exc:
         raise _conflict(
             "ILLEGAL_TRANSITION",
@@ -363,7 +381,7 @@ async def _run(request: Request, db: AsyncSession, campaign: Campaign, action) -
         ) from None
     except actions.CampaignConflict as exc:
         raise _conflict(exc.code, exc.message) from None
-    except LookupError:
+    except actions.CampaignAttemptNotFound:
         raise _attempt_not_found() from None
     return await _respond(request, db, campaign)
 
@@ -381,6 +399,7 @@ async def create_campaign(
     db: DbDep,
 ):
     """Start a campaign in a project room; the room's lead agent runs it."""
+    from anygarden.campaigns.service import check_campaign_room
     from anygarden.campaigns.service import create_campaign as create
 
     if identity.kind != "user":
@@ -389,6 +408,12 @@ async def create_campaign(
         db, room_id=room_id, identity=identity, capability=Capability.TASK_MANAGE
     )
     room: Room = access.room
+    try:
+        # The room's own rules first: without a lead there is no machine
+        # whose owner could set the evaluator.
+        await check_campaign_room(db, room)
+    except CampaignPolicyError as exc:
+        raise _policy_error(exc) from None
     if not await _can_set_evaluator(db, identity, room.representative_agent_id):
         raise _evaluator_forbidden()
     try:
@@ -399,7 +424,7 @@ async def create_campaign(
             deadline_at=body.deadline_at, trusted_eval=body.trusted_eval,
         )
     except CampaignPolicyError as exc:
-        raise _invalid(exc) from None
+        raise _policy_error(exc) from None
     return await _respond(request, db, campaign)
 
 

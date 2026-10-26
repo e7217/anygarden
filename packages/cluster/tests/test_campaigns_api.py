@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import select
 
 from anygarden.auth.jwt import create_user_token
+from anygarden.campaigns.policy import CampaignPolicyError
 from anygarden.db.models import (
     Campaign,
     CampaignEvent,
@@ -366,3 +367,62 @@ async def test_attempts_and_events_are_paged_newest_first(env):  # noqa: F811
     assert len(events.json()["items"]) == 5 and events.json()["total"] > 5
     missing = await env.client.get("/api/v1/campaigns/nope", headers=env.auth)
     assert missing.status_code == 404 and missing.json()["code"] == "CAMPAIGN_NOT_FOUND"
+
+
+# ═══ Review fixes ══════════════════════════════════════════════════
+
+
+async def test_a_room_without_a_lead_is_reported_before_the_evaluator_check(env):  # noqa: F811
+    alice = await _user(env, "alice@test.com", role="owner")
+    async with env.factory() as db:
+        (await db.get(Room, env.ids["room"])).representative_agent_id = None
+        await db.commit()
+    resp = await env.client.post(f"/api/v1/rooms/{env.ids['room']}/campaigns",
+                                 json=_body(), headers=alice["auth"])
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["reason"] == "ROOM_LEAD_REQUIRED"
+
+
+async def test_creating_in_an_archived_room_is_a_conflict(env):  # noqa: F811
+    async with env.factory() as db:
+        (await db.get(Room, env.ids["room"])).archived_at = T0
+        await db.commit()
+    resp = await env.client.post(f"/api/v1/rooms/{env.ids['room']}/campaigns",
+                                 json=_body(), headers=env.auth)
+    # The room guard refuses it first; the campaign rule maps to 409 too.
+    assert resp.status_code == 409, resp.text
+
+
+@pytest.mark.parametrize("evaluator", [
+    {"command": "x" * 8193},
+    {"command": "x", "cwd": "a" * 1025},
+    {"command": "x", "pin_paths": [f"f{i}" for i in range(101)]},
+    {"command": "x", "score_key": "k" * 121},
+    {"command": "x", "timeout_sec": 0},
+])
+async def test_an_evaluator_the_machine_could_not_parse_is_refused(env, evaluator):  # noqa: F811
+    resp = await env.client.post(f"/api/v1/rooms/{env.ids['room']}/campaigns",
+                                 json=_body(evaluator=evaluator), headers=env.auth)
+    assert resp.status_code == 422, resp.text
+
+
+def test_a_campaign_rule_on_an_archived_room_maps_to_409():
+    from anygarden.api.v1.campaigns import _policy_error
+
+    assert _policy_error(CampaignPolicyError("ROOM_ARCHIVED", "x")).status_code == 409
+    assert _policy_error(CampaignPolicyError("ROOM_LEAD_REQUIRED", "x")).status_code == 422
+
+
+async def test_an_unexpected_lookup_error_is_not_turned_into_a_404(env, monkeypatch):  # noqa: F811
+    from anygarden.campaigns import actions
+
+    cid = (await _create(env))["id"]
+    missing = await _post(env, cid, "select-final", attempt_id="nope")
+    assert missing.status_code in {404, 409}
+
+    async def broken(*_args, **_kwargs):
+        raise KeyError("a bug")
+
+    monkeypatch.setattr(actions, "select_final", broken)
+    with pytest.raises(KeyError):
+        await _post(env, cid, "select-final", attempt_id="nope")

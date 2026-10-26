@@ -304,6 +304,23 @@ async def default_final_attempt_id(
 # ── Creation ────────────────────────────────────────────────────────
 
 
+async def check_campaign_room(db: AsyncSession, room: Room) -> str:
+    """The room can run a campaign: not archived, a project room (not a DM)
+    whose lead agent is a participant. Returns the lead agent's id."""
+    if room.archived_at is not None:
+        raise CampaignPolicyError("ROOM_ARCHIVED", "The room is archived")
+    agent_id = room.representative_agent_id
+    if room.project_id is None or room.is_dm or agent_id is None:
+        raise CampaignPolicyError(
+            "ROOM_LEAD_REQUIRED", "A campaign runs in a project room with a lead agent"
+        )
+    if await find_agent_participant(db, room_id=room.id, agent_id=agent_id) is None:
+        raise CampaignPolicyError(
+            "ROOM_LEAD_REQUIRED", "The room's lead agent is not a participant"
+        )
+    return agent_id
+
+
 async def create_campaign(
     db: AsyncSession,
     *,
@@ -331,17 +348,7 @@ async def create_campaign(
         evaluator=evaluator, budget=budget, deadline_at=deadline_at,
         trusted_eval=trusted_eval, now=now,
     )
-    if room.archived_at is not None:
-        raise CampaignPolicyError("ROOM_ARCHIVED", "The room is archived")
-    agent_id = room.representative_agent_id
-    if room.project_id is None or room.is_dm or agent_id is None:
-        raise CampaignPolicyError(
-            "ROOM_LEAD_REQUIRED", "A campaign runs in a project room with a lead agent"
-        )
-    if await find_agent_participant(db, room_id=room.id, agent_id=agent_id) is None:
-        raise CampaignPolicyError(
-            "ROOM_LEAD_REQUIRED", "The room's lead agent is not a participant"
-        )
+    agent_id = await check_campaign_room(db, room)
     campaign = Campaign(
         owner_id=owner_id,
         room_id=room.id,
@@ -577,6 +584,7 @@ __all__ = [
     "apply_transition",
     "attach_cycle_execution",
     "cas_update",
+    "check_campaign_room",
     "create_campaign",
     "cycle_closed_at",
     "cycle_execution_limits",
