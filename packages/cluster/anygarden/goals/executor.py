@@ -6,7 +6,8 @@ existing task auto-execution flow. When a goal fires, the executor:
 1. Resolves the goal's ``assignee_agent_id`` to a Participant in the
    ``report_room_id`` room. The Goal API guarantees this Participant
    exists at registration time, so we don't conjure one here.
-2. Creates a new ``Task`` row carrying ``goal_id``, the spec snapshot,
+2. Creates a new ``Task`` row (via the shared
+   ``materialize_assigned_task``) carrying ``goal_id``, the spec snapshot,
    ``triggered_by='scheduler'``, and ``status='todo'``.
 3. Calls ``inject_task_assignment_message`` (#266) which drops the
    synthetic mention into the room. The agent's existing
@@ -41,8 +42,8 @@ from anygarden.goals.policy import (
     materialize_decision,
     trigger_timezone,
 )
-from anygarden.messages.service import inject_task_assignment_message
 from anygarden.rooms.authorization import require_active_room
+from anygarden.task_materialize import materialize_assigned_task
 
 if TYPE_CHECKING:
     from anygarden.ws.manager import ConnectionManager
@@ -148,22 +149,23 @@ async def trigger_goal(
         )
 
     now = _utcnow()
-    task = Task(
-        room_id=goal.report_room_id,
+    task = await materialize_assigned_task(
+        db,
+        room=room,
+        participant=participant,
         title=goal.title,
-        status="todo",
-        assignee_participant_id=participant.id,
-        assigned_at=now,  # #314 — sweeper pickup-timeout clock starts here
-        created_by=goal.owner_id,
-        # #302 — goal-derived fields
-        goal_id=goal.id,
-        triggered_by=trigger_source,
         spec=goal.spec,
-        started_at=now,
-        is_interesting=False,
+        created_by=goal.owner_id,
+        triggered_by=trigger_source,
         # #449 — deterministic dedup token; the UNIQUE index makes a
         # second fire of the same slot raise IntegrityError.
         idempotency_key=idempotency_key,
+        manager=manager,
+        now=now,
+        # #302 — goal-derived fields
+        goal_id=goal.id,
+        started_at=now,
+        is_interesting=False,
         schedule_context={
             "goal_id": goal.id,
             "scheduled_for": (
@@ -175,23 +177,6 @@ async def trigger_goal(
             "overlap_policy": "wait",
             "trigger_source": trigger_source,
         },
-    )
-    db.add(task)
-    await db.flush()  # populate task.id before message inject
-
-    # Reuse #266 auto-execution: synthetic mention wakes the agent.
-    # ``manager`` is forwarded so the helper also broadcasts the
-    # ``MessageOut`` frame on the room channel — without this fanout
-    # the mention sits silently in the DB and the agent never wakes
-    # (#314). ``None`` is accepted for tests that don't wire up a
-    # ConnectionManager.
-    await inject_task_assignment_message(
-        db,
-        room=room,
-        task=task,
-        sender_participant_id=None,  # system-origin
-        event="assigned",
-        manager=manager,
     )
 
     # Update goal bookkeeping. ``last_run_at`` always tracks the most
