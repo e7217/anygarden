@@ -43,7 +43,7 @@ SKILLS_PREFIX = "skills/"
 INSTRUCTION_REVISIONS_KEPT = 50
 
 InstructionsMode = Literal["disk", "disk_offline", "server"]
-Source = Literal["user", "agent", "system"]
+Source = Literal["user", "agent", "system", "campaign"]
 Operation = Literal["write_agents_md", "write_skill", "delete_skill", "replace"]
 
 

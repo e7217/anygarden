@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -742,7 +742,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -923,7 +923,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -1025,7 +1025,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1065,7 +1065,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
             sync_engine.dispose()
         finally:
             try:
@@ -1099,7 +1099,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "096_machine_transfers"
+            assert head == "098_instruction_revision_context"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1201,7 +1201,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "096_machine_transfers"
+                assert version == "098_instruction_revision_context"
             sync_engine.dispose()
         finally:
             try:
@@ -1894,4 +1894,27 @@ def test_096_adds_machine_transfers(tmp_path) -> None:
         assert conn.execute(text(
             "SELECT name FROM sqlite_master WHERE name='machine_transfers'"
         )).first() is None
+    engine.dispose()
+
+
+def test_097_098_add_campaigns_and_revision_context(tmp_path) -> None:
+    path = str(tmp_path / "campaigns.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "098_instruction_revision_context")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.connect() as conn:
+        tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        assert {"campaigns", "campaign_attempts", "campaign_events"} <= tables
+        task_columns = {r[1] for r in conn.execute(text("PRAGMA table_info(tasks)"))}
+        assert "campaign_id" in task_columns
+        revision_columns = {
+            r[1] for r in conn.execute(text("PRAGMA table_info(agent_instruction_revisions)"))
+        }
+        assert "context" in revision_columns
+    command.downgrade(cfg, "096_machine_transfers")
+    with engine.connect() as conn:
+        assert conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE name='campaigns'"
+        )).first() is None
+        assert "campaign_id" not in {r[1] for r in conn.execute(text("PRAGMA table_info(tasks)"))}
     engine.dispose()

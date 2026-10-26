@@ -1164,7 +1164,7 @@ class AgentInstructionRevision(Base):
     """#908 — one accepted version of an agent's instructions.
 
     Agents may edit their own AGENTS.md and skills, so every change keeps
-    who made it (``user``, ``agent``, ``system``) and the full content,
+    who made it (``user``, ``agent``, ``system``, ``campaign``) and the full content,
     which an admin can restore. Only the latest
     ``INSTRUCTION_REVISIONS_KEPT`` rows per agent are kept.
     """
@@ -1185,6 +1185,9 @@ class AgentInstructionRevision(Base):
     restored_from: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     agents_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
     skills: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    context: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+    """#930 — why a non-user change was made, e.g. a campaign
+    retrospective's ``{campaign_id, attempt_id, rationale}``."""
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
@@ -1817,6 +1820,7 @@ class Task(Base):
         Index("ix_tasks_source_message_id", "source_message_id"),
         UniqueConstraint("execution_id", "input_revision", "delegation_key", name="uq_execution_task_delegation"),
         Index("ix_tasks_execution_parent", "execution_id", "parent_task_id"),
+        Index("ix_tasks_campaign", "campaign_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -1921,6 +1925,14 @@ class Task(Base):
     whether a successful run still earns a Task row. Errors are
     auto-flagged interesting; agents may opt successes in via the
     ``[INTERESTING]`` marker (Phase 3)."""
+
+    campaign_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True,
+        default=None,
+    )
+    """#930 — set on a campaign's cycle Task. NULL for every other task.
+    The Task API uses it to recognise an open cycle; SET NULL so deleting a
+    campaign leaves the historical tasks in place."""
 
     idempotency_key: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True, default=None
@@ -2453,6 +2465,177 @@ class Goal(Base):
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, default=_utcnow, onupdate=_utcnow
     )
+
+
+class Campaign(Base):
+    """A metric-driven long-running loop (#930).
+
+    A campaign carries the *why* of a piece of work — purpose plus the
+    judgement criteria (metric, target, deadline, budget) — and keeps
+    opening cycle Tasks (``Task.campaign_id``) until the target is
+    confirmed, the deadline passes, the budget runs out or a person stops
+    it. Each cycle is recorded as a :class:`CampaignAttempt`; every state
+    change, wake-up and verdict is recorded as a :class:`CampaignEvent`.
+
+    ``state_revision`` is the CAS token: every loop-state write is an
+    ``UPDATE ... WHERE state_revision = :seen`` so concurrent scheduler
+    ticks and hooks cannot both act on the same state.
+    """
+
+    __tablename__ = "campaigns"
+    __table_args__ = (
+        # Scheduler hot path: ``status='active' AND next_cycle_at <= now``.
+        Index("ix_campaigns_status_next_cycle", "status", "next_cycle_at"),
+        Index("ix_campaigns_room", "room_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    """The executing agent: the room's representative when created."""
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # ── Judgement criteria ─────────────────────────────────────────
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    """target | optimize."""
+    metric: Mapped[dict] = mapped_column(JSON, nullable=False)
+    """{name, direction: maximize|minimize, target: float|null, min_delta}."""
+    evaluator: Mapped[dict] = mapped_column(JSON, nullable=False)
+    """{command, cwd, timeout_sec, pin_paths, score_key}."""
+    evaluator_pins: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    """Hashes of ``pin_paths`` recorded at the first evaluation."""
+    trusted_eval: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="none", server_default="none"
+    )
+    """none | external."""
+    budget: Mapped[dict] = mapped_column(JSON, nullable=False)
+    """{max_total_tokens, retro_reserve_ratio}."""
+    deadline_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # ── Loop state ─────────────────────────────────────────────────
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active"
+    )
+    stop_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cycles_run: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    tokens_used: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    best_attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    final_attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    """Attempt ids without FKs: attempts reference campaigns, and a cycle
+    of FKs would need ``use_alter`` on every dialect for no real gain."""
+    next_cycle_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    wake_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cycles_since_improvement: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    consecutive_eval_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    state_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class CampaignAttempt(Base):
+    """One cycle (or retrospective) of a :class:`Campaign` (#930).
+
+    The agent records what it tried exactly once (``recorded_at``); the
+    score comes only from the machine-run evaluation. ``task_id`` is SET
+    NULL so the record outlives its Task.
+    """
+
+    __tablename__ = "campaign_attempts"
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "cycle_no", name="uq_campaign_attempt_cycle"),
+        Index("ix_campaign_attempts_task", "task_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    campaign_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+    cycle_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="cycle", server_default="cycle"
+    )
+    """cycle | retrospective."""
+    task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    execution_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    opened_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # ── Agent record (once per cycle) ──────────────────────────────
+    agent_outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """attempted | abandoned."""
+    hypothesis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_ref: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    lessons: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # ── Evaluation ─────────────────────────────────────────────────
+    eval_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    """pending | running | ok | failed | invalid | skipped | timed_out."""
+    eval_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    eval_deadline_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    dev_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    valid: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    eval_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    eval_started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    eval_finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    trusted_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trusted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """improved | no_gain | regressed | guardrail_violation | eval_failed |
+    invalid | no_record | unknown."""
+
+
+class CampaignEvent(Base):
+    """Append-only campaign history (#930): transitions, wake-ups,
+    verdicts, instruction changes and human actions. ``event_key`` is
+    unique so a replayed hook records its event once."""
+
+    __tablename__ = "campaign_events"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_campaign_events_key"),
+        Index("ix_campaign_events_campaign", "campaign_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    campaign_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+    event_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    type: Mapped[str] = mapped_column(String(48), nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 # Keep retired tables in Alembic target_metadata, without executable ORM models.
