@@ -75,9 +75,12 @@ export interface Agent {
 // #908 — one accepted version of an agent's instructions.
 export interface InstructionRevision {
   revision: number;
-  source: 'user' | 'agent' | 'system';
+  // #930 — ``campaign``: written by a campaign retrospective.
+  source: 'user' | 'agent' | 'system' | 'campaign';
   by_user_id?: string | null;
   restored_from?: number | null;
+  /** Why the version was made, e.g. a campaign retrospective's reason. */
+  context?: { campaign_id?: string; attempt_id?: string; rationale?: string } | null;
   agents_md: string;
   skills: Record<string, string>;
   created_at: string;

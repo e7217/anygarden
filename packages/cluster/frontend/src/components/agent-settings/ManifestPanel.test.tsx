@@ -725,4 +725,22 @@ describe('ManifestPanel — disk-sourced instructions (#908)', () => {
     fireEvent.click(screen.getByTestId('instruction-history-restore'))
     await waitFor(() => expect(restoreInstructionRevision).toHaveBeenCalledWith('a1', 2))
   })
+
+  it('labels a campaign retrospective version and shows its reason [AGT-11]', async () => {
+    const fetchInstructionRevisions = vi.fn().mockResolvedValue([
+      {
+        revision: 4, source: 'campaign', agents_md: 'learned rule', skills: {}, created_at: '2026-10-26T03:00:00Z',
+        context: { campaign_id: 'camp-1', attempt_id: 'att-9', rationale: 'Caching cut eval time by half' },
+      },
+      { revision: 3, source: 'agent', agents_md: 'agent rule', skills: {}, created_at: '2026-10-19T03:00:00Z' },
+    ])
+    renderWith(makeAgent({ agents_md: 'learned rule', instructions_mode: 'disk', instructions_revision: 4 }),
+      { fetchInstructionRevisions, restoreInstructionRevision: vi.fn() })
+    fireEvent.click(await screen.findByTestId('manifest-history'))
+    expect(await screen.findByTestId('instruction-source-4')).toHaveTextContent('Campaign retrospective')
+    expect(screen.getByTestId('instruction-history-rationale')).toHaveTextContent('Why: Caching cut eval time by half')
+    fireEvent.click(screen.getByText('Version 3'))
+    expect(screen.queryByTestId('instruction-history-rationale')).not.toBeInTheDocument()
+  })
 })
+

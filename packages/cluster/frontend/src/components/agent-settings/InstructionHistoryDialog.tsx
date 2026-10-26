@@ -12,6 +12,14 @@ import { Badge } from '@/components/ui/badge'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import type { InstructionRevision } from '@/hooks/useAgents'
 import { useLocale } from '@/i18n/LocaleProvider'
+import type { MessageKey } from '@/i18n/messages'
+
+const SOURCE_KEYS: Record<string, MessageKey> = {
+  user: 'admin.instructionHistory.source.user',
+  agent: 'admin.instructionHistory.source.agent',
+  system: 'admin.instructionHistory.source.system',
+  campaign: 'admin.instructionHistory.source.campaign',
+}
 
 type LoadState = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; revisions: InstructionRevision[] }
 
@@ -97,7 +105,7 @@ export default function InstructionHistoryDialog({
                   >
                     <span className="flex flex-wrap items-center gap-1.5">
                       <span className="font-medium text-[var(--color-foreground)]">{t('admin.instructionHistory.revision', { revision: revision.revision })}</span>
-                      <Badge variant="outline" data-testid={`instruction-source-${revision.revision}`}>{t(`admin.instructionHistory.source.${revision.source}`)}</Badge>
+                      <Badge variant="outline" data-testid={`instruction-source-${revision.revision}`}>{SOURCE_KEYS[revision.source] ? t(SOURCE_KEYS[revision.source]) : revision.source}</Badge>
                       {revision.revision === currentRevision && <Badge variant="outline">{t('admin.instructionHistory.current')}</Badge>}
                     </span>
                     <span className="text-caption text-[var(--color-foreground-muted)]">
@@ -110,6 +118,11 @@ export default function InstructionHistoryDialog({
             </ul>
             {chosen && (
               <div className="min-w-0 space-y-2" data-testid="instruction-history-preview">
+                {chosen.context?.rationale && (
+                  <p className="text-caption text-[var(--color-foreground)] [overflow-wrap:anywhere]" data-testid="instruction-history-rationale">
+                    {t('admin.instructionHistory.rationale', { rationale: chosen.context.rationale })}
+                  </p>
+                )}
                 <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 font-mono text-xs text-[var(--color-foreground)]">
                   {chosen.agents_md || t('admin.instructionHistory.noInstructions')}
                 </pre>
