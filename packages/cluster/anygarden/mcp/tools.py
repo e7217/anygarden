@@ -692,6 +692,19 @@ async def mark_task_status(
     ).scalar_one_or_none()
     if task is None:
         return _error_result(f"task not found: {task_id}")
+    if (
+        task.campaign_id is not None
+        and status in {"done", "failed", "blocked"}
+        and task.status not in TERMINAL_STATUSES
+    ):
+        # #930 — a campaign cycle ends through its project execution: the
+        # system evaluates the run and closes the cycle. Marking the cycle
+        # Task itself would skip the evaluation.
+        return _error_result(
+            "CAMPAIGN_CYCLE_TASK_MANAGED: this task is a campaign cycle; finish it with "
+            "complete_project_execution (the system then runs the evaluator), not "
+            "mark_task_status"
+        )
     if task.execution_id is not None:
         from anygarden.project_executions import service as execution_service
 

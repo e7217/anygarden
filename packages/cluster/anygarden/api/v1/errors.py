@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 # their existing endpoint-specific contracts.
 PUBLIC_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {
+        "CAMPAIGN_CYCLE_TASK_MANAGED",
         "MACHINE_ACCESS_DENIED",
         "MACHINE_HAS_ACTIVE_AGENTS",
         "MACHINE_LIST_FORBIDDEN",

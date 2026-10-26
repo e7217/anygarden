@@ -59,6 +59,15 @@ STRING_DETAIL_CASES = (
         "Execution tasks must use the project execution workflow",
         {},
     ),
+    (
+        "CAMPAIGN_CYCLE_TASK_MANAGED",
+        409,
+        (
+            "This task is an open campaign cycle; stop or pause the campaign "
+            "instead of changing or deleting the task"
+        ),
+        {},
+    ),
 )
 
 

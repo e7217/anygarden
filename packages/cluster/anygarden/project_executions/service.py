@@ -265,7 +265,22 @@ async def _event(
         ):
             raise
         return None
+    if event_type in _CAMPAIGN_TERMINAL_EVENTS:
+        # #930 — a campaign cycle's run ended: count its tokens and evaluate
+        # (completed) or close the cycle. Same transaction; the event key
+        # makes this fire once per terminal event.
+        from anygarden.campaigns.lifecycle import on_execution_terminal
+
+        await on_execution_terminal(db, execution, event_type)
     return event
+
+
+_CAMPAIGN_TERMINAL_EVENTS = frozenset({
+    "execution_completed",
+    "execution_usage_limit_stopped",
+    "execution_deadline_stopped",
+    "execution_cancelled",
+})
 
 
 async def _input_snapshot(

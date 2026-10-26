@@ -122,6 +122,12 @@ async def sweep_stuck_tasks(
         # ``consecutive_failures`` and may flip the goal to ``paused``
         # via the existing #302 policy.
         await apply_completion(db, task, final_status="failed")
+        if task.campaign_id is not None:
+            # #930 — a campaign cycle that never got going closes as
+            # ``unknown`` now, so the next cycle can open (CMP-11).
+            from anygarden.campaigns.lifecycle import on_cycle_task_closed
+
+            await on_cycle_task_closed(db, task, reason=reason, clock=lambda: now)
 
         # Frontend right-rail and agent-profile 2차 view both subscribe
         # to ``task.updated``. Without this fanout the UI would still

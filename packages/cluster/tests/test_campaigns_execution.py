@@ -136,3 +136,99 @@ async def test_closed_cycle_cannot_begin(flow_harness):
         await db.commit()
     error = await flow_harness.tool_error(cycle["turn"], "begin_project_execution", objective="Improve")
     assert "not the campaign's open cycle" in error
+
+
+async def test_completed_cycle_is_evaluated_through_the_machine_handler(flow_harness):
+    """Real path: cycle turn → execution → completion hook → evaluation
+    request → machine result frame → judged (CMP-04)."""
+    from anygarden.db.models import Agent, Machine, Task
+    from anygarden.ws.machine_handler import handle_machine_frame
+
+    h = flow_harness
+    cycle = await _open_cycle(h, deadline=None, tokens_used=0)
+    turn = cycle["turn"]
+    execution = await h.tool(turn, "begin_project_execution", objective="Improve accuracy")
+    execution_id = execution["execution_id"]
+
+    # The agent cannot end its cycle Task directly (decision: cycles end
+    # through the execution so the system evaluates them).
+    error = await h.tool_error(turn, "mark_task_status", task_id=cycle["task_id"], status="failed")
+    assert "CAMPAIGN_CYCLE_TASK_MANAGED" in error
+
+    delegated = await h.tool(
+        turn, "delegate_project_task", execution_id=execution_id,
+        parent_task_id=execution["root_task_id"], target_room_id=h.ids["worker_room"],
+        assignee_participant_id=h.ids["worker_pid"], delegation_key="try-1",
+        title="Try a feature", spec="Add a feature and report.",
+    )
+    await h.tool(turn, "seal_project_plan", execution_id=execution_id,
+                 required_task_ids=[delegated["task_id"]])
+    worker_turn = await h.deliver("worker")
+    await h.tool(worker_turn, "mark_task_status", task_id=delegated["task_id"], status="done",
+                 result_markdown="Added the feature.")
+    await h.end_turn(turn)
+    lead_turn = await h.deliver("lead")
+    await h.tool(lead_turn, "complete_project_execution", execution_id=execution_id,
+                 summary="Cycle 1 tried a feature.")
+
+    async with h.sessions() as db:
+        attempt = await db.scalar(select(CampaignAttempt).where(
+            CampaignAttempt.campaign_id == cycle["campaign_id"]))
+        assert attempt.execution_id == execution_id
+        assert (attempt.eval_status, attempt.eval_job_id) == ("pending", attempt.id)
+        assert attempt.closed_at is None
+        assert (await db.get(Task, cycle["task_id"])).status == "done"
+        machine = Machine(name="box", hostname="box", owner_user_id=h.ids["owner"])
+        db.add(machine)
+        await db.flush()
+        (await db.get(Agent, h.ids["lead"])).placed_on_machine_id = machine.id
+        attempt.eval_status = "running"
+        await db.commit()
+        machine_id, job_id = machine.id, attempt.eval_job_id
+
+    # The lifespan normally installs these; ASGITransport skips it.
+    from anygarden.scheduler.machine_bus import MachineBus
+
+    h.app.state.machine_bus = MachineBus()
+    h.app.state.agent_lifecycle = None
+    await handle_machine_frame(h.app, machine_id, {
+        "type": "campaign_eval_result", "job_id": job_id, "agent_id": h.ids["lead"],
+        "status": "ok", "exit_code": 0, "stdout_tail": '{"score": 0.6, "valid": true}',
+        "stderr_tail": "", "parsed": {"score": 0.6, "valid": True}, "pins": {}, "error": None,
+    })
+    async with h.sessions() as db:
+        attempt = await db.get(CampaignAttempt, attempt.id)
+        campaign = await db.get(Campaign, cycle["campaign_id"])
+        assert (attempt.outcome, attempt.dev_score) == ("improved", 0.6)
+        assert campaign.best_attempt_id == attempt.id
+        assert campaign.status == "active" and campaign.next_cycle_at is not None
+        execution_row = await db.get(ProjectExecution, execution_id)
+        assert execution_row.status == "completed"
+
+
+async def test_machine_bus_eval_request_waits_only_for_the_ack():
+    import asyncio
+    import json
+
+    from anygarden.scheduler.machine_bus import MachineBus
+
+    class _Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, text):
+            self.sent.append(json.loads(text))
+
+    bus = MachineBus()
+    socket = _Socket()
+    await bus.register("m-1", socket)
+    request = asyncio.create_task(bus.request_campaign_eval(
+        "m-1", {"job_id": "job-1", "agent_id": "a-1", "command": "x", "timeout_sec": 60}))
+    await asyncio.sleep(0)
+    frame = socket.sent[0]
+    assert frame["type"] == "campaign_eval_request" and frame["job_id"] == "job-1"
+    # Another machine cannot answer for it.
+    assert not bus.resolve_campaign_eval_ack("m-2", {"request_id": frame["request_id"]})
+    assert bus.resolve_campaign_eval_ack(
+        "m-1", {"request_id": frame["request_id"], "job_id": "job-1", "accepted": True})
+    assert (await request)["accepted"] is True
