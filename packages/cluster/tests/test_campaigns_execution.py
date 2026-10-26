@@ -168,6 +168,9 @@ async def test_completed_cycle_is_evaluated_through_the_machine_handler(flow_har
                  result_markdown="Added the feature.")
     await h.end_turn(turn)
     lead_turn = await h.deliver("lead")
+    recorded = await h.tool(lead_turn, "record_campaign_attempt", outcome="attempted",
+                            hypothesis="A feature helps", change_summary="Added a feature")
+    assert recorded["recorded"] is True and recorded["follow_up"] == []
     await h.tool(lead_turn, "complete_project_execution", execution_id=execution_id,
                  summary="Cycle 1 tried a feature.")
 

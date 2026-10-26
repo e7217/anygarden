@@ -146,6 +146,10 @@ def _directives(campaign: Campaign, cycles: Sequence[CampaignAttempt], now: date
             " try a substantially different approach instead of tuning the current one."
         )
     closed = [a for a in cycles if a.closed_at is not None]
+    if closed and closed[-1].wake_reason:
+        items.append(
+            f"- You scheduled this wake-up: {_clip(closed[-1].wake_reason, _FIELD_MAX)}"
+        )
     if closed and closed[-1].recorded_at is None:
         items.append(
             "- **record_campaign_attempt was not called** in the previous cycle. Record this"
@@ -174,6 +178,10 @@ def _rules(campaign: Campaign) -> str:
             f" evaluator command or the pinned files ({pin_text})."
         ),
         "4. If you must wait for something, use `schedule_campaign_wakeup` instead of idling.",
+        (
+            "5. If you cannot make progress without a person, call `report_campaign_blocked`"
+            " with what would unblock you; older attempts are in `read_campaign_attempts`."
+        ),
     ])
 
 
@@ -217,4 +225,124 @@ def render_brief(
     return text
 
 
-__all__ = ["SECTION_TITLES", "render_brief"]
+# ── Retrospective (Phase 6, §3.6) ──────────────────────────────────
+
+RETRO_SECTION_TITLES: tuple[str, ...] = (
+    "## Purpose",
+    "## Why this retrospective",
+    "## Statistics",
+    "## Changes that helped",
+    "## Changes that did not help",
+    "## Recorded lessons",
+    "## Current instructions",
+    "## Rules",
+)
+
+_RETRO_REASONS = {
+    "periodic": "A regular checkpoint: the campaign has run another block of cycles.",
+    "achieved": "The campaign reached its target.",
+    "deadline_reached": "The campaign's deadline passed.",
+    "budget_exhausted": "The campaign used up its cycle budget.",
+}
+_RETRO_LIST = 10
+_AGENTS_MD_MAX = 4000
+
+
+def _retro_changes(cycles: Sequence[CampaignAttempt], outcomes: set[str]) -> str:
+    rows = [a for a in cycles if a.outcome in outcomes][-_RETRO_LIST:]
+    if not rows:
+        return "None."
+    return "\n".join(
+        f"- Cycle {a.cycle_no} ({a.outcome}, score {_score(a.dev_score)}):"
+        f" {_clip(a.hypothesis, _FIELD_MAX) or '(no hypothesis)'}"
+        f" — change: {_clip(a.change_summary, _FIELD_MAX) or '—'}"
+        for a in rows
+    )
+
+
+def _retro_rules() -> str:
+    from anygarden.campaigns.retrospective import (
+        LEARNINGS_HEADING,
+        MAX_CHANGE_BYTES,
+        MAX_CHANGES_PER_RETROSPECTIVE,
+    )
+
+    return "\n".join([
+        "1. Call `begin_project_execution` as your first action; this task is its root.",
+        (
+            "2. Keep only lessons that will help in future work, not a diary of this campaign."
+            " Generalise; drop what turned out wrong."
+        ),
+        (
+            f"3. Use `apply_campaign_learning` at most {MAX_CHANGES_PER_RETROSPECTIVE} times"
+            f" (≤ {MAX_CHANGE_BYTES // 1024}KB each). `target=agents_md` replaces the body of"
+            f" the `{LEARNINGS_HEADING}` section of your AGENTS.md (nothing else is changed);"
+            " `target=skill` creates a new skill or updates one this campaign created."
+        ),
+        (
+            "4. Changes apply without approval. Each is recorded as an instructions revision"
+            " people can restore, and announced in the room."
+        ),
+        (
+            "5. Do not call `record_campaign_attempt` or run the evaluator. Finish with"
+            " `complete_project_execution`."
+        ),
+    ])
+
+
+def render_retro_brief(
+    campaign: Campaign,
+    attempts: Sequence[CampaignAttempt],
+    *,
+    reason: str,
+    cycle_no: int,
+    now: datetime,
+    agents_md: str,
+    skills: Sequence[str],
+    created_skills: set[str] | frozenset[str] = frozenset(),
+) -> str:
+    """Render the brief for a retrospective cycle (≤ ``BRIEF_MAX_CHARS``)."""
+    now = _aware(now)
+    cycles = sorted((a for a in attempts if a.kind != "retrospective"), key=lambda a: a.cycle_no)
+    closed = [a for a in cycles if a.closed_at is not None]
+    tally = Counter(a.outcome or "unknown" for a in closed)
+    usable = usable_tokens(campaign.budget)
+    stats = [
+        f"- Cycles run: {campaign.cycles_run}; status `{campaign.status}`",
+        "- Outcomes: " + (", ".join(f"{k}: {v}" for k, v in sorted(tally.items())) or "none"),
+        f"- Tokens used: {int(campaign.tokens_used or 0)} of {usable} cycle tokens",
+        _criteria(campaign, cycle_no, now),
+        "Best attempt:",
+        _best(campaign, attempts),
+    ]
+    lessons = [a for a in closed if a.lessons][-_RETRO_LIST:]
+    skill_lines = [
+        f"- `{path}`" + (" (created by this campaign)" if path in created_skills else "")
+        for path in skills
+    ]
+    instructions = (
+        "AGENTS.md:\n```markdown\n" + (_clip(agents_md, _AGENTS_MD_MAX) or "(empty)") + "\n```\n"
+        "Skills:\n" + ("\n".join(skill_lines) if skill_lines else "(none)")
+    )
+    header = f"# Campaign retrospective (cycle {cycle_no}): {_clip(campaign.title, 200)}"
+    bodies = [
+        _clip(campaign.purpose, _PURPOSE_MAX),
+        _RETRO_REASONS.get(reason, reason),
+        "\n".join(stats),
+        _retro_changes(closed, {"improved"}),
+        _retro_changes(closed, {"regressed", "no_gain", "guardrail_violation"}),
+        "\n".join(f"- Cycle {a.cycle_no}: {_clip(a.lessons, _LESSON_MAX)}" for a in lessons)
+        or "None.",
+        instructions,
+    ]
+    rules = f"{RETRO_SECTION_TITLES[-1]}\n{_retro_rules()}"
+    titled = [f"{title}\n" for title in RETRO_SECTION_TITLES[:-1]]
+    budget = BRIEF_MAX_CHARS - len(header) - len(rules) - 2 * (len(bodies) + 2)
+    body_budget = budget - sum(len(t) for t in titled)
+    if sum(len(b) for b in bodies) > body_budget:
+        share = max(0, body_budget // len(bodies))
+        bodies = [_clip(b, share) for b in bodies]
+    return "\n\n".join([header, *(t + b for t, b in zip(titled, bodies, strict=True)), rules])
+
+
+__all__ = ["RETRO_SECTION_TITLES", "SECTION_TITLES", "render_brief", "render_retro_brief"]

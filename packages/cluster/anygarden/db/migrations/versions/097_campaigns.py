@@ -50,6 +50,7 @@ def upgrade() -> None:
         sa.Column("wake_reason", sa.String(500), nullable=True),
         sa.Column("cycles_since_improvement", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("consecutive_eval_failures", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("retro_due", sa.String(32), nullable=True),
         sa.Column("state_revision", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", UtcDateTime(), nullable=False),
         sa.Column("updated_at", UtcDateTime(), nullable=False),
@@ -76,6 +77,10 @@ def upgrade() -> None:
         sa.Column("artifact_ref", sa.String(1024), nullable=True),
         sa.Column("lessons", sa.Text(), nullable=True),
         sa.Column("recorded_at", UtcDateTime(), nullable=True),
+        sa.Column("wake_at", UtcDateTime(), nullable=True),
+        sa.Column("wake_reason", sa.String(500), nullable=True),
+        sa.Column("block_reason", sa.Text(), nullable=True),
+        sa.Column("unblock_hint", sa.Text(), nullable=True),
         sa.Column("eval_status", sa.String(16), nullable=False, server_default="pending"),
         sa.Column("eval_job_id", sa.String(64), nullable=True),
         sa.Column("eval_deadline_at", UtcDateTime(), nullable=True),
@@ -92,6 +97,8 @@ def upgrade() -> None:
         sa.UniqueConstraint("campaign_id", "cycle_no", name="uq_campaign_attempt_cycle"),
     )
     op.create_index("ix_campaign_attempts_task", "campaign_attempts", ["task_id"])
+    op.create_index("ix_campaign_attempts_execution", "campaign_attempts", ["execution_id"])
+    op.create_index("ix_campaign_attempts_eval_job", "campaign_attempts", ["eval_job_id"])
 
     op.create_table(
         "campaign_events",
@@ -121,6 +128,8 @@ def downgrade() -> None:
         batch.drop_column("campaign_id")
     op.drop_index("ix_campaign_events_campaign", table_name="campaign_events")
     op.drop_table("campaign_events")
+    op.drop_index("ix_campaign_attempts_eval_job", table_name="campaign_attempts")
+    op.drop_index("ix_campaign_attempts_execution", table_name="campaign_attempts")
     op.drop_index("ix_campaign_attempts_task", table_name="campaign_attempts")
     op.drop_table("campaign_attempts")
     op.drop_index("ix_campaigns_room", table_name="campaigns")

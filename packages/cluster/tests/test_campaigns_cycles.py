@@ -110,7 +110,18 @@ class Env:
         outcomes = await self.scheduler(now)._tick()
         return [o.task_id for o in outcomes if o.action == "opened"]
 
-    async def start(self, task_id: str, now: datetime) -> str:
+    async def run_retrospective(self, now: datetime) -> str:
+        """Open the due retrospective and let its run complete."""
+        outcomes = await self.scheduler(now)._tick()
+        retros = [o.task_id for o in outcomes if o.action == "retrospective"]
+        assert len(retros) == 1, outcomes
+        execution_id = await self.start(retros[0], now, record=False)
+        await self.finish(execution_id, tokens=1_000, now=now + timedelta(minutes=10))
+        return retros[0]
+
+    async def start(self, task_id: str, now: datetime, *, record: bool = True) -> str:
+        """Begin the cycle's run; ``record`` also stores the agent's one
+        attempt record (``record_campaign_attempt``), as the brief asks."""
         async with self.factory() as db:
             task = await db.get(Task, task_id)
             seq = (await db.scalar(select(func.coalesce(func.max(Message.seq), 0)).where(
@@ -130,6 +141,11 @@ class Env:
             task.status = "in_progress"
             task.started_at = now
             await attach_cycle_execution(db, root=task, execution_id=execution.id)
+            if record:
+                attempt = await db.scalar(select(CampaignAttempt).where(
+                    CampaignAttempt.task_id == task.id))
+                attempt.agent_outcome, attempt.recorded_at = "attempted", now
+                attempt.hypothesis, attempt.change_summary = "try", "changed"
             await db.commit()
             return execution.id
 
@@ -293,7 +309,13 @@ async def test_s1b_min_gap_respected(env):
 async def test_s2_campaign_survives_weeks_of_sweeper_passes(env):
     cid = await env.create(mode="optimize", target=None, deadline_at=T0 + timedelta(days=30))
     now = T0
+    retrospectives = 0
     for day in range(21):
+        if (await env.campaign(cid)).retro_due == "periodic":
+            # Phase 6 — every 10 cycles a retrospective runs first.
+            await env.run_retrospective(now)
+            retrospectives += 1
+            now += timedelta(hours=1)
         await env.run_cycle(now, score=0.1 + day * 0.01)
         for offset in (timedelta(minutes=11), timedelta(hours=3), timedelta(hours=23)):
             async with env.factory() as db:
@@ -302,6 +324,7 @@ async def test_s2_campaign_survives_weeks_of_sweeper_passes(env):
         now += timedelta(days=1)
     campaign = await env.campaign(cid)
     assert campaign.status == "active" and campaign.cycles_run == 21
+    assert retrospectives == 2
     async with env.factory() as db:
         failed = list(await db.scalars(select(Task.id).where(
             Task.campaign_id == cid, Task.status == "failed")))

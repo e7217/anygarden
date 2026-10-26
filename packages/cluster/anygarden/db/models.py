@@ -2544,6 +2544,9 @@ class Campaign(Base):
     consecutive_eval_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    retro_due: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """Why a retrospective cycle is due (``achieved`` | ``deadline_reached``
+    | ``budget_exhausted`` | ``periodic``); cleared when it opens."""
     state_revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
@@ -2565,6 +2568,9 @@ class CampaignAttempt(Base):
     __table_args__ = (
         UniqueConstraint("campaign_id", "cycle_no", name="uq_campaign_attempt_cycle"),
         Index("ix_campaign_attempts_task", "task_id"),
+        # Terminal-event hook and evaluation results look attempts up by these.
+        Index("ix_campaign_attempts_execution", "execution_id"),
+        Index("ix_campaign_attempts_eval_job", "eval_job_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -2594,6 +2600,14 @@ class CampaignAttempt(Base):
     artifact_ref: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     lessons: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    wake_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """``schedule_campaign_wakeup``: the next cycle opens no earlier than
+    this (last call wins; read when the cycle closes)."""
+    wake_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """``report_campaign_blocked``: the campaign becomes ``blocked`` when
+    this cycle closes."""
+    unblock_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ── Evaluation ─────────────────────────────────────────────────
     eval_status: Mapped[str] = mapped_column(

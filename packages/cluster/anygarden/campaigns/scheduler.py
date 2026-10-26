@@ -28,11 +28,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from anygarden.campaigns.brief import render_brief
+from anygarden.campaigns.brief import render_brief, render_retro_brief
 from anygarden.campaigns.evaluation import (
     dispatch_eval,
     install_dispatcher,
@@ -41,6 +41,7 @@ from anygarden.campaigns.evaluation import (
 )
 from anygarden.campaigns.lifecycle import expire_eval_deadlines, reconcile_open_cycles
 from anygarden.campaigns.service import (
+    RETRO_STATUSES,
     Clock,
     apply_transition,
     cas_update,
@@ -83,7 +84,8 @@ def cycle_idempotency_key(campaign_id: str, cycle_no: int) -> str:
 class TickOutcome:
     campaign_id: str
     action: str
-    """opened | stopped | deadline_reached | budget_exhausted | blocked | skipped"""
+    """opened | retrospective | retrospective_skipped | stopped |
+    deadline_reached | budget_exhausted | blocked | skipped"""
     task_id: str | None = None
     cycle_no: int | None = None
 
@@ -113,11 +115,19 @@ class CampaignScheduler:
             return
         self._stop_event.clear()
         install_dispatcher(self.dispatch_eval)
+        # Hooks inside other code's transactions mark what they changed;
+        # this publishes it after their commit (campaigns.notify).
+        from anygarden.campaigns.notify import install_publisher
+
+        install_publisher(self._session_factory, self._manager)
         self._task = asyncio.create_task(self._run(), name="anygarden-campaign-scheduler")
         log.info("campaign_scheduler_started", extra={"interval": self._poll_interval})
 
     async def stop(self) -> None:
         uninstall_dispatcher(self.dispatch_eval)
+        from anygarden.campaigns.notify import uninstall_publisher
+
+        uninstall_publisher()
         if self._task is None:
             return
         self._stop_event.set()
@@ -173,8 +183,18 @@ class CampaignScheduler:
             due_ids = (await db.execute(
                 select(Campaign.id)
                 .where(
-                    Campaign.status == "active",
-                    or_(Campaign.next_cycle_at <= now, Campaign.deadline_at <= now),
+                    or_(
+                        and_(
+                            Campaign.status == "active",
+                            or_(Campaign.next_cycle_at <= now, Campaign.deadline_at <= now),
+                        ),
+                        # Phase 6 — a retrospective due after the loop ended.
+                        and_(
+                            Campaign.retro_due.is_not(None),
+                            Campaign.status.in_(tuple(RETRO_STATUSES)),
+                            or_(Campaign.next_cycle_at.is_(None), Campaign.next_cycle_at <= now),
+                        ),
+                    ),
                     ~_has_open_attempt(),
                 )
                 .order_by(Campaign.next_cycle_at.asc())
@@ -214,7 +234,13 @@ class CampaignScheduler:
     ) -> TickOutcome:
         campaign = await db.get(Campaign, campaign_id, populate_existing=True)
         skipped = TickOutcome(campaign_id, "skipped")
-        if campaign is None or campaign.status != "active":
+        if campaign is None:
+            return skipped
+        active = campaign.status == "active"
+        retro_due = campaign.retro_due is not None and (
+            active or campaign.status in RETRO_STATUSES
+        )
+        if not active and not retro_due:
             return skipped
         open_attempt = await db.scalar(
             select(CampaignAttempt.id).where(
@@ -226,6 +252,19 @@ class CampaignScheduler:
             return skipped
 
         room = await db.get(Room, campaign.room_id)
+        if not active:
+            # Only a retrospective is left to run for an ended campaign.
+            participant = (
+                await find_agent_participant(db, room_id=room.id, agent_id=campaign.agent_id)
+                if room is not None and room.archived_at is None and campaign.agent_id else None
+            )
+            if participant is None:
+                return await self._skip_retrospective(db, campaign, clock=clock)
+            if campaign.next_cycle_at is not None and _aware(campaign.next_cycle_at) > now:
+                return skipped
+            return await self._open_retrospective(
+                db, campaign, room, participant, now=now, clock=clock
+            )
         if room is None or room.archived_at is not None:
             changed = await apply_transition(
                 db, campaign, "stop", actor=SYSTEM_ACTOR, clock=clock,
@@ -262,10 +301,12 @@ class CampaignScheduler:
             )
             return TickOutcome(campaign_id, "blocked" if changed else "skipped")
 
-        cycle_no = int(await db.scalar(
-            select(func.coalesce(func.max(CampaignAttempt.cycle_no), 0))
-            .where(CampaignAttempt.campaign_id == campaign_id)
-        )) + 1
+        if retro_due:
+            return await self._open_retrospective(
+                db, campaign, room, participant, now=now, clock=clock
+            )
+
+        cycle_no = await self._next_cycle_no(db, campaign_id)
         attempts = list(await db.scalars(
             select(CampaignAttempt).where(CampaignAttempt.campaign_id == campaign_id)
         ))
@@ -292,14 +333,18 @@ class CampaignScheduler:
             now=now,
             campaign_id=campaign_id,
         )
-        db.add(CampaignAttempt(
+        attempt = CampaignAttempt(
             campaign_id=campaign_id,
             cycle_no=cycle_no,
             kind="cycle",
             task_id=task.id,
             opened_at=now,
-        ))
+        )
+        db.add(attempt)
         await db.flush()
+        from anygarden.campaigns.notify import mark
+
+        mark(db, attempt_id=attempt.id)
         await record_event(
             db, campaign_id,
             key=f"campaign:{campaign_id}:cycle:{cycle_no}:opened",
@@ -313,6 +358,99 @@ class CampaignScheduler:
             extra={"campaign_id": campaign_id, "cycle_no": cycle_no, "task_id": task.id},
         )
         return TickOutcome(campaign_id, "opened", task_id=task.id, cycle_no=cycle_no)
+
+    async def _next_cycle_no(self, db: AsyncSession, campaign_id: str) -> int:
+        return int(await db.scalar(
+            select(func.coalesce(func.max(CampaignAttempt.cycle_no), 0))
+            .where(CampaignAttempt.campaign_id == campaign_id)
+        )) + 1
+
+    async def _skip_retrospective(
+        self, db: AsyncSession, campaign: Campaign, *, clock: Clock
+    ) -> TickOutcome:
+        """The room or the agent is gone: the retrospective cannot run."""
+        reason = campaign.retro_due
+        if not await cas_update(db, campaign, clock=clock, retro_due=None):
+            return TickOutcome(campaign.id, "skipped")
+        await record_event(
+            db, campaign.id,
+            key=f"campaign:{campaign.id}:retro:{campaign.state_revision}:skipped",
+            type="retrospective_skipped",
+            details={"reason": reason, "why": "room_or_agent_unavailable"},
+            actor=SYSTEM_ACTOR, clock=clock,
+        )
+        return TickOutcome(campaign.id, "retrospective_skipped")
+
+    async def _open_retrospective(
+        self,
+        db: AsyncSession,
+        campaign: Campaign,
+        room: Room,
+        participant,
+        *,
+        now: datetime,
+        clock: Clock,
+    ) -> TickOutcome:
+        """Open the retrospective cycle (Phase 6, §3.6).
+
+        Same claim and Task funnel as a work cycle, but its attempt is
+        ``kind="retrospective"``, it does not count in ``cycles_run`` and it
+        is not scored. A retrospective that fails is not re-run.
+        """
+        from anygarden.campaigns.retrospective import campaign_created_skills
+        from anygarden.db.models import Agent
+        from anygarden.instructions.service import current_snapshot
+
+        reason = campaign.retro_due
+        cycle_no = await self._next_cycle_no(db, campaign.id)
+        attempts = list(await db.scalars(
+            select(CampaignAttempt).where(CampaignAttempt.campaign_id == campaign.id)
+        ))
+        agent = await db.get(Agent, campaign.agent_id)
+        snapshot = await current_snapshot(db, agent) if agent is not None else None
+        brief = render_retro_brief(
+            campaign, attempts, reason=reason or "periodic", cycle_no=cycle_no, now=now,
+            agents_md=snapshot.agents_md if snapshot else "",
+            skills=sorted(snapshot.skills) if snapshot else [],
+            created_skills=await campaign_created_skills(db, campaign.id),
+        )
+        if not await cas_update(db, campaign, clock=clock, retro_due=None):
+            return TickOutcome(campaign.id, "skipped")
+        task = await materialize_assigned_task(
+            db,
+            room=room,
+            participant=participant,
+            title=f"{campaign.title} — retrospective"[:500],
+            spec=brief,
+            created_by=campaign.owner_id,
+            triggered_by="campaign",
+            idempotency_key=cycle_idempotency_key(campaign.id, cycle_no),
+            manager=self._manager,
+            now=now,
+            campaign_id=campaign.id,
+        )
+        attempt = CampaignAttempt(
+            campaign_id=campaign.id,
+            cycle_no=cycle_no,
+            kind="retrospective",
+            task_id=task.id,
+            opened_at=now,
+            eval_status="skipped",
+        )
+        db.add(attempt)
+        await db.flush()
+        from anygarden.campaigns.notify import mark
+
+        mark(db, attempt_id=attempt.id)
+        await record_event(
+            db, campaign.id,
+            key=f"campaign:{campaign.id}:cycle:{cycle_no}:retrospective_opened",
+            type="retrospective_opened",
+            details={"cycle_no": cycle_no, "task_id": task.id, "reason": reason},
+            actor=SYSTEM_ACTOR,
+            clock=clock,
+        )
+        return TickOutcome(campaign.id, "retrospective", task_id=task.id, cycle_no=cycle_no)
 
 
 __all__ = [

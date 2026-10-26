@@ -556,6 +556,30 @@ class TaskUpdateOut(BaseModel):
     task: dict[str, Any]
 
 
+class CampaignUpdatedOut(BaseModel):
+    """A campaign's state or criteria changed (#930).
+
+    ``campaign`` is the REST ``CampaignOut`` shape
+    (``anygarden.campaigns.views.campaign_view``); the room's right rail
+    replaces its copy with it.
+    """
+
+    type: Literal["campaign.updated"] = "campaign.updated"
+    campaign: dict[str, Any]
+
+
+class CampaignAttemptUpdatedOut(BaseModel):
+    """One campaign attempt (cycle or retrospective) changed (#930).
+
+    ``attempt`` is the REST ``CampaignAttemptOut`` shape
+    (``anygarden.campaigns.views.attempt_view``).
+    """
+
+    type: Literal["campaign.attempt_updated"] = "campaign.attempt_updated"
+    campaign_id: str
+    attempt: dict[str, Any]
+
+
 class RoomArtifactAddedOut(BaseModel):
     """A new agent-produced artifact landed in the room (#290 Phase B).
 
@@ -596,6 +620,8 @@ OutgoingFrame = (
     | RoomMemoryChangedOut
     | RoomSettingsChangedOut
     | TaskUpdateOut
+    | CampaignUpdatedOut
+    | CampaignAttemptUpdatedOut
     | RoomArtifactAddedOut
     | RoomArtifactRemovedOut
     | ErrorOut

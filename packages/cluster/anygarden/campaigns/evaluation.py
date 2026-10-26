@@ -65,6 +65,10 @@ def queue_dispatch_after_commit(db: AsyncSession, attempt_id: str) -> None:
 
 @event.listens_for(Session, "after_commit")
 def _dispatch_after_commit(session: Session) -> None:
+    if session.in_nested_transaction():
+        # ``after_commit`` also fires when a SAVEPOINT (``begin_nested``)
+        # commits; wait for the outer transaction.
+        return
     queued = session.info.pop(_QUEUE_KEY, None)
     if not queued or _dispatcher is None:
         return
@@ -80,6 +84,8 @@ def _dispatch_after_commit(session: Session) -> None:
 
 @event.listens_for(Session, "after_rollback")
 def _drop_after_rollback(session: Session) -> None:
+    if session.in_nested_transaction():  # a SAVEPOINT rolled back; the outer one goes on
+        return
     session.info.pop(_QUEUE_KEY, None)
 
 
@@ -145,6 +151,9 @@ async def dispatch_eval(
             attempt.eval_status = "running"
             attempt.eval_started_at = now
             attempt.eval_deadline_at = run_deadline
+            from anygarden.campaigns.notify import mark
+
+            mark(db, attempt_id=attempt.id)
             await db.commit()
         else:
             await db.rollback()

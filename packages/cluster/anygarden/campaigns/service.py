@@ -216,6 +216,9 @@ async def cas_update(
         setattr(campaign, name, value)
     campaign.state_revision = seen + 1
     campaign.updated_at = now
+    from anygarden.campaigns.notify import mark
+
+    mark(db, campaign_id=campaign.id)
     return True
 
 
@@ -239,6 +242,12 @@ async def apply_transition(
     """
     previous = campaign.status
     new_status = transition(previous, event)
+    if new_status in RETRO_STATUSES and new_status != previous:
+        # Phase 6 — the loop ended on its own terms: a retrospective cycle
+        # is due (never after ``stopped``).
+        values.setdefault("retro_due", new_status)
+        if "final_attempt_id" not in values:
+            values["final_attempt_id"] = await default_final_attempt_id(db, campaign)
     if not await cas_update(
         db, campaign, clock=clock, expected_revision=expected_revision,
         status=new_status, **values,
@@ -254,6 +263,34 @@ async def apply_transition(
         clock=clock,
     )
     return True
+
+
+RETRO_STATUSES: frozenset[str] = frozenset({"achieved", "deadline_reached", "budget_exhausted"})
+"""Ends that run a retrospective cycle (``stopped`` does not)."""
+
+
+async def default_final_attempt_id(db: AsyncSession, campaign: Campaign) -> str | None:
+    """The final result when the loop ends (§3.3): the best trusted score
+    among valid cycles, otherwise the best dev score (shown unverified)."""
+    from anygarden.campaigns.judge import gain
+
+    rows = list(await db.scalars(
+        select(CampaignAttempt).where(
+            CampaignAttempt.campaign_id == campaign.id,
+            CampaignAttempt.kind == "cycle",
+            CampaignAttempt.trusted_score.is_not(None),
+        )
+    ))
+    direction = (campaign.metric or {}).get("direction", "maximize")
+    best: CampaignAttempt | None = None
+    for attempt in rows:
+        if attempt.valid is False:
+            continue
+        if best is None or gain(attempt.trusted_score, best.trusted_score, direction) > 0:
+            best = attempt
+    if best is not None:
+        return best.id
+    return campaign.best_attempt_id
 
 
 # ── Creation ────────────────────────────────────────────────────────
@@ -362,6 +399,11 @@ async def extend_campaign(
     """
     now = clock()
     transition(campaign.status, "extend")  # refuse final statuses early
+    room = await db.get(Room, campaign.room_id)
+    if room is None or room.archived_at is not None:
+        # A ``deadline_reached`` campaign of a room archived later must not
+        # come back to life in the archived room.
+        raise CampaignPolicyError("ROOM_ARCHIVED", "The campaign's room is archived")
     if deadline_at is None and max_total_tokens is None:
         raise CampaignPolicyError("EXTEND_NOTHING", "Give a new deadline or token budget")
     values: dict[str, Any] = {}
@@ -400,6 +442,8 @@ async def extend_campaign(
             )
         values["stop_reason"] = None
         values["final_attempt_id"] = None
+        # The loop goes on; its next retrospective comes with the next end.
+        values["retro_due"] = None
         current_next = campaign.next_cycle_at
         values["next_cycle_at"] = (
             now if current_next is None or _aware(current_next) < now else current_next
@@ -433,6 +477,10 @@ async def open_attempt_for_task(db: AsyncSession, task: Task) -> CampaignAttempt
     )
 
 
+RETRO_MAX_SECONDS = 2 * 3600
+"""Upper bound on a retrospective run (it may run past the deadline)."""
+
+
 def _limit_error(code: str, message: str) -> CampaignPolicyError:
     return CampaignPolicyError(code, message)
 
@@ -453,13 +501,32 @@ async def cycle_execution_limits(
     the campaign's open cycle or nothing is left to spend.
     """
     campaign = await db.get(Campaign, root.campaign_id)
-    if campaign is None or campaign.status in TERMINAL_STATUSES:
+    attempt = await open_attempt_for_task(db, root)
+    retrospective = attempt is not None and attempt.kind == "retrospective"
+    if campaign is None or campaign.status == "stopped" or (
+        campaign.status in TERMINAL_STATUSES and not retrospective
+    ):
         raise _limit_error("CAMPAIGN_NOT_ACTIVE", "This campaign has ended")
-    if await open_attempt_for_task(db, root) is None:
+    if attempt is None:
         raise _limit_error(
             "CAMPAIGN_CYCLE_CLOSED", "This task is not the campaign's open cycle"
         )
     now = clock()
+    if retrospective:
+        # Phase 6 — a retrospective spends the reserve the cycles left
+        # (``retro_reserve_ratio``) and runs after the deadline too.
+        remaining = max(0, int(campaign.budget["max_total_tokens"]) - int(campaign.tokens_used or 0))
+        if remaining <= 0:
+            raise _limit_error("CAMPAIGN_BUDGET_EXHAUSTED", "The campaign budget is used up")
+        clamped = dict(limits)
+        requested = clamped.get("max_total_tokens")
+        clamped["max_total_tokens"] = (
+            remaining if requested is None else min(int(requested), remaining)
+        )
+        retro_deadline = now + timedelta(seconds=RETRO_MAX_SECONDS)
+        deadline = deadline_at if deadline_at is not None and deadline_at < retro_deadline else retro_deadline
+        clamped["deadline_at"] = deadline.isoformat()
+        return campaign, clamped, deadline
     remaining = remaining_cycle_tokens(campaign)
     if remaining <= 0:
         raise _limit_error("CAMPAIGN_BUDGET_EXHAUSTED", "The campaign budget is used up")
@@ -485,10 +552,14 @@ async def attach_cycle_execution(
     if attempt is not None and attempt.execution_id is None:
         attempt.execution_id = execution_id
         await db.flush()
+        from anygarden.campaigns.notify import mark
+
+        mark(db, attempt_id=attempt.id)
 
 
 __all__ = [
     "EVENTS",
+    "RETRO_STATUSES",
     "Clock",
     "IllegalTransition",
     "apply_transition",
@@ -497,6 +568,7 @@ __all__ = [
     "create_campaign",
     "cycle_closed_at",
     "cycle_execution_limits",
+    "default_final_attempt_id",
     "extend_campaign",
     "find_agent_participant",
     "next_cycle_at",

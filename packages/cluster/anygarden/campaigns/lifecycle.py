@@ -45,9 +45,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.campaigns.brief import STRATEGY_CHANGE_REASON
 from anygarden.campaigns.judge import JUDGED_OUTCOMES, Verdict, classify, reaches_target
+from anygarden.campaigns.notify import mark
 from anygarden.campaigns.policy import (
     EVAL_FAILURE_BLOCK_THRESHOLD,
     PLATEAU_WINDOW,
+    RETRO_EVERY_CYCLES,
     TERMINAL_STATUSES,
     usable_tokens,
 )
@@ -135,7 +137,7 @@ async def _close(
     db: AsyncSession,
     attempt: CampaignAttempt,
     *,
-    outcome: str,
+    outcome: str | None,
     eval_status: str,
     clock: Clock,
     finished_at: datetime | None = None,
@@ -156,12 +158,19 @@ async def _close(
     attempt.eval_status = eval_status
     for name, value in values.items():
         setattr(attempt, name, value)
+    mark(db, attempt_id=attempt.id)
     return True
 
 
 async def _sync_tokens(db: AsyncSession, attempt: CampaignAttempt) -> int:
     """Copy the run's measured tokens onto the attempt; return the increase
-    the campaign's ``tokens_used`` still has to absorb."""
+    the campaign's ``tokens_used`` still has to absorb.
+
+    Known v1 gap: this runs at the run's terminal event and when the cycle
+    closes. Usage that is measured only after both (a late engine usage
+    report) is not added to the campaign; ``tokens_used`` can therefore
+    undercount slightly. Accepted for v1 — the cycle's execution limit
+    still bounded the run itself."""
     if attempt.execution_id is None:
         return 0
     from anygarden.project_executions.usage import execution_usage_summary
@@ -180,7 +189,7 @@ async def _sync_tokens(db: AsyncSession, attempt: CampaignAttempt) -> int:
 
 
 async def _fail_cycle_task(db: AsyncSession, task_id: str, *, reason: str, clock: Clock) -> None:
-    await db.execute(
+    result = await db.execute(
         update(Task)
         .where(Task.id == task_id, Task.status.in_(_OPEN_TASK_STATES))
         .values(status="failed", error=reason[:500], finished_at=clock())
@@ -188,6 +197,10 @@ async def _fail_cycle_task(db: AsyncSession, task_id: str, *, reason: str, clock
     )
     # Keep an already loaded Task object in step with the row.
     await db.get(Task, task_id, populate_existing=True)
+    if result.rowcount:
+        # The room's task list and the agent profile follow ``task.updated``
+        # (published after the commit, see ``campaigns.notify``).
+        mark(db, task_id=task_id)
 
 
 async def cancel_cycle_execution(
@@ -288,8 +301,17 @@ async def _after_close(
     actor: str = SYSTEM_ACTOR,
 ) -> None:
     """Fold a closed cycle into the campaign: tokens, best attempt,
-    counters, the next status and ``next_cycle_at``."""
+    counters, the next status and ``next_cycle_at``.
+
+    The agent's requests for this cycle apply here: ``wake_at``
+    (``schedule_campaign_wakeup``) pushes the next cycle back, and
+    ``block_reason`` (``report_campaign_blocked``) blocks the campaign
+    unless the verdict already moved it (a target, the budget, an
+    evaluator problem). A closed work cycle that completes a block of
+    ``RETRO_EVERY_CYCLES`` cycles makes a retrospective due.
+    """
     strategy_change = False
+    retrospective = attempt.kind == "retrospective"
 
     def plan(c: Campaign) -> tuple[str | None, dict[str, Any], dict[str, Any]]:
         nonlocal strategy_change
@@ -303,7 +325,12 @@ async def _after_close(
             values["evaluator_pins"] = pins
         if c.status in TERMINAL_STATUSES:
             return None, values, details
-        values["next_cycle_at"] = next_cycle_at(attempt.closed_at)
+        values["next_cycle_at"] = next_cycle_at(attempt.closed_at, attempt.wake_at)
+        if (
+            not retrospective and c.retro_due is None and c.cycles_run > 0
+            and c.cycles_run % RETRO_EVERY_CYCLES == 0
+        ):
+            values["retro_due"] = "periodic"
         event: str | None = None
         if verdict is not None:
             failures = int(c.consecutive_eval_failures or 0)
@@ -312,7 +339,7 @@ async def _after_close(
             )
             values["consecutive_eval_failures"] = failures
             since = int(c.cycles_since_improvement or 0)
-            if verdict.outcome in JUDGED_OUTCOMES:
+            if verdict.outcome in JUDGED_OUTCOMES or verdict.outcome == "no_record":
                 since = 0 if verdict.improved else since + 1
             if verdict.improved:
                 values["best_attempt_id"] = attempt.id
@@ -329,7 +356,7 @@ async def _after_close(
                 )
                 details["reason"] = "eval_failures"
             elif (
-                c.mode == "target" and verdict.valid
+                c.mode == "target" and verdict.valid and verdict.outcome != "no_record"
                 and reaches_target(verdict.dev_score, c.metric)
             ):
                 event = "target_reached"
@@ -350,6 +377,14 @@ async def _after_close(
             values["cycles_since_improvement"] = since
         elif usable_tokens(c.budget) - tokens_used <= 0:
             event = "budget_exhausted"
+        if attempt.block_reason and event in {None, "plateau"}:
+            event = "block"
+            hint = f" To unblock: {attempt.unblock_hint}" if attempt.unblock_hint else ""
+            values["status_detail"] = f"The agent reported: {attempt.block_reason}.{hint}"[:4000]
+            details["reason"] = "agent_reported"
+            if strategy_change:
+                strategy_change = False
+                values.pop("wake_reason", None)
         if event == "budget_exhausted":
             values["stop_reason"] = "budget"
             details["tokens_used"] = tokens_used
@@ -408,6 +443,7 @@ async def request_eval(
     attempt.eval_job_id = attempt.id
     attempt.eval_deadline_at = None
     await db.flush()
+    mark(db, attempt_id=attempt.id)
     await record_event(
         db, campaign.id,
         key=f"campaign:{campaign.id}:cycle:{attempt.cycle_no}:eval_requested",
@@ -447,11 +483,21 @@ async def on_execution_terminal(
             await _settle_cycle_work(db, attempt, reason=event_type, clock=clock)
         await _add_tokens(db, campaign, delta, clock=clock)
         return
+    finished_at = getattr(execution, "finished_at", None)
+    if attempt.kind == "retrospective":
+        # A retrospective is not scored: it ends with its run. Its changes
+        # are already recorded (``apply_campaign_learning``).
+        completed = event_type == "execution_completed"
+        if not await _close(db, attempt, outcome=None if completed else "unknown",
+                            eval_status="skipped", clock=clock, finished_at=finished_at):
+            return
+        await _settle_cycle_work(db, attempt, reason=event_type, clock=clock)
+        await _after_close(db, campaign, attempt, verdict=None, token_delta=delta, clock=clock)
+        return
     if event_type == "execution_completed" and campaign.status not in TERMINAL_STATUSES:
         await request_eval(db, campaign, attempt, clock=clock)
         await _add_tokens(db, campaign, delta, clock=clock)
         return
-    finished_at = getattr(execution, "finished_at", None)
     if not await _close(db, attempt, outcome="unknown", eval_status="skipped", clock=clock,
                         finished_at=finished_at):
         return
@@ -506,6 +552,12 @@ async def on_eval_result(
         metric=campaign.metric, score_key=score_key, status=status, parsed=parsed,
         best_score=best.dev_score if best is not None else None,
     )
+    if attempt.recorded_at is None and verdict.outcome in JUDGED_OUTCOMES:
+        # Decision 7 — an attempt counts only with the agent's one explicit
+        # report. The score is kept, but an unreported run neither becomes
+        # the best nor reaches the target; it counts towards the plateau
+        # window and the next brief warns about the missing record.
+        verdict = Verdict("no_record", verdict.eval_status, verdict.dev_score, verdict.valid)
     now = clock()
     excerpt = (frame.get("stdout_tail") or "")[-_EXCERPT_CHARS // 2:]
     stderr = (frame.get("stderr_tail") or "")[-_EXCERPT_CHARS // 2:]

@@ -122,9 +122,12 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
 
     # ── tools/list ──────────────────────────────────────────────
     if method == "tools/list":
+        from anygarden.mcp.campaign_tools import CAMPAIGN_TOOL_SCHEMAS
         from anygarden.mcp.project_tools import PROJECT_TOOL_SCHEMAS
 
-        return _jsonrpc_ok(req_id, {"tools": [*TOOL_SCHEMAS, *PROJECT_TOOL_SCHEMAS]})
+        return _jsonrpc_ok(
+            req_id, {"tools": [*TOOL_SCHEMAS, *PROJECT_TOOL_SCHEMAS, *CAMPAIGN_TOOL_SCHEMAS]}
+        )
 
     # ── tools/call ──────────────────────────────────────────────
     if method == "tools/call":
@@ -143,6 +146,12 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
 
         if name in PROJECT_TOOL_NAMES:
             result = await call_project_tool(request, agent_id=agent_id, name=name, arguments=arguments)
+            return _jsonrpc_ok(req_id, result)
+        # #930 — campaign cycle tools; the turn proof picks the cycle.
+        from anygarden.mcp.campaign_tools import CAMPAIGN_TOOL_NAMES, call_campaign_tool
+
+        if name in CAMPAIGN_TOOL_NAMES:
+            result = await call_campaign_tool(request, agent_id=agent_id, name=name, arguments=arguments)
             return _jsonrpc_ok(req_id, result)
         # #806 — general-room tasks. Both tools act on the delivered turn
         # alone, so they need its lease proof and take no ids from the model.

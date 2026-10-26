@@ -1542,6 +1542,9 @@ class InstructionRevisionOut(BaseModel):
     source: str
     by_user_id: Optional[str] = None
     restored_from: Optional[int] = None
+    context: Optional[dict] = None
+    """Why the revision was made, e.g. a campaign retrospective's
+    ``{campaign_id, attempt_id, rationale}`` (#930)."""
     agents_md: str
     skills: dict[str, str]
     created_at: datetime
