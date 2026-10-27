@@ -33,7 +33,7 @@ interface RightContextRailProps {
  * (``Sidebar.tsx:354-376``) so users carry one mental model.
  *
  * Prioritize pending questions and approvals, then current execution/task
- * summaries and recent results. Responsibilities and shared files remain
+ * summaries and recent results. Routines and shared files remain
  * reachable in a collapsed resource section below the work queue.
  */
 export default function RightContextRail({

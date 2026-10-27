@@ -29,7 +29,7 @@ describe('GoalForm', () => {
 
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Daily check' } })
     fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Check the host.' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add responsibility' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add routine' }))
 
     await waitFor(() => expect(mocks.createGoal).toHaveBeenCalledWith('agent-1', {
       title: 'Daily check',

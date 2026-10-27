@@ -129,8 +129,8 @@ test('[CMP-01] start a campaign, see it in the rail and pause it', async ({ page
 
   const section = page.getByTestId('campaign-section')
   await expect(section).toBeVisible()
-  await expect(section.getByText(/No campaigns yet/)).toBeVisible()
-  await section.getByRole('button', { name: 'New campaign' }).click()
+  await expect(section.getByText(/No goals yet/)).toBeVisible()
+  await section.getByRole('button', { name: 'New goal' }).click()
 
   const form = page.getByTestId('campaign-form')
   await expect(form).toBeVisible()
@@ -144,7 +144,7 @@ test('[CMP-01] start a campaign, see it in the rail and pause it', async ({ page
   await form.getByLabel('Metric name', { exact: true }).fill('accuracy')
   await form.getByLabel('Target score', { exact: true }).fill('0.9')
   await form.getByLabel('Evaluator command', { exact: true }).fill('python eval.py')
-  await form.getByRole('button', { name: 'Start campaign' }).click()
+  await form.getByRole('button', { name: 'Start goal' }).click()
   await expect(form).toBeHidden()
 
   expect(state.requests).toHaveLength(1)

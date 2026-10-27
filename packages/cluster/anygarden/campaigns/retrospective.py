@@ -263,7 +263,7 @@ async def apply_learning(
         mark(db, campaign_id=campaign.id)
         messages.append(await append_message(
             db, campaign.room_id, None,
-            f"Campaign “{campaign.title}” retrospective updated {what} "
+            f"Goal “{campaign.title}” retrospective updated {what} "
             f"(instructions revision {revision}, no approval needed). Why: {rationale}\n"
             "Restore an earlier revision from the agent's instructions history if needed.",
             {"kind": "campaign_learning", "campaign_id": campaign.id,

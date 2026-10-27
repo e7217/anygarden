@@ -86,7 +86,7 @@ export const projectExecutionsKo: Record<keyof typeof projectExecutionsEn, strin
   'executions.history': '실행 이력',
   'executions.details': '입력·결과·전송 이력',
   'executions.inputVersion': '입력 버전 {{version}}',
-  'executions.objective': '목표',
+  'executions.objective': '목적',
   'executions.constraints': '제약',
   'executions.criteria': '완료 기준 (한 줄에 하나)',
   'executions.files': '새 입력에 사용할 업로드 파일',

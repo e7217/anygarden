@@ -42,7 +42,7 @@ describe('CampaignForm', () => {
 
   it('[CMP-01] shows field errors instead of submitting an incomplete campaign', async () => {
     const { onSubmit } = renderForm()
-    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
     expect(onSubmit).not.toHaveBeenCalled()
     expect(screen.getByLabelText('Target score')).toHaveAttribute('aria-invalid', 'true')
     expect(screen.getAllByText('Required.').length).toBeGreaterThan(0)
@@ -55,7 +55,7 @@ describe('CampaignForm', () => {
     fill(/Metric name/, 'accuracy')
     fill(/Target score/, '0.9')
     fill(/Evaluator command/, 'python eval.py')
-    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       mode: 'target',
@@ -66,7 +66,7 @@ describe('CampaignForm', () => {
 
   it('focuses the first invalid field after a failed submit', () => {
     renderForm()
-    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
     expect(screen.getByLabelText(/^Title$/)).toHaveFocus()
     expect(screen.getByTestId('campaign-form-advanced')).not.toHaveAttribute('open')
   })
@@ -75,20 +75,20 @@ describe('CampaignForm', () => {
     renderForm()
     fill(/^Title$/, 'T'); fill(/Purpose/, 'P'); fill(/Metric name/, 'm'); fill(/Target score/, '1'); fill(/Evaluator command/, 'c')
     fill(/time limit/, '0')
-    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
     expect(screen.getByTestId('campaign-form-advanced')).toHaveAttribute('open')
     expect(screen.getByLabelText(/time limit/)).toHaveFocus()
     expect(screen.getByText('Enter 1 to 21600 seconds.')).toBeInTheDocument()
   })
 
   it.each([
-    [new CampaignApiError('Task management requires a room admin or owner', 403, null, null), 'Only a room admin or owner can start a campaign'],
+    [new CampaignApiError('Task management requires a room admin or owner', 403, null, null), 'Only a room admin or owner can start a goal'],
     [new CampaignApiError('no', 409, 'CAMPAIGN_CONFLICT', 'ROOM_ARCHIVED'), 'The room is archived'],
-    [new CampaignApiError('Server exploded', 500, null, null), "Couldn't start the campaign: Server exploded"],
+    [new CampaignApiError('Server exploded', 500, null, null), "Couldn't start the goal: Server exploded"],
   ])('explains a create failure (%#)', async (error, text) => {
     renderForm(vi.fn(async () => { throw error }))
     fill(/^Title$/, 'T'); fill(/Purpose/, 'P'); fill(/Metric name/, 'm'); fill(/Target score/, '1'); fill(/Evaluator command/, 'c')
-    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(text)
   })
 
@@ -96,7 +96,7 @@ describe('CampaignForm', () => {
     const onSubmit = vi.fn(async () => { throw new CampaignApiError('no', 403, 'CAMPAIGN_EVALUATOR_FORBIDDEN', null) })
     renderForm(onSubmit)
     fill(/^Title$/, 'T'); fill(/Purpose/, 'P'); fill(/Metric name/, 'm'); fill(/Target score/, '1'); fill(/Evaluator command/, 'c')
-    fireEvent.click(screen.getByRole('button', { name: 'Start campaign' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
     expect(await screen.findByRole('alert')).toHaveTextContent("Only the owner of the lead agent's machine")
   })
 })
