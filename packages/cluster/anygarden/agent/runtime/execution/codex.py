@@ -33,6 +33,28 @@ _STDERR_KEEP = 2048
 # #892 — the turn's idle clock; every stdout line from the CLI is activity.
 _TURN_CLOCK: ContextVar[TurnClock | None] = ContextVar("codex_turn_clock", default=None)
 
+# #946 — Codex built-ins that overlap concepts anygarden manages and keep
+# state anygarden cannot see. ``goals`` (create_goal/get_goal/update_goal)
+# stores its goals in the agent's ``CODEX_HOME`` and expects automatic
+# continuation turns, so an agent asked for an anygarden goal would make one
+# only Codex knows about. Both exec paths share this list.
+DISABLED_CODEX_FEATURES: tuple[str, ...] = ("goals",)
+
+
+def disabled_feature_args() -> list[str]:
+    """``-c features.<name>=false`` for every disabled Codex built-in.
+
+    Not ``--disable <name>``: that fails with ``Unknown feature flag`` on a
+    Codex that predates the feature, while an unknown ``-c features.*`` key is
+    ignored (checked on 0.164.0). ``-c`` is accepted by ``exec`` and
+    ``exec resume`` alike.
+    """
+    args: list[str] = []
+    for name in DISABLED_CODEX_FEATURES:
+        args += ["-c", f"features.{name}=false"]
+    return args
+
+
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
 ENGINE = "codex-cli"
@@ -184,6 +206,7 @@ class CodexRuntime:
             f"sandbox_mode={sandbox}",
             "-c",
             "approval_policy=never",
+            *disabled_feature_args(),
         ]
         if invocation.model:
             cmd += ["-m", invocation.model]

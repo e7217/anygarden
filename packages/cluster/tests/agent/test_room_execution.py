@@ -694,3 +694,16 @@ async def test_codex_transient_failure_reaches_frames_as_native_transient(
         assert len(calls) == 1  # the agent never retries in-process
     finally:
         await client.close()
+
+
+@pytest.mark.req("ENG-15")
+@pytest.mark.parametrize("session", [None, "native-session"])
+def test_codex_runtime_disables_goals_feature(tmp_path, session):
+    # #946 — Codex's built-in goals would live outside anygarden.
+    scope = SessionScope("node", "agent", "node", "room", None, "workspace", 0, 0)
+    invocation = RoomInvocation("one", scope, "hello", tmp_path, tmp_path)
+    for runtime in (RoomCodexRuntime(Path("/fake/codex")), CodexRuntime(Path("/fake/codex"))):
+        cmd = runtime.command(invocation, session, tmp_path / "out")
+        assert "features.goals=false" in cmd
+        assert cmd[cmd.index("features.goals=false") - 1] == "-c"
+        assert "--disable" not in cmd

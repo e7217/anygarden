@@ -98,6 +98,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | ENG-12 | 에이전트가 아닌 발신자는 `execution_trace`와 typing 작업 필드를 위조할 수 없고, 다른 에이전트가 읽는 대화에는 trace가 포함되지 않는다 | pytest |
 | ENG-13 | 응답 대기 표시는 서버가 센 에이전트의 작업 경과 시간을 보여주고 새로고침해도 이어서 센다. 도구를 쓴 답변의 "작업 과정" 머리글은 총 소요 시간을 보여준다 | pytest, vitest, e2e |
 | ENG-14 | 엔진에 넘기는 입력은 `/`로 시작하지 않아 채팅 메시지가 엔진의 슬래시 명령·템플릿으로 해석되지 않는다 | pytest |
+| ENG-15 | Codex 실행(새 세션·resume, 방 대화·실행 런타임 모두)은 anygarden이 관리하는 개념과 겹치는 Codex 내장 기능(`goals`)을 `-c features.<x>=false`로 끈다 | pytest |
 
 ## 에이전트 협업 (COL)
 
