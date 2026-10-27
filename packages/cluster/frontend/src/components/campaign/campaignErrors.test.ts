@@ -20,8 +20,8 @@ describe('campaignErrorMessage', () => {
 
   it('falls back to the server message', () => {
     expect(campaignErrorMessage(t, new CampaignApiError('cwd escapes', 422, 'CAMPAIGN_INVALID', 'INVALID_EVALUATOR'), 'create'))
-      .toBe("Couldn't start the campaign: cwd escapes")
-    expect(campaignErrorMessage(t, new Error('offline'), 'change')).toBe("Couldn't update the campaign: offline")
+      .toBe("Couldn't start the goal: cwd escapes")
+    expect(campaignErrorMessage(t, new Error('offline'), 'change')).toBe("Couldn't update the goal: offline")
   })
 })
 

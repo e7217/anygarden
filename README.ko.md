@@ -54,7 +54,7 @@ anygarden start
 - [여러 머신에서 에이전트 실행하기](packages/cluster/docs/machine/operations.md)
 - [이 컴퓨터를 다른 서버에 빌려주기](docs/runbook/local-node.md#serving-another-server-from-a-computer-that-runs-a-node-848) (영어)
 - [로컬 노드 상세](docs/runbook/local-node.md) · [모델 엔드포인트](docs/runbook/direct-model-endpoints.md) (영어)
-- [캠페인: 지표를 정해 두고 계속 개선하기](docs/campaigns.md)
+- [목표: 지표를 정해 두고 계속 개선하기](docs/campaigns.md)
 - [기여하기](CONTRIBUTING.md) (영어)
 
 ## 라이선스

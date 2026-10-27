@@ -17,7 +17,7 @@ it('shows query failure with retry and closes settings on report room navigation
   const close = vi.fn()
   render(<MemoryRouter><GoalsPanel agentId="A" onNavigateAway={close} /><Location /></MemoryRouter>)
   expect(await screen.findByRole('alert')).toHaveTextContent(/could not load/i)
-  expect(screen.queryByText('This agent has no responsibilities yet')).not.toBeInTheDocument()
+  expect(screen.queryByText('This agent has no routines yet')).not.toBeInTheDocument()
   fetch.mockResolvedValue(json([goal]))
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Open report room' }))
@@ -25,10 +25,10 @@ it('shows query failure with retry and closes settings on report room navigation
   expect(screen.getByText('/rooms/room-A')).toBeInTheDocument()
 })
 
-it('loads existing responsibility fields into the edit form', async () => {
+it('loads existing routine fields into the edit form', async () => {
   fetch.mockResolvedValue(json([goal]))
   render(<MemoryRouter><GoalsPanel agentId="A" agentName="Builder" /></MemoryRouter>)
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit responsibility' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit routine' }))
   expect(screen.getByLabelText('Title')).toHaveValue(goal.title)
   expect(screen.getByLabelText('Instructions')).toHaveValue(goal.spec)
   expect(screen.getByLabelText('Report to room (room ID)')).toHaveValue('room-A')

@@ -57,8 +57,8 @@ describe('CampaignSection', () => {
 
   it('offers to start one in a project room with a lead', () => {
     renderSection()
-    expect(screen.getByRole('button', { name: 'New campaign' })).toBeInTheDocument()
-    expect(screen.getByText(/No campaigns yet/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New goal' })).toBeInTheDocument()
+    expect(screen.getByText(/No goals yet/)).toBeInTheDocument()
   })
 
   it('shows status text, best score against target, budget and attempts', () => {
@@ -97,7 +97,7 @@ describe('CampaignSection', () => {
     renderSection()
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     const dialog = await screen.findByRole('alertdialog').catch(() => screen.getByRole('dialog'))
-    expect(dialog).toHaveTextContent('Stop this campaign?')
+    expect(dialog).toHaveTextContent('Stop this goal?')
     expect(mocks.act).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Stop' }))
     await waitFor(() => expect(mocks.act).toHaveBeenCalledWith('camp-1', 'stop'))
@@ -119,14 +119,14 @@ describe('CampaignSection', () => {
     unmount()
     mocks.user = { id: 'user-1', email: 'a@b.c', is_admin: true }
     renderSection(projectRoom, member)
-    expect(screen.getByRole('button', { name: 'New campaign' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New goal' })).toBeInTheDocument()
   })
 
   it('shows campaigns to a member without offering to start one', () => {
     mocks.campaigns = [campaignFixture()]
     renderSection(projectRoom, { 'part-me': { ...ownerRoster['part-me'], role: 'member' } })
     expect(screen.getByTestId('campaign-card-camp-1')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'New campaign' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'New goal' })).toBeNull()
   })
 
   it('translates a known status detail', () => {
@@ -156,7 +156,7 @@ describe('CampaignSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Extend' }))
     fireEvent.change(screen.getByLabelText('New token budget'), { target: { value: '200000' } })
     fireEvent.click(screen.getByRole('button', { name: 'Extend and resume' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('does not clear what ended the campaign')
+    expect(await screen.findByRole('alert')).toHaveTextContent('does not clear what ended the goal')
   })
 
   it('updates the time left as time passes', () => {

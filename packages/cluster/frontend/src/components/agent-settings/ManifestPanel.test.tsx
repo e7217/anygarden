@@ -737,7 +737,7 @@ describe('ManifestPanel — disk-sourced instructions (#908)', () => {
     renderWith(makeAgent({ agents_md: 'learned rule', instructions_mode: 'disk', instructions_revision: 4 }),
       { fetchInstructionRevisions, restoreInstructionRevision: vi.fn() })
     fireEvent.click(await screen.findByTestId('manifest-history'))
-    expect(await screen.findByTestId('instruction-source-4')).toHaveTextContent('Campaign retrospective')
+    expect(await screen.findByTestId('instruction-source-4')).toHaveTextContent('Goal retrospective')
     expect(screen.getByTestId('instruction-history-rationale')).toHaveTextContent('Why: Caching cut eval time by half')
     fireEvent.click(screen.getByText('Version 3'))
     expect(screen.queryByTestId('instruction-history-rationale')).not.toBeInTheDocument()
