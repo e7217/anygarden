@@ -406,6 +406,10 @@ class EngineAdapter(ABC):
         labelled_content = (
             f"{sender_label}: {raw_content}" if sender_label else raw_content
         )
+        # #940 — engines expand input that starts with ``/`` (Pi prompt
+        # templates and skills). A chat message is never an engine command.
+        if labelled_content.startswith("/"):
+            labelled_content = f"Message: {labelled_content}"
 
         if not parts:
             return labelled_content

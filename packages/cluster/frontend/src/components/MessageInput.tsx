@@ -6,7 +6,7 @@ import { readDraft, writeDraft, clearDraft } from '@/lib/composerDrafts'
 import { RoomFileUploadError, uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
 import { uploadRoomArtifact } from '@/lib/roomArtifacts'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
-import { parseSlashCommand } from '@/lib/slashCommands'
+import { matchSlashCommands, parseSlashCommand, type SlashFormRequest } from '@/lib/slashCommands'
 import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
@@ -42,6 +42,11 @@ interface MessageInputProps {
    * no one. Enabled for rooms with two or more agents, where an
    * unmentioned message gets no agent reply. */
   showMentionHint?: boolean
+  /** #940 — opens the form for ``/routine`` or ``/goal``. Returns why the
+   * form cannot open (shown under the input), or null once it opened.
+   * Omitted (threads, guests) = the two commands are not offered and
+   * send as plain text. */
+  onSlashForm?: (request: SlashFormRequest) => string | null
 }
 
 /** Id of the synthetic ``@everyone`` option; it inserts a literal keyword
@@ -125,7 +130,7 @@ const carriesFiles = (types: readonly string[] | DOMStringList | undefined) =>
   Array.from(types ?? []).includes('Files')
 
 interface MentionState {
-  type: '@' | '#' | '$'
+  type: '@' | '#' | '$' | '/'
   startIndex: number
   query: string
 }
@@ -144,7 +149,7 @@ interface TrackedFileReference {
 export default function MessageInput({
   onSend, onTyping, disabled,
   mentionUsers = [], mentionRooms = [],
-  roomId, placeholder, autoFocus, draftKey, showMentionHint = false,
+  roomId, placeholder, autoFocus, draftKey, showMentionHint = false, onSlashForm,
 }: MessageInputProps) {
   const { t } = useLocale()
   const [value, setValue] = useState(() => readDraft(draftKey))
@@ -272,12 +277,16 @@ export default function MessageInput({
     : mention?.type === '#'
       ? mentionRooms
       : fileOptions
-  const filtered = useMemo(
-    () => mention
-      ? currentOptions.filter(o => o.display.toLowerCase().includes(mention.query.toLowerCase()))
-      : [],
-    [mention, currentOptions],
-  )
+  const filtered = useMemo<MentionOption[]>(() => {
+    if (!mention) return []
+    // #940 — commands match by name prefix; the usage text is not searched.
+    if (mention.type === '/') {
+      return matchSlashCommands(`/${mention.query}`)
+        .filter(c => c.name === 'task' || onSlashForm)
+        .map(c => ({ id: c.name, display: c.usage, kind: 'command', description: t(c.descriptionKey) }))
+    }
+    return currentOptions.filter(o => o.display.toLowerCase().includes(mention.query.toLowerCase()))
+  }, [mention, currentOptions, onSlashForm, t])
 
   useEffect(() => { setSelectedIndex(0) }, [mention?.type, mention?.query])
 
@@ -286,6 +295,12 @@ export default function MessageInput({
 
   const selectMention = useCallback((option: MentionOption) => {
     if (!mention) return
+    if (mention.type === '/') {
+      setValue(`/${option.id} `)
+      setMention(null)
+      textareaRef.current?.focus()
+      return
+    }
     if (mention.type === '$') {
       const file = roomFiles.find(f => f.id === option.id)
       if (!file) return
@@ -358,19 +373,38 @@ export default function MessageInput({
     if (content.startsWith('/') && roomId) {
       const dispatch = parseSlashCommand(content)
       if (dispatch) {
-        const { command, parsed } = dispatch
-        if (!parsed.ok) {
-          setSlashError(parsed.error)
+        if (!dispatch.parsed.ok) {
+          setSlashError(dispatch.parsed.error)
           return
         }
-        if (command === 'task') {
+        if (dispatch.command !== 'task' && onSlashForm && dispatch.parsed.ok) {
+          const blocked = onSlashForm(
+            dispatch.command === 'routine'
+              ? { command: 'routine', payload: dispatch.parsed.payload }
+              : { command: 'goal', payload: dispatch.parsed.payload },
+          )
+          if (blocked) {
+            setSlashError(blocked)
+            return
+          }
+          setValue('')
+          clearDraft(draftKey)
+          trackedMentions.current = []
+          trackedFileReferences.current = []
+          setMention(null)
+          onTyping(false)
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+          return
+        }
+        if (dispatch.command === 'task' && dispatch.parsed.ok) {
+          const { payload } = dispatch.parsed
           // Fire-and-forget; the WS task fanout will surface the new
           // row in TaskPanel and the synthetic mention card in chat.
           apiFetch(`/api/v1/rooms/${roomId}/tasks`, {
             method: 'POST',
             body: JSON.stringify({
-              title: parsed.payload.title,
-              assignee_participant_id: parsed.payload.assignee_pid,
+              title: payload.title,
+              assignee_participant_id: payload.assignee_pid,
             }),
           })
             .then(async r => {
@@ -580,6 +614,13 @@ export default function MessageInput({
 
     const cursorPos = e.target.selectionStart
     const textUpToCursor = newValue.slice(0, cursorPos)
+
+    // #940 — suggest commands while the whole input is ``/`` + a word.
+    if (roomId && /^\/[a-z]*$/.test(newValue) && cursorPos === newValue.length) {
+      setMention({ type: '/', startIndex: 0, query: newValue.slice(1) })
+      updateMentionPosition()
+      return
+    }
 
     const atMatch = textUpToCursor.match(/(?:^|\s)@([^\s]*)$/)
     const hashMatch = textUpToCursor.match(/(?:^|\s)#([^\s]*)$/)

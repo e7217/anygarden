@@ -2,9 +2,9 @@
  * Slash command framework (#269).
  *
  * Tiny dispatch layer for in-input commands like ``/task @bot title``.
- * The framework intentionally stays small — Phase 2 ships exactly one
- * command (``/task``); the abstraction is just enough to make adding
- * a second command (``/handoff``, ``/summarize``…) a one-file change.
+ * ``/task`` creates a task directly; ``/routine`` and ``/goal`` (#940)
+ * open the matching form pre-filled. The framework stays small: adding
+ * a command is a parser plus one ``SLASH_COMMANDS`` entry.
  *
  * Parsers return a discriminated union (`{ ok: true, payload }` or
  * `{ ok: false, error }`) so callers can branch on a single check
@@ -58,9 +58,65 @@ export function parseTaskCommand(body: string): ParseResult<TaskCommandPayload> 
   return { ok: true, payload: { assignee_pid: pid, title } }
 }
 
-export interface SlashDispatch<T> {
-  command: string
-  parsed: ParseResult<T>
+/** Payload of ``/routine`` (#940): an optional assignee and title that
+ * pre-fill the routine form. */
+export interface RoutineCommandPayload {
+  assignee_pid: string | null
+  title: string
+}
+
+/** Payload of ``/goal`` (#940): an optional title for the goal form. */
+export interface GoalCommandPayload {
+  title: string
+}
+
+const stripUserMentions = (body: string) =>
+  body.replace(ALL_USER_MENTIONS_RE, '').replace(/\s+/g, ' ').trim()
+
+/** Parse the ``/routine`` body. Both parts are optional: the command
+ * opens the routine form, so missing fields are filled in there. */
+export function parseRoutineCommand(body: string): ParseResult<RoutineCommandPayload> {
+  const match = body.match(ID_MENTION_RE)
+  return { ok: true, payload: { assignee_pid: match ? match[1] : null, title: stripUserMentions(body) } }
+}
+
+/** Parse the ``/goal`` body: whatever is left is the goal's title. */
+export function parseGoalCommand(body: string): ParseResult<GoalCommandPayload> {
+  return { ok: true, payload: { title: stripUserMentions(body) } }
+}
+
+export type SlashDispatch =
+  | { command: 'task'; parsed: ParseResult<TaskCommandPayload> }
+  | { command: 'routine'; parsed: ParseResult<RoutineCommandPayload> }
+  | { command: 'goal'; parsed: ParseResult<GoalCommandPayload> }
+
+export type SlashCommandName = SlashDispatch['command']
+
+/** What the composer hands its host for ``/routine`` and ``/goal``. */
+export type SlashFormRequest =
+  | { command: 'routine'; payload: RoutineCommandPayload }
+  | { command: 'goal'; payload: GoalCommandPayload }
+
+export interface SlashCommandInfo {
+  name: SlashCommandName
+  /** What to type, shown in the suggestion list. */
+  usage: string
+  /** i18n key of the one-line description. */
+  descriptionKey: 'chat.slash.task' | 'chat.slash.routine' | 'chat.slash.goal'
+}
+
+export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
+  { name: 'task', usage: '/task @agent title', descriptionKey: 'chat.slash.task' },
+  { name: 'routine', usage: '/routine @agent title', descriptionKey: 'chat.slash.routine' },
+  { name: 'goal', usage: '/goal title', descriptionKey: 'chat.slash.goal' },
+]
+
+/** Commands to suggest while the user is still typing the command word
+ * (``/``, ``/ro``). Nothing once a space follows or no command matches. */
+export function matchSlashCommands(input: string): SlashCommandInfo[] {
+  if (!/^\/[a-z]*$/.test(input)) return []
+  const query = input.slice(1)
+  return SLASH_COMMANDS.filter(c => c.name.startsWith(query))
 }
 
 /** Look up the command from the input and route to its parser.
@@ -70,15 +126,15 @@ export interface SlashDispatch<T> {
  * which lets users type messages that *happen* to start with ``/`` (a
  * URL fragment, a file path) without slash interpretation.
  */
-export function parseSlashCommand(
-  input: string,
-): SlashDispatch<TaskCommandPayload> | null {
+export function parseSlashCommand(input: string): SlashDispatch | null {
   if (!input.startsWith('/')) return null
-  const space = input.indexOf(' ')
+  const space = input.search(/\s/)
   const name = space === -1 ? input.slice(1) : input.slice(1, space)
   const body = space === -1 ? '' : input.slice(space + 1)
-  if (name === 'task') {
-    return { command: 'task', parsed: parseTaskCommand(body) }
+  switch (name) {
+    case 'task': return { command: 'task', parsed: parseTaskCommand(body) }
+    case 'routine': return { command: 'routine', parsed: parseRoutineCommand(body) }
+    case 'goal': return { command: 'goal', parsed: parseGoalCommand(body) }
+    default: return null
   }
-  return null
 }

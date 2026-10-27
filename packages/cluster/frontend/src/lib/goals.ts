@@ -6,6 +6,7 @@
  * optional here without breaking older clients.
  */
 import { apiFetch } from '@/lib/api'
+import type { Participant } from '@/lib/participants'
 
 export type GoalStatus =
   | 'active'
@@ -134,4 +135,12 @@ export async function resumeGoal(goalId: string): Promise<Goal> {
     method: 'POST',
   })
   return jsonOrThrow<Goal>(resp, 'Resume goal')
+}
+
+/** Room agents as routine-form options, sorted by name. */
+export function routineAgentOptions(participants: Record<string, Participant>): { id: string; name: string }[] {
+  return Object.values(participants)
+    .filter(p => p.agent_id)
+    .map(p => ({ id: p.agent_id as string, name: p.display_name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 }

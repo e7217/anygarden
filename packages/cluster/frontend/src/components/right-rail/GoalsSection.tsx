@@ -5,7 +5,7 @@ import { useRoomGoals } from '@/hooks/useRoomGoals'
 import GoalForm, {
   type GoalFormAgentOption,
 } from '@/components/goal-form/GoalForm'
-import type { Goal } from '@/lib/goals'
+import { routineAgentOptions, type Goal } from '@/lib/goals'
 import type { Participant } from '@/pages/ChatPage'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
@@ -74,11 +74,7 @@ export default function GoalsSection({
   // references the agent, and the API call from GoalForm needs the
   // agent id.
   const formAgents = useMemo<GoalFormAgentOption[]>(
-    () =>
-      agentParticipants
-        .filter((p) => p.agent_id)
-        .map((p) => ({ id: p.agent_id as string, name: p.display_name }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+    () => routineAgentOptions(Object.fromEntries(agentParticipants.map((p) => [p.id, p]))),
     [agentParticipants],
   )
   const hasCandidates = formAgents.length > 0

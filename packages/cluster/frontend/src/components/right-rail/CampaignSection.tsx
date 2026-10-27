@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import CampaignForm from '@/components/campaign/CampaignForm'
+import { canStartCampaign } from '@/components/campaign/campaignAccess'
 import { campaignErrorMessage, campaignStatusDetail } from '@/components/campaign/campaignErrors'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import { useAuth } from '@/hooks/useAuth'
@@ -312,12 +313,8 @@ export default function CampaignSection({ roomId, room, participants = {} }: Cam
   const { user } = useAuth()
   const { campaigns, attempts, loading, error, create, act, extend } = useRoomCampaigns(roomId)
   const [formOpen, setFormOpen] = useState(false)
-  // Starting one needs the room's task-manage capability: a room admin or
-  // owner, or a global admin (``api/v1/campaigns.py`` → TASK_MANAGE). The
-  // evaluator rule (machine owner) is not known here; the form explains it.
-  const myRole = user ? Object.values(participants).find(p => p.user_id === user.id)?.role : undefined
-  const mayManageRoom = Boolean(user && (user.is_admin || myRole === 'owner' || myRole === 'admin'))
-  const canCreate = Boolean(room && room.project_id && !room.is_dm && room.representative_agent_id && mayManageRoom)
+  // The evaluator rule (machine owner) is not known here; the form explains it.
+  const canCreate = canStartCampaign(room, participants, user)
   const now = useMinuteClock(campaigns.some(c => c.deadline_at && campaignActions(c.status).stop))
 
   if (!canCreate && campaigns.length === 0 && !error) return null
