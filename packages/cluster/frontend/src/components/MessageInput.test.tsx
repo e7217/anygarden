@@ -397,3 +397,61 @@ describe('MessageInput image attachments (#873)', () => {
     expect(accept).not.toContain('svg')
   })
 })
+
+describe('MessageInput slash commands (#940)', () => {
+  const placeholder = 'Type a message... (@ to mention, # for rooms)'
+
+  it('[MSG-10] suggests commands while the command word is typed and fills one in', () => {
+    render(<MessageInput onSend={vi.fn()} onTyping={vi.fn()} roomId="room-1" onSlashForm={vi.fn(() => null)} />)
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value: '/', selectionStart: 1 } })
+    expect(screen.getByText('/task @agent title')).toBeInTheDocument()
+    expect(screen.getByText('/routine @agent title')).toBeInTheDocument()
+    expect(screen.getByText('/goal title')).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: '/ro', selectionStart: 3 } })
+    expect(screen.queryByText('/task @agent title')).not.toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(input).toHaveValue('/routine ')
+  })
+
+  it('does not offer /routine or /goal where no form can open', () => {
+    render(<MessageInput onSend={vi.fn()} onTyping={vi.fn()} roomId="room-1" />)
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value: '/', selectionStart: 1 } })
+    expect(screen.getByText('/task @agent title')).toBeInTheDocument()
+    expect(screen.queryByText('/goal title')).not.toBeInTheDocument()
+  })
+
+  it('[MSG-10] opens the routine form with the parsed assignee and title instead of sending', () => {
+    const onSend = vi.fn()
+    const onSlashForm = vi.fn(() => null)
+    render(<MessageInput onSend={onSend} onTyping={vi.fn()} roomId="room-1" onSlashForm={onSlashForm} />)
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value: '/routine <@user:p1> daily report', selectionStart: 33 } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSlashForm).toHaveBeenCalledWith({ command: 'routine', payload: { assignee_pid: 'p1', title: 'daily report' } })
+    expect(onSend).not.toHaveBeenCalled()
+    expect(input).toHaveValue('')
+  })
+
+  it('[MSG-10] keeps the text and shows the reason when the form cannot open', () => {
+    const onSlashForm = vi.fn(() => 'Goals need a project room with a lead agent.')
+    render(<MessageInput onSend={vi.fn()} onTyping={vi.fn()} roomId="room-1" onSlashForm={onSlashForm} />)
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value: '/goal faster parser', selectionStart: 19 } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSlashForm).toHaveBeenCalledWith({ command: 'goal', payload: { title: 'faster parser' } })
+    expect(screen.getByTestId('slash-error')).toHaveTextContent('Goals need a project room with a lead agent.')
+    expect(input).toHaveValue('/goal faster parser')
+  })
+
+  it('sends /goal as a plain message where the command is unavailable', () => {
+    const onSend = vi.fn()
+    render(<MessageInput onSend={onSend} onTyping={vi.fn()} roomId="room-1" />)
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value: '/goal faster parser', selectionStart: 19 } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledWith('/goal faster parser', undefined)
+  })
+})

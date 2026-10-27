@@ -119,3 +119,25 @@ class TestIdentityHeader:
         out = _with_identity("A", None)
         assert out is not None
         assert out.startswith('You are "A"')
+
+
+class TestEngineInputNeverStartsWithSlash:
+    """#940 — a message is never read as an engine slash command."""
+
+    @pytest.mark.req("ENG-14")
+    def test_unlabelled_slash_message_is_shielded(self) -> None:
+        adapter = _RosterAdapter({"r1": ROSTER})
+        out = adapter.assemble_user_content("r1", "/review this")
+        assert not out.startswith("/")
+        assert out.endswith("/review this")
+
+    @pytest.mark.req("ENG-14")
+    def test_unknown_sender_slash_message_is_shielded(self) -> None:
+        adapter = _RosterAdapter({"r1": ROSTER})
+        out = adapter.assemble_user_content("r1", "/skill:foo", sender_participant_id="ghost")
+        assert not out.startswith("/")
+
+    def test_labelled_slash_message_keeps_its_label(self) -> None:
+        adapter = _RosterAdapter({"r1": ROSTER})
+        out = adapter.assemble_user_content("r1", "/review this", sender_participant_id="pid-hu")
+        assert out == "admin(user): /review this"

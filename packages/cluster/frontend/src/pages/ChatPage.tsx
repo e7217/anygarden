@@ -9,6 +9,10 @@ import RoomArtifactsDialog from '@/components/RoomArtifactsDialog'
 import RoomActivityDialog from '@/components/RoomActivityDialog'
 import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
 import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
+import SlashFormDialog from '@/components/slash/SlashFormDialog'
+import { canStartCampaign } from '@/components/campaign/campaignAccess'
+import { routineAgentOptions } from '@/lib/goals'
+import type { SlashFormRequest } from '@/lib/slashCommands'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import RoomInviteDialog from '@/components/RoomInviteDialog'
 import RoomWorkspaceDialog from '@/components/RoomWorkspaceDialog'
@@ -219,6 +223,18 @@ function LocalChatPage() {
     if (dm) return dm
     return null
   }, [selectedRoom, rooms, agentDMs])
+  // #940 — the form a ``/routine`` or ``/goal`` command opened.
+  const [slashForm, setSlashForm] = useState<SlashFormRequest | null>(null)
+  const openSlashForm = useCallback((request: SlashFormRequest): string | null => {
+    if (request.command === 'routine' && routineAgentOptions(participants).length === 0) {
+      return t('chat.slash.routineNoAgents')
+    }
+    if (request.command === 'goal' && !canStartCampaign(currentRoom, participants, user)) {
+      return t('chat.slash.goalUnavailable')
+    }
+    setSlashForm(request)
+    return null
+  }, [participants, currentRoom, user, t])
 
   // #116 — 1:1 agent DMs hide controls that are meaningless (agents
   // 1/1 badge, representative select with only one choice, participant
@@ -733,6 +749,13 @@ function LocalChatPage() {
               mentionRooms={mentionRooms}
               roomId={selectedRoom}
               showMentionHint={showMentionHint}
+              onSlashForm={openSlashForm}
+            />
+            <SlashFormDialog
+              roomId={selectedRoom}
+              participants={participants}
+              request={slashForm}
+              onClose={() => setSlashForm(null)}
             />
             {user?.is_admin && (
               <ManageRoomAgentsDialog

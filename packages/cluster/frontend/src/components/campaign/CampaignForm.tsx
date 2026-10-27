@@ -23,6 +23,8 @@ interface CampaignFormProps {
   onOpenChange: (open: boolean) => void
   onSubmit: (input: CampaignCreateInput) => Promise<Campaign>
   onCreated?: (campaign: Campaign) => void
+  /** #940 — title to pre-fill each time the form opens (``/goal title``). */
+  initialTitle?: string
 }
 
 const labelClass = 'text-caption font-medium text-[var(--color-foreground)]'
@@ -36,7 +38,7 @@ const legendClass = 'mb-2 text-body font-semibold text-[var(--color-foreground)]
  * ``campaignDraft.ts``); rarely changed evaluator settings and trusted
  * evaluation stay folded under "Advanced" with the server defaults.
  */
-export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated }: CampaignFormProps) {
+export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, initialTitle = '' }: CampaignFormProps) {
   const { t } = useLocale()
   const id = useId()
   const [draft, setDraft] = useState<CampaignDraft>(emptyCampaignDraft)
@@ -49,11 +51,11 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated }
 
   useEffect(() => {
     if (!open) return
-    setDraft(emptyCampaignDraft())
+    setDraft({ ...emptyCampaignDraft(), title: initialTitle })
     setErrors({})
     setSubmitError(null)
     setAdvancedOpen(false)
-  }, [open])
+  }, [open, initialTitle])
 
   useEffect(() => {
     if (!focusField) return

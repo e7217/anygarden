@@ -5,7 +5,8 @@ export interface MentionOption {
   id: string
   display: string
   // #739 — ``everyone`` is the room-wide ``@everyone`` call.
-  kind: 'user' | 'agent' | 'room' | 'file' | 'everyone'
+  // #940 — ``command`` is a slash-command suggestion.
+  kind: 'user' | 'agent' | 'room' | 'file' | 'everyone' | 'command'
   // Issue #271 — short self-introduction shown as a secondary line
   // in the autocomplete so a user picking among multiple agents can
   // tell *what* each one does. Optional; absent for rooms, users,
@@ -64,6 +65,8 @@ export default function MentionPopover({
                   ? '@'
                 : option.kind === 'file'
                   ? '$'
+                : option.kind === 'command'
+                  ? '/'
                   : option.kind === 'agent'
                     ? '🤖'
                     : option.display[0]?.toUpperCase()}

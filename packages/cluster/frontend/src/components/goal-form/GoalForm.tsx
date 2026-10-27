@@ -41,6 +41,8 @@ interface GoalFormProps {
   /** Pre-fill the report room (current room when launched from the
    *  right rail). User can change. */
   defaultReportRoomId?: string | null
+  /** #940 — title typed after ``/routine``. */
+  defaultTitle?: string
   onCreated: (goal: Goal) => void
   onCancel: () => void
 }
@@ -61,13 +63,14 @@ export default function GoalForm({
   goal,
   defaultAgentId = null,
   defaultReportRoomId = null,
+  defaultTitle = '',
   onCreated,
   onCancel,
 }: GoalFormProps) {
   const { t } = useLocale()
   const active = useRef(true)
   useEffect(() => { active.current = true; return () => { active.current = false } }, [])
-  const [title, setTitle] = useState(goal?.title ?? '')
+  const [title, setTitle] = useState(goal?.title ?? defaultTitle)
   const [spec, setSpec] = useState(goal?.spec ?? '')
   // #312 — explicit assignee field. Defaults to ``defaultAgentId`` if
   // the caller pre-picked one (e.g. AgentSettingsDialog has a fixed
