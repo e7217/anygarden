@@ -66,6 +66,25 @@ imported only once and only when native provider/model/workspace metadata proves
 compatibility. Unknown sessions are preserved as files and a new session begins.
 See [room upgrade behavior](../runbook/room-execution-upgrade.md).
 
+## Engine built-in features
+
+Anygarden turns off an engine built-in feature at launch when it overlaps a
+concept anygarden manages and keeps state anygarden cannot see. Such state never
+reaches the room panels, approvals, budgets or audit trail, and an agent that
+reports "created" misleads the person who asked.
+
+Codex CLI's `goals` feature (`create_goal`, `get_goal`, `update_goal`) is the
+first case ([#946](https://github.com/e7217/anygarden/issues/946)): it stores
+goals in the agent's `CODEX_HOME` and expects automatic continuation turns,
+while anygarden's goals are campaigns. Both Codex launch paths — room turns and
+the execution runtime, fresh and resumed — pass the shared
+`DISABLED_CODEX_FEATURES` list as `-c features.<name>=false`. The `-c` form is
+used instead of `--disable <name>`, which fails with `Unknown feature flag` on a
+Codex that predates the feature; an unknown `features.*` key is ignored.
+
+Pi runs with `--no-extensions` and has no overlapping built-ins. New engine
+features are reviewed against this rule when the pinned versions move.
+
 ## Usage and cancellation
 
 The neutral `usage_ledger` preserves prior rows and budget consumers. Ordinary

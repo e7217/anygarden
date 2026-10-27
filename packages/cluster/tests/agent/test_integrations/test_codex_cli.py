@@ -346,6 +346,28 @@ def _fake_subprocess(monkeypatch, stdout: bytes, stderr: bytes = b"", returncode
     )
 
 
+@pytest.mark.req("ENG-15")
+@pytest.mark.parametrize("thread_id", [None, "existing-tid"])
+async def test_exec_disables_codex_goals_feature(monkeypatch, thread_id) -> None:
+    # #946 — fresh and resumed room turns both turn off Codex goals.
+    seen: list[tuple] = []
+
+    async def fake_exec(*args, **kwargs):
+        seen.append(args)
+        return _FakeProc(b"", b"", 0)
+
+    monkeypatch.setattr(
+        "anygarden.agent.integrations.codex_cli.asyncio.create_subprocess_exec", fake_exec
+    )
+    adapter = CodexCliAdapter()
+    adapter._codex_path = "/usr/bin/codex"
+    await adapter._exec_once("hi", thread_id)
+    cmd = list(seen[0])
+    assert ("resume" in cmd) is (thread_id is not None)
+    assert cmd[cmd.index("features.goals=false") - 1] == "-c"
+    assert "--disable" not in cmd
+
+
 class TestNonzeroExitClassification:
     """codex ``exec --json`` failures: reason surfaced, transient only when safe."""
 

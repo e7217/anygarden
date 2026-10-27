@@ -54,6 +54,7 @@ from anygarden.agent.integrations.process_helpers import (
     _terminate_tree,
 )
 from anygarden.agent.runtime.attachments import materialize_inbox_attachments
+from anygarden.agent.runtime.execution.codex import disabled_feature_args
 from anygarden.agent.runtime.execution.failure_feedback import (
     CodexFailureTracker,
     stderr_tail,
@@ -422,6 +423,7 @@ class CodexCliAdapter(EngineAdapter):
                 self._permission_level,
                 outbox_dir=Path.cwd() / "memory" / "outbox",
             )
+            cmd += disabled_feature_args()
             if self._model:
                 cmd += ["-m", self._model]
             if self._reasoning_effort:
