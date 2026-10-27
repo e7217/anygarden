@@ -66,6 +66,9 @@ export interface Agent {
   // renders a checked-style toggle that reads this; mutations go
   // through ``updateAgent``.
   context_window_opt_out?: boolean;
+  // #938 — workspace tools and the right to propose hires (admin-set).
+  workspace_tools?: boolean;
+  can_create_agents?: boolean;
   // Issue #271 — public-facing self-introduction surfaced to peers
   // (LLM roster + mention popover + participant list). Capped at 200
   // chars by the REST layer; null when unset.
@@ -304,6 +307,10 @@ export function useAgents() {
       // rename PATCH can't accidentally reset the opt-out.
       context_window_opt_out?: boolean;
       context_window_opt_out_set?: boolean;
+      workspace_tools?: boolean;
+      workspace_tools_set?: boolean;
+      can_create_agents?: boolean;
+      can_create_agents_set?: boolean;
       // Issue #217 — post-creation editing of model / reasoning_effort
       // on the Overview panel. Backend PUT already supports these via
       // the same ``_set`` idiom.

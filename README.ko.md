@@ -55,6 +55,7 @@ anygarden start
 - [이 컴퓨터를 다른 서버에 빌려주기](docs/runbook/local-node.md#serving-another-server-from-a-computer-that-runs-a-node-848) (영어)
 - [로컬 노드 상세](docs/runbook/local-node.md) · [모델 엔드포인트](docs/runbook/direct-model-endpoints.md) (영어)
 - [목표: 지표를 정해 두고 계속 개선하기](docs/campaigns.md)
+- [대화로 워크스페이스 관리하기](docs/workspace-tools.md)
 - [기여하기](CONTRIBUTING.md) (영어)
 
 ## 라이선스

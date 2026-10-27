@@ -15,7 +15,12 @@ def test_creation_request_migration_preserves_existing_rows(tmp_path, monkeypatc
     command.upgrade(config, "076_pi_native_auth")
     engine = create_engine(f"sqlite:///{path}")
     with engine.begin() as db:
-        db.execute(insert(Agent.__table__).values(id="existing", name="Reviewer", engine="echo"))
+        # Revision 100 adds agents columns that do not exist at 076.
+        db.execute(text(
+            "INSERT INTO agents (id, name, engine, desired_state, actual_state, restart_policy, generation, "
+            "max_restarts, restart_window_seconds, context_window_opt_out, created_at) VALUES "
+            "('existing', 'Reviewer', 'echo', 'idle', 'idle', 'restart_on_same_machine', 0, 3, 300, 0, CURRENT_TIMESTAMP)"
+        ))
         db.execute(insert(Room.__table__).values(id="dm", name="DM", is_dm=True, representative_agent_id="existing"))
         db.execute(insert(Participant.__table__).values(id="member", room_id="dm", agent_id="existing", role="member"))
         db.execute(insert(AgentFile.__table__).values(agent_id="existing", path="AGENTS.md", content="Keep me"))
