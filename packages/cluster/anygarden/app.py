@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from anygarden.api.v1.agents import router as agents_api_router
 from anygarden.api.v1.budgets import router as budgets_router
 from anygarden.api.v1.campaigns import router as campaigns_router
+from anygarden.workspace.router import drafts_router as workspace_drafts_router
 from anygarden.workspace.router import router as workspace_actions_router
 from anygarden.api.v1.engine_endpoints import (
     probe_router as engine_endpoint_probe_router,
@@ -1668,6 +1669,10 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
             recovered = await recover_stalled_turns(
                 factory, manager, app=app, is_alive=is_alive
             )
+            # #947/#948 — tell the person when a draft turn ended without a draft.
+            from anygarden.workspace.drafts import close_unanswered_drafts
+
+            await close_unanswered_drafts(factory, app=app)
             # #762 — wake ask_peer callers whose peers have all answered.
             await dispatch_peer_ask_groups(
                 factory,
@@ -1956,6 +1961,7 @@ def create_app(
     app.include_router(goals_router)
     app.include_router(campaigns_router)
     app.include_router(workspace_actions_router)
+    app.include_router(workspace_drafts_router)
     app.include_router(system_router)
     app.include_router(routing_router)
     # Engine-neutral usage aggregation preserves historical rows.

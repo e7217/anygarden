@@ -43,8 +43,16 @@ interface GoalFormProps {
   defaultReportRoomId?: string | null
   /** #940 — title typed after ``/routine``. */
   defaultTitle?: string
-  onCreated: (goal: Goal) => void
+  /** #948 — an agent's draft to edit before creating it. */
+  initial?: GoalDraftValues | null
+  /** #948 — create through something else (approving the draft) instead of the API. */
+  onSubmit?: (agentId: string, input: GoalCreateInput) => Promise<unknown>
+  onCreated: (goal?: Goal) => void
   onCancel: () => void
+}
+
+export interface GoalDraftValues extends GoalCreateInput {
+  agent_id: string
 }
 
 /**
@@ -64,14 +72,18 @@ export default function GoalForm({
   defaultAgentId = null,
   defaultReportRoomId = null,
   defaultTitle = '',
+  initial = null,
+  onSubmit,
   onCreated,
   onCancel,
 }: GoalFormProps) {
   const { t } = useLocale()
   const active = useRef(true)
   useEffect(() => { active.current = true; return () => { active.current = false } }, [])
-  const [title, setTitle] = useState(goal?.title ?? defaultTitle)
-  const [spec, setSpec] = useState(goal?.spec ?? '')
+  // An existing routine and a draft fill the same fields.
+  const source = goal ?? initial
+  const [title, setTitle] = useState(source?.title ?? defaultTitle)
+  const [spec, setSpec] = useState(source?.spec ?? '')
   // #312 — explicit assignee field. Defaults to ``defaultAgentId`` if
   // the caller pre-picked one (e.g. AgentSettingsDialog has a fixed
   // agent); otherwise the first candidate so the implicit pre-#312
@@ -80,26 +92,27 @@ export default function GoalForm({
   // open this form when no agents are available, but we render the
   // disabled select rather than crashing.
   const [assigneeAgentId, setAssigneeAgentId] = useState<string>(
-    goal?.assignee_agent_id ?? defaultAgentId ?? roomAgents[0]?.id ?? '',
+    goal?.assignee_agent_id ?? initial?.agent_id ?? defaultAgentId ?? roomAgents[0]?.id ?? '',
   )
   const [reportRoomId, setReportRoomId] = useState<string>(
-    goal ? goal.report_room_id ?? '' : defaultReportRoomId ?? '',
+    source ? source.report_room_id ?? '' : defaultReportRoomId ?? '',
   )
-  const [triggerType, setTriggerType] = useState<GoalTriggerType>(goal?.trigger_type ?? 'cron')
-  const [cronExpr, setCronExpr] = useState(String(goal?.trigger_config.cron ?? '0 9 * * *'))
-  const [intervalSecs, setIntervalSecs] = useState<number>(Number(goal?.trigger_config.interval_seconds ?? 600))
+  const [triggerType, setTriggerType] = useState<GoalTriggerType>(source?.trigger_type ?? 'cron')
+  const [cronExpr, setCronExpr] = useState(String(source?.trigger_config.cron ?? '0 9 * * *'))
+  const [intervalSecs, setIntervalSecs] = useState<number>(Number(source?.trigger_config.interval_seconds ?? 600))
   const [materialize, setMaterialize] =
-    useState<GoalMaterialize>(goal?.materialize ?? 'interesting_only')
+    useState<GoalMaterialize>(source?.materialize ?? 'interesting_only')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const triggerConfig = useMemo<Record<string, unknown>>(() => {
-    const preserved = goal?.trigger_type === triggerType ? goal.trigger_config : {}
+    // Keeps the timezone and other settings the form has no field for.
+    const preserved = source?.trigger_type === triggerType ? source.trigger_config : {}
     if (triggerType === 'cron') return { ...preserved, cron: cronExpr.trim() }
     if (triggerType === 'interval')
       return { ...preserved, interval_seconds: Number(intervalSecs) }
     return { ...preserved }
-  }, [goal, triggerType, cronExpr, intervalSecs])
+  }, [source, triggerType, cronExpr, intervalSecs])
 
   const submit = async () => {
     setError(null)
@@ -138,6 +151,11 @@ export default function GoalForm({
         } else if (JSON.stringify(triggerConfig) !== JSON.stringify(goal.trigger_config)) {
           patch.trigger_config = triggerConfig
         }
+      }
+      if (onSubmit && !goal) {
+        await onSubmit(assigneeAgentId, input)
+        if (active.current) onCreated()
+        return
       }
       const saved = goal ? await updateGoal(goal.id, patch) : await createGoal(assigneeAgentId, input)
       if (active.current) onCreated(saved)

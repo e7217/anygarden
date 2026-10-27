@@ -6,7 +6,7 @@ import { readDraft, writeDraft, clearDraft } from '@/lib/composerDrafts'
 import { RoomFileUploadError, uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
 import { uploadRoomArtifact } from '@/lib/roomArtifacts'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
-import { matchSlashCommands, parseSlashCommand, type SlashFormRequest } from '@/lib/slashCommands'
+import { matchSlashCommands, parseSlashCommand, type SlashCommandName, type SlashFormRequest } from '@/lib/slashCommands'
 import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
@@ -47,6 +47,8 @@ interface MessageInputProps {
    * Omitted (threads, guests) = the two commands are not offered and
    * send as plain text. */
   onSlashForm?: (request: SlashFormRequest) => string | null
+  /** #947/#948 — a room-specific line for a command's suggestion (who drafts it). */
+  slashDescription?: (name: SlashCommandName) => string | null
 }
 
 /** Id of the synthetic ``@everyone`` option; it inserts a literal keyword
@@ -149,7 +151,7 @@ interface TrackedFileReference {
 export default function MessageInput({
   onSend, onTyping, disabled,
   mentionUsers = [], mentionRooms = [],
-  roomId, placeholder, autoFocus, draftKey, showMentionHint = false, onSlashForm,
+  roomId, placeholder, autoFocus, draftKey, showMentionHint = false, onSlashForm, slashDescription,
 }: MessageInputProps) {
   const { t } = useLocale()
   const [value, setValue] = useState(() => readDraft(draftKey))
@@ -283,10 +285,14 @@ export default function MessageInput({
     if (mention.type === '/') {
       return matchSlashCommands(`/${mention.query}`)
         .filter(c => c.name === 'task' || onSlashForm)
-        .map(c => ({ id: c.name, display: c.usage, kind: 'command', description: t(c.descriptionKey) }))
+        .map(c => {
+          const extra = c.name === 'task' ? null : slashDescription?.(c.name)
+          const description = extra ? `${t(c.descriptionKey)} · ${extra}` : t(c.descriptionKey)
+          return { id: c.name, display: c.usage, kind: 'command' as const, description }
+        })
     }
     return currentOptions.filter(o => o.display.toLowerCase().includes(mention.query.toLowerCase()))
-  }, [mention, currentOptions, onSlashForm, t])
+  }, [mention, currentOptions, onSlashForm, slashDescription, t])
 
   useEffect(() => { setSelectedIndex(0) }, [mention?.type, mention?.query])
 

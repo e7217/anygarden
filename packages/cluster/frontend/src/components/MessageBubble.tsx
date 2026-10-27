@@ -18,6 +18,8 @@ import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignmen
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
 import WorkspaceActionCard, { WorkspaceActionResultNote } from '@/components/WorkspaceActionCard'
 import { parseWorkspaceActionRequest, parseWorkspaceActionResult } from '@/lib/workspaceActions'
+import { parseDraftFailed, parseDraftRequest } from '@/lib/drafts'
+import { DraftFailedNote, DraftRequestNote } from '@/components/drafts/DraftParts'
 import AgentSenderMenu from '@/components/AgentSenderMenu'
 import { useAgentActionsEnabled } from '@/lib/agentActions'
 import { formatMessageTimestamp } from '@/lib/datetime'
@@ -193,6 +195,9 @@ export default memo(function MessageBubble({
   // server's report of how it ended.
   const workspaceRequestMeta = useMemo(() => parseWorkspaceActionRequest(message.metadata), [message])
   const workspaceResultMeta = useMemo(() => parseWorkspaceActionResult(message.metadata), [message])
+  // #947/#948 — a person's draft request, and the notice when no draft came.
+  const draftRequestMeta = useMemo(() => parseDraftRequest(message.metadata), [message])
+  const draftFailedMeta = useMemo(() => parseDraftFailed(message.metadata), [message])
   const isPendingQuestion = !!(
     questionMeta && pendingQueryIds?.has(questionMeta.query_id)
   )
@@ -439,7 +444,21 @@ export default memo(function MessageBubble({
     return (
       <div className="group flex flex-col items-start">
         <div className="flex items-center gap-1.5 mb-1 pl-1">{sender}</div>
-        <WorkspaceActionCard meta={workspaceRequestMeta} fallbackText={message.content} />
+        <WorkspaceActionCard meta={workspaceRequestMeta} fallbackText={message.content} participants={participants} />
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    )
+  }
+
+  // The request's body is the agent's brief; people see what they asked.
+  if (draftRequestMeta || draftFailedMeta) {
+    return (
+      <div className="group flex flex-col items-start">
+        {draftRequestMeta
+          ? <DraftRequestNote meta={draftRequestMeta} participants={participants} />
+          : <DraftFailedNote meta={draftFailedMeta!} participants={participants} />}
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>

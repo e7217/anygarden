@@ -12,7 +12,8 @@ import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
 import SlashFormDialog from '@/components/slash/SlashFormDialog'
 import { canStartCampaign } from '@/components/campaign/campaignAccess'
 import { routineAgentOptions } from '@/lib/goals'
-import type { SlashFormRequest } from '@/lib/slashCommands'
+import type { SlashCommandName, SlashFormRequest } from '@/lib/slashCommands'
+import { browserTimezone, goalDrafter, requestDraft, routineDrafter, SLASH_FORM_OPEN_EVENT } from '@/lib/drafts'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import RoomInviteDialog from '@/components/RoomInviteDialog'
 import RoomWorkspaceDialog from '@/components/RoomWorkspaceDialog'
@@ -225,6 +226,20 @@ function LocalChatPage() {
   }, [selectedRoom, rooms, agentDMs])
   // #940 — the form a ``/routine`` or ``/goal`` command opened.
   const [slashForm, setSlashForm] = useState<SlashFormRequest | null>(null)
+  // #947/#948 — text after the command asks an agent for a draft; the
+  // draft arrives as a card. Without text the empty form opens.
+  const askForDraft = useCallback((request: SlashFormRequest, agentId: string | null) => {
+    if (!selectedRoom) return
+    requestDraft(selectedRoom, {
+      kind: request.command,
+      description: request.payload.text,
+      agent_id: agentId,
+      timezone: browserTimezone(),
+    }).catch(err => notify({
+      message: t('chat.slash.draftFailed', { detail: err instanceof Error ? err.message : String(err) }),
+      tone: 'error',
+    }))
+  }, [selectedRoom, notify, t])
   const openSlashForm = useCallback((request: SlashFormRequest): string | null => {
     if (request.command === 'routine' && routineAgentOptions(participants).length === 0) {
       return t('chat.slash.routineNoAgents')
@@ -232,9 +247,39 @@ function LocalChatPage() {
     if (request.command === 'goal' && !canStartCampaign(currentRoom, participants, user)) {
       return t('chat.slash.goalUnavailable')
     }
-    setSlashForm(request)
+    if (!request.payload.text) {
+      setSlashForm(request)
+      return null
+    }
+    if (request.command === 'routine') {
+      const drafter = routineDrafter(currentRoom, participants, request.payload.assignee_pid)
+      if (!drafter) return t('chat.slash.routineNeedsAgent')
+      askForDraft(request, request.payload.assignee_pid ? drafter.agent_id ?? null : null)
+      return null
+    }
+    askForDraft(request, null)
     return null
-  }, [participants, currentRoom, user, t])
+  }, [participants, currentRoom, user, t, askForDraft])
+  // A draft that never came offers the empty form from its notice.
+  useEffect(() => {
+    const onOpen = (e: Event) => setSlashForm((e as CustomEvent<SlashFormRequest>).detail)
+    window.addEventListener(SLASH_FORM_OPEN_EVENT, onOpen)
+    return () => window.removeEventListener(SLASH_FORM_OPEN_EVENT, onOpen)
+  }, [])
+  // The suggestion list says who would write the draft.
+  const slashDescription = useCallback((name: SlashCommandName): string | null => {
+    if (name === 'goal') {
+      const lead = goalDrafter(currentRoom, participants)
+      return lead ? t('chat.slash.goalDrafter', { name: lead.display_name }) : null
+    }
+    if (name === 'routine') {
+      const drafter = routineDrafter(currentRoom, participants, null)
+      return drafter
+        ? t('chat.slash.routineDrafter', { name: drafter.display_name })
+        : t('chat.slash.routineNameAgent')
+    }
+    return null
+  }, [currentRoom, participants, t])
 
   // #116 — 1:1 agent DMs hide controls that are meaningless (agents
   // 1/1 badge, representative select with only one choice, participant
@@ -750,6 +795,7 @@ function LocalChatPage() {
               roomId={selectedRoom}
               showMentionHint={showMentionHint}
               onSlashForm={openSlashForm}
+              slashDescription={slashDescription}
             />
             <SlashFormDialog
               roomId={selectedRoom}

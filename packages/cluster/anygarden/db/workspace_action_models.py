@@ -50,3 +50,49 @@ class WorkspaceActionRequest(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     decided_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+
+
+DRAFT_KINDS = ("goal", "routine")
+DRAFT_STATUSES = ("pending", "proposed", "failed")
+
+
+class DraftRequest(Base):
+    """A person's ``/goal`` or ``/routine`` request for an agent's draft (#947, #948).
+
+    The server wakes ``drafter`` with a notice; the turn it starts
+    (``turn_request_id``) is the only one in which the agent may submit the
+    draft (``propose_goal`` / ``propose_routine``). The draft becomes an
+    ordinary ``ask`` :class:`WorkspaceActionRequest`. A turn that ends
+    without one is reported to the person as ``failed``.
+    """
+
+    __tablename__ = "workspace_draft_requests"
+    __table_args__ = (
+        CheckConstraint("kind IN ('goal', 'routine')", name="ck_workspace_draft_kind"),
+        CheckConstraint("status IN ('pending', 'proposed', 'failed')", name="ck_workspace_draft_status"),
+        Index("ix_workspace_draft_status", "status", "created_at"),
+        Index("ix_workspace_draft_turn", "turn_request_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    room_id: Mapped[str] = mapped_column(String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False)
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+    drafter_agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
+    )
+    drafter_participant_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("participants.id", ondelete="SET NULL")
+    )
+    assignee_agent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agents.id", ondelete="SET NULL"))
+    """A routine's fixed assignee (the agent the person named, or the only one)."""
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    timezone: Mapped[str | None] = mapped_column(String(64))
+    request_message_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("messages.id", ondelete="SET NULL"))
+    turn_request_id: Mapped[str | None] = mapped_column(String(36))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    action_request_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("workspace_action_requests.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    closed_at: Mapped[datetime | None] = mapped_column(UtcDateTime)

@@ -51,7 +51,7 @@ export default function SlashFormDialog({ roomId, participants, request, onClose
               roomAgents={agents}
               defaultAgentId={assignee}
               defaultReportRoomId={roomId}
-              defaultTitle={routine.title}
+              defaultTitle={routine.text}
               onCreated={() => {
                 // The rail's routine list refreshes on this event.
                 window.dispatchEvent(new Event('anygarden:goal:updated'))
@@ -67,7 +67,7 @@ export default function SlashFormDialog({ roomId, participants, request, onClose
         onOpenChange={open => { if (!open) onClose() }}
         onSubmit={input => createCampaign(roomId, input)}
         onCreated={() => notify({ message: t('campaigns.form.created') })}
-        initialTitle={goal?.title ?? ''}
+        initialTitle={goal?.text ?? ''}
       />
     </>
   )

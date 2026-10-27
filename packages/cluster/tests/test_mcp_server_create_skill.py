@@ -221,6 +221,8 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "report_campaign_blocked",
         "read_campaign_attempts",
         "apply_campaign_learning",
+        "propose_goal",
+        "propose_routine",
     }
 
 
