@@ -406,8 +406,8 @@ describe('MessageInput slash commands (#940)', () => {
     const input = screen.getByPlaceholderText(placeholder)
     fireEvent.change(input, { target: { value: '/', selectionStart: 1 } })
     expect(screen.getByText('/task @agent title')).toBeInTheDocument()
-    expect(screen.getByText('/routine @agent title')).toBeInTheDocument()
-    expect(screen.getByText('/goal title')).toBeInTheDocument()
+    expect(screen.getByText('/routine @agent description')).toBeInTheDocument()
+    expect(screen.getByText('/goal description')).toBeInTheDocument()
 
     fireEvent.change(input, { target: { value: '/ro', selectionStart: 3 } })
     expect(screen.queryByText('/task @agent title')).not.toBeInTheDocument()
@@ -415,12 +415,24 @@ describe('MessageInput slash commands (#940)', () => {
     expect(input).toHaveValue('/routine ')
   })
 
+  it('[WSP-07] says in the suggestion who would write the draft', () => {
+    render(
+      <MessageInput
+        onSend={vi.fn()} onTyping={vi.fn()} roomId="room-1" onSlashForm={vi.fn(() => null)}
+        slashDescription={name => (name === 'routine' ? 'drafted by Builder' : null)}
+      />,
+    )
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value: '/ro', selectionStart: 3 } })
+    expect(screen.getByText(/drafted by Builder/)).toBeInTheDocument()
+  })
+
   it('does not offer /routine or /goal where no form can open', () => {
     render(<MessageInput onSend={vi.fn()} onTyping={vi.fn()} roomId="room-1" />)
     const input = screen.getByPlaceholderText(placeholder)
     fireEvent.change(input, { target: { value: '/', selectionStart: 1 } })
     expect(screen.getByText('/task @agent title')).toBeInTheDocument()
-    expect(screen.queryByText('/goal title')).not.toBeInTheDocument()
+    expect(screen.queryByText('/goal description')).not.toBeInTheDocument()
   })
 
   it('[MSG-10] opens the routine form with the parsed assignee and title instead of sending', () => {
@@ -430,7 +442,7 @@ describe('MessageInput slash commands (#940)', () => {
     const input = screen.getByPlaceholderText(placeholder)
     fireEvent.change(input, { target: { value: '/routine <@user:p1> daily report', selectionStart: 33 } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(onSlashForm).toHaveBeenCalledWith({ command: 'routine', payload: { assignee_pid: 'p1', title: 'daily report' } })
+    expect(onSlashForm).toHaveBeenCalledWith({ command: 'routine', payload: { assignee_pid: 'p1', text: 'daily report' } })
     expect(onSend).not.toHaveBeenCalled()
     expect(input).toHaveValue('')
   })
@@ -441,7 +453,7 @@ describe('MessageInput slash commands (#940)', () => {
     const input = screen.getByPlaceholderText(placeholder)
     fireEvent.change(input, { target: { value: '/goal faster parser', selectionStart: 19 } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(onSlashForm).toHaveBeenCalledWith({ command: 'goal', payload: { title: 'faster parser' } })
+    expect(onSlashForm).toHaveBeenCalledWith({ command: 'goal', payload: { text: 'faster parser' } })
     expect(screen.getByTestId('slash-error')).toHaveTextContent('Goals need a project room with a lead agent.')
     expect(input).toHaveValue('/goal faster parser')
   })

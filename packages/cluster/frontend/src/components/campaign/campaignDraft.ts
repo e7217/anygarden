@@ -155,3 +155,35 @@ export function buildCampaignInput(
   }
   return { errors, input }
 }
+
+
+/** ``datetime-local`` value for an ISO timestamp, in local time. */
+function localDateTime(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`
+}
+
+/** #947 — the form's values for a goal an agent drafted. */
+export function draftFromCampaignInput(spec: Partial<CampaignCreateInput>): CampaignDraft {
+  const base = emptyCampaignDraft()
+  const metric = spec.metric
+  const evaluator = spec.evaluator
+  return {
+    mode: spec.mode === 'optimize' ? 'optimize' : 'target',
+    title: spec.title ?? '',
+    purpose: spec.purpose ?? '',
+    metricName: metric?.name ?? '',
+    direction: metric?.direction === 'minimize' ? 'minimize' : 'maximize',
+    target: metric?.target != null ? String(metric.target) : '',
+    deadline: spec.deadline_at ? localDateTime(spec.deadline_at) : '',
+    command: evaluator?.command ?? '',
+    scoreKey: evaluator?.score_key ?? base.scoreKey,
+    budgetTokens: spec.budget?.max_total_tokens != null ? String(spec.budget.max_total_tokens) : base.budgetTokens,
+    cwd: evaluator?.cwd ?? base.cwd,
+    timeoutSec: evaluator?.timeout_sec != null ? String(evaluator.timeout_sec) : base.timeoutSec,
+    pinPaths: (evaluator?.pin_paths ?? []).join('\n'),
+    trustedExternal: spec.trusted_eval === 'external',
+  }
+}

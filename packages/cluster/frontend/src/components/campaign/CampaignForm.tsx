@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useLocale } from '@/i18n/LocaleProvider'
-import type { Campaign, CampaignCreateInput, CampaignMode } from '@/lib/campaigns'
+import type { CampaignCreateInput, CampaignMode } from '@/lib/campaigns'
 import { campaignErrorMessage } from './campaignErrors'
 import {
   ADVANCED_FIELDS,
@@ -21,10 +21,12 @@ import {
 interface CampaignFormProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (input: CampaignCreateInput) => Promise<Campaign>
-  onCreated?: (campaign: Campaign) => void
+  onSubmit: (input: CampaignCreateInput) => Promise<unknown>
+  onCreated?: () => void
   /** #940 — title to pre-fill each time the form opens (``/goal title``). */
   initialTitle?: string
+  /** #947 — an agent's draft to edit before creating it. */
+  initialDraft?: CampaignDraft | null
 }
 
 const labelClass = 'text-caption font-medium text-[var(--color-foreground)]'
@@ -38,7 +40,7 @@ const legendClass = 'mb-2 text-body font-semibold text-[var(--color-foreground)]
  * ``campaignDraft.ts``); rarely changed evaluator settings and trusted
  * evaluation stay folded under "Advanced" with the server defaults.
  */
-export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, initialTitle = '' }: CampaignFormProps) {
+export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, initialTitle = '', initialDraft = null }: CampaignFormProps) {
   const { t } = useLocale()
   const id = useId()
   const [draft, setDraft] = useState<CampaignDraft>(emptyCampaignDraft)
@@ -51,11 +53,11 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, 
 
   useEffect(() => {
     if (!open) return
-    setDraft({ ...emptyCampaignDraft(), title: initialTitle })
+    setDraft(initialDraft ?? { ...emptyCampaignDraft(), title: initialTitle })
     setErrors({})
     setSubmitError(null)
     setAdvancedOpen(false)
-  }, [open, initialTitle])
+  }, [open, initialTitle, initialDraft])
 
   useEffect(() => {
     if (!focusField) return
@@ -96,9 +98,9 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, 
     }
     setSubmitting(true)
     try {
-      const campaign = await onSubmit(input)
+      await onSubmit(input)
       onOpenChange(false)
-      onCreated?.(campaign)
+      onCreated?.()
     } catch (error) {
       setSubmitError(campaignErrorMessage(t, error, 'create'))
     } finally {

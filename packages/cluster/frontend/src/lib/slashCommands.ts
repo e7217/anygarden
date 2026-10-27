@@ -58,31 +58,32 @@ export function parseTaskCommand(body: string): ParseResult<TaskCommandPayload> 
   return { ok: true, payload: { assignee_pid: pid, title } }
 }
 
-/** Payload of ``/routine`` (#940): an optional assignee and title that
- * pre-fill the routine form. */
+/** Payload of ``/routine`` (#940): an optional assignee and text. Text
+ * asks an agent for a draft (#948); without it the empty form opens. */
 export interface RoutineCommandPayload {
   assignee_pid: string | null
-  title: string
+  /** What the routine should do, in the person's words. */
+  text: string
 }
 
-/** Payload of ``/goal`` (#940): an optional title for the goal form. */
+/** Payload of ``/goal`` (#940): text asks the lead for a draft (#947);
+ * without it the empty form opens. */
 export interface GoalCommandPayload {
-  title: string
+  text: string
 }
 
 const stripUserMentions = (body: string) =>
   body.replace(ALL_USER_MENTIONS_RE, '').replace(/\s+/g, ' ').trim()
 
-/** Parse the ``/routine`` body. Both parts are optional: the command
- * opens the routine form, so missing fields are filled in there. */
+/** Parse the ``/routine`` body. Both parts are optional. */
 export function parseRoutineCommand(body: string): ParseResult<RoutineCommandPayload> {
   const match = body.match(ID_MENTION_RE)
-  return { ok: true, payload: { assignee_pid: match ? match[1] : null, title: stripUserMentions(body) } }
+  return { ok: true, payload: { assignee_pid: match ? match[1] : null, text: stripUserMentions(body) } }
 }
 
-/** Parse the ``/goal`` body: whatever is left is the goal's title. */
+/** Parse the ``/goal`` body: whatever is left describes the goal. */
 export function parseGoalCommand(body: string): ParseResult<GoalCommandPayload> {
-  return { ok: true, payload: { title: stripUserMentions(body) } }
+  return { ok: true, payload: { text: stripUserMentions(body) } }
 }
 
 export type SlashDispatch =
@@ -107,8 +108,8 @@ export interface SlashCommandInfo {
 
 export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: 'task', usage: '/task @agent title', descriptionKey: 'chat.slash.task' },
-  { name: 'routine', usage: '/routine @agent title', descriptionKey: 'chat.slash.routine' },
-  { name: 'goal', usage: '/goal title', descriptionKey: 'chat.slash.goal' },
+  { name: 'routine', usage: '/routine @agent description', descriptionKey: 'chat.slash.routine' },
+  { name: 'goal', usage: '/goal description', descriptionKey: 'chat.slash.goal' },
 ]
 
 /** Commands to suggest while the user is still typing the command word

@@ -109,6 +109,54 @@ def may_decide(row: WorkspaceActionRequest, identity: Identity) -> bool:
     return is_admin or identity.id == row.requested_by_user_id
 
 
+async def may_approve(db: AsyncSession, row: WorkspaceActionRequest, identity: Identity) -> bool:
+    """:func:`may_decide`, and for a goal the right to set its evaluator.
+
+    The evaluator is a shell command on the lead agent's machine, so only
+    that machine's owner or an admin may start it (#930). Checked before
+    the claim so an approver without the right never uses up the request.
+    """
+
+    if not may_decide(row, identity):
+        return False
+    if row.action != "create_goal":
+        return True
+    from anygarden.api.v1.campaigns import _can_set_evaluator
+    from anygarden.db.models import Room
+
+    room = await db.get(Room, row.room_id)
+    return room is not None and await _can_set_evaluator(db, identity, room.representative_agent_id)
+
+
+EDITABLE_ACTIONS = frozenset({"create_goal", "create_routine"})
+
+
+def edited_params(row: WorkspaceActionRequest, params: dict) -> dict:
+    """The values a person changed in the form before approving (#947, #948).
+
+    Only a goal or a routine can be edited, and a goal stays in its room.
+    Raises :class:`DecisionRefused`.
+    """
+
+    from pydantic import ValidationError
+
+    from anygarden.workspace.actions import _validation_text
+
+    if row.action not in EDITABLE_ACTIONS:
+        raise DecisionRefused(422, "NOT_EDITABLE", "This request cannot be edited; approve or reject it")
+    if row.action == "create_goal":
+        params = {**params, "room_id": row.room_id}
+    try:
+        parsed = p.ACTIONS[row.action].params.model_validate(params)
+        if row.action == "create_goal":
+            from anygarden.api.v1.campaigns import CampaignCreate
+
+            parsed.spec = CampaignCreate.model_validate(parsed.spec).model_dump(mode="json", exclude_none=True)
+    except ValidationError as exc:
+        raise DecisionRefused(422, "INVALID_PARAMS", _validation_text(exc)) from None
+    return parsed.model_dump(mode="json")
+
+
 async def expire_if_due(db: AsyncSession, row: WorkspaceActionRequest) -> bool:
     if row.status == "executing" and row.decided_at and _aware(row.decided_at) <= _now() - EXECUTING_STALE:
         # The process died between the claim and the outcome: whether it ran is unknown.
@@ -132,11 +180,17 @@ async def expire_if_due(db: AsyncSession, row: WorkspaceActionRequest) -> bool:
     return False
 
 
-async def _claim(db: AsyncSession, row: WorkspaceActionRequest, identity: Identity, status: str) -> None:
+async def _claim(
+    db: AsyncSession, row: WorkspaceActionRequest, identity: Identity, status: str, *, params: dict | None = None,
+) -> None:
+    values: dict = {"status": status, "decided_by_user_id": identity.id, "decided_at": _now()}
+    if params is not None:
+        # What runs is what the card shows from now on.
+        values.update(params=params, summary=describe(row.action, params))
     result = await db.execute(
         update(WorkspaceActionRequest)
         .where(WorkspaceActionRequest.id == row.id, WorkspaceActionRequest.status == "pending")
-        .values(status=status, decided_by_user_id=identity.id, decided_at=_now())
+        .values(**values)
     )
     if result.rowcount != 1:
         await db.rollback()
@@ -145,12 +199,19 @@ async def _claim(db: AsyncSession, row: WorkspaceActionRequest, identity: Identi
     await db.refresh(row)
 
 
-async def load_for_decision(db: AsyncSession, request_id: str, identity: Identity) -> WorkspaceActionRequest:
+async def load_for_decision(
+    db: AsyncSession, request_id: str, identity: Identity, *, approving: bool = False,
+) -> WorkspaceActionRequest:
     row = await db.get(WorkspaceActionRequest, request_id)
     if row is None:
         raise DecisionRefused(404, "NOT_FOUND", "Request not found")
     if not may_decide(row, identity):
         raise DecisionRefused(403, "FORBIDDEN", "Only the person who asked, or an admin, can decide this")
+    if approving and not await may_approve(db, row, identity):
+        raise DecisionRefused(
+            403, "EVALUATOR_FORBIDDEN",
+            "Only the owner of the lead agent's machine, or an admin, can start a goal with this evaluator",
+        )
     if await expire_if_due(db, row):
         raise DecisionRefused(409, "EXPIRED", "This request expired; ask the agent again")
     if row.status != "pending":
@@ -159,11 +220,15 @@ async def load_for_decision(db: AsyncSession, request_id: str, identity: Identit
 
 
 async def approve(
-    session_factory, request: Request, *, request_id: str, identity: Identity,
+    session_factory, request: Request, *, request_id: str, identity: Identity, params: dict | None = None,
 ) -> WorkspaceActionRequest:
+    """Run the request once. *params* replaces a goal's or routine's values
+    with the ones the person edited in the form."""
+
     async with session_factory() as db:
-        row = await load_for_decision(db, request_id, identity)
-        await _claim(db, row, identity, "executing")
+        row = await load_for_decision(db, request_id, identity, approving=True)
+        edited = edited_params(row, params) if params is not None else None
+        await _claim(db, row, identity, "executing", params=edited)
         action, params, agent_id = row.action, dict(row.params), row.agent_id
     from anygarden.rooms.authorization import room_authorization_session
 

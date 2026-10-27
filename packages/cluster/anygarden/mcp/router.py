@@ -123,6 +123,7 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
     # ── tools/list ──────────────────────────────────────────────
     if method == "tools/list":
         from anygarden.mcp.campaign_tools import CAMPAIGN_TOOL_SCHEMAS
+        from anygarden.mcp.draft_tools import DRAFT_TOOL_SCHEMAS
         from anygarden.mcp.project_tools import PROJECT_TOOL_SCHEMAS
         from anygarden.mcp.workspace_tools import (
             WORKSPACE_TOOL_SCHEMAS,
@@ -136,7 +137,9 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
             else []
         )
         return _jsonrpc_ok(
-            req_id, {"tools": [*TOOL_SCHEMAS, *PROJECT_TOOL_SCHEMAS, *CAMPAIGN_TOOL_SCHEMAS, *workspace]}
+            req_id,
+            # #947/#948 — draft tools for every agent; the turn proof gates them.
+            {"tools": [*TOOL_SCHEMAS, *PROJECT_TOOL_SCHEMAS, *CAMPAIGN_TOOL_SCHEMAS, *DRAFT_TOOL_SCHEMAS, *workspace]},
         )
 
     # ── tools/call ──────────────────────────────────────────────
@@ -165,6 +168,12 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
 
         if name in WORKSPACE_TOOL_NAMES:
             result = await call_workspace_tool(request, agent_id=agent_id, name=name, arguments=arguments)
+            return _jsonrpc_ok(req_id, result)
+        # #947/#948 — a person's /goal or /routine draft, in its own turn.
+        from anygarden.mcp.draft_tools import DRAFT_TOOL_NAMES, call_draft_tool
+
+        if name in DRAFT_TOOL_NAMES:
+            result = await call_draft_tool(request, agent_id=agent_id, name=name, arguments=arguments)
             return _jsonrpc_ok(req_id, result)
         # #930 — campaign cycle tools; the turn proof picks the cycle.
         from anygarden.mcp.campaign_tools import CAMPAIGN_TOOL_NAMES, call_campaign_tool

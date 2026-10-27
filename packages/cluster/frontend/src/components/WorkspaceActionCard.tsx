@@ -9,10 +9,13 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, CircleSlash, Clock, ShieldQuestion, XCircle } from 'lucide-react'
+import { DraftEditDialog, DraftSummary } from '@/components/drafts/DraftParts'
 import { Button } from '@/components/ui/button'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
+import type { Participant } from '@/lib/participants'
 import {
+  EDITABLE_ACTIONS,
   decideWorkspaceAction,
   getWorkspaceAction,
   type WorkspaceAction,
@@ -43,11 +46,16 @@ function StatusLabel({ status }: { status: WorkspaceActionStatus }) {
   )
 }
 
-export default function WorkspaceActionCard({ meta, fallbackText }: { meta: WorkspaceActionRequestMeta; fallbackText: string }) {
+export default function WorkspaceActionCard({ meta, fallbackText, participants = {} }: {
+  meta: WorkspaceActionRequestMeta
+  fallbackText: string
+  participants?: Record<string, Participant>
+}) {
   const { t } = useLocale()
   const [request, setRequest] = useState<WorkspaceAction | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -78,6 +86,14 @@ export default function WorkspaceActionCard({ meta, fallbackText }: { meta: Work
     }
     setBusy(false)
   }
+  // #947/#948 — approving from the form runs the edited values; a failure
+  // stays in the form so the person can fix it.
+  const approveEdited = async (params: Record<string, unknown>) => {
+    const decided = await decideWorkspaceAction(meta.request_id, 'approve', params)
+    setRequest(decided)
+    if (decided.status === 'failed' && decided.error) throw new Error(decided.error)
+  }
+  const editable = !!request && EDITABLE_ACTIONS.has(request.action)
 
   return (
     <div
@@ -91,12 +107,16 @@ export default function WorkspaceActionCard({ meta, fallbackText }: { meta: Work
         </span>
         {request && <StatusLabel status={request.status} />}
       </div>
-      <p className="whitespace-pre-wrap break-words text-[var(--color-foreground)]">
-        {request?.summary ?? fallbackText}
-      </p>
+      {editable && request ? (
+        <DraftSummary action={request.action} params={request.params} participants={participants} roomId={request.room_id} />
+      ) : (
+        <p className="whitespace-pre-wrap break-words text-[var(--color-foreground)]">
+          {request?.summary ?? fallbackText}
+        </p>
+      )}
       {request && (
         // The summary is a preview; approval runs these exact values.
-        <details open={request.status === 'pending'} className="text-caption">
+        <details open={request.status === 'pending' && !editable} className="text-caption">
           <summary className="cursor-pointer text-[var(--color-foreground-muted)]">{t('chat.workspaceAction.details')}</summary>
           <pre data-testid="workspace-action-params" className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-2 text-[var(--color-foreground)]">
             {JSON.stringify(request.params, null, 2)}
@@ -111,12 +131,27 @@ export default function WorkspaceActionCard({ meta, fallbackText }: { meta: Work
       {request?.status === 'pending' && request.can_decide && (
         <div className="flex gap-2">
           <Button type="button" size="sm" disabled={busy} onClick={() => void decide('approve')}>
-            {t('chat.workspaceAction.approve')}
+            {t(editable ? 'chat.draft.create' : 'chat.workspaceAction.approve')}
           </Button>
+          {editable && (
+            <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setEditing(true)}>
+              {t('chat.draft.editInForm')}
+            </Button>
+          )}
           <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void decide('reject')}>
             {t('chat.workspaceAction.reject')}
           </Button>
         </div>
+      )}
+      {editable && request && (
+        <DraftEditDialog
+          action={request.action}
+          params={request.params}
+          participants={participants}
+          open={editing && request.status === 'pending'}
+          onClose={() => setEditing(false)}
+          onApprove={approveEdited}
+        />
       )}
     </div>
   )

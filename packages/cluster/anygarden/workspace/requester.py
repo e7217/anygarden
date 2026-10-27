@@ -58,7 +58,11 @@ async def requester_for_turn(db: AsyncSession, *, agent_id: str, proof) -> Reque
     if source is not None and author is None:
         # The outcome of an approval wakes the agent for the person who
         # asked — never for the approver, whose rights may be higher.
-        author = await _asker_of_reported_request(db, source)
+        # A ``/goal`` or ``/routine`` draft request (#947, #948) acts for
+        # the person who typed it.
+        from anygarden.workspace.drafts import asker_of_draft_notice
+
+        author = await _asker_of_reported_request(db, source) or await asker_of_draft_notice(db, source)
     elif source is not None and is_system_source(source):
         author = None
     if source is None or author is None or author.user_id is None or author.agent_id is not None:

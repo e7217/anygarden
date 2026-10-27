@@ -72,6 +72,14 @@ export async function getWorkspaceAction(id: string): Promise<WorkspaceAction> {
   return read(await apiFetch(`/api/v1/workspace-actions/${id}`))
 }
 
-export async function decideWorkspaceAction(id: string, decision: 'approve' | 'reject'): Promise<WorkspaceAction> {
-  return read(await apiFetch(`/api/v1/workspace-actions/${id}/${decision}`, { method: 'POST' }))
+/** Goals and routines (#947, #948) can be approved with values edited in their form. */
+export const EDITABLE_ACTIONS: ReadonlySet<string> = new Set(['create_goal', 'create_routine'])
+
+export async function decideWorkspaceAction(
+  id: string, decision: 'approve' | 'reject', params?: Record<string, unknown>,
+): Promise<WorkspaceAction> {
+  const init: RequestInit = params
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) }
+    : { method: 'POST' }
+  return read(await apiFetch(`/api/v1/workspace-actions/${id}/${decision}`, init))
 }

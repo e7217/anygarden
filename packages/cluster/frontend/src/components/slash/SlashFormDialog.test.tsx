@@ -28,7 +28,7 @@ describe('SlashFormDialog (#940)', () => {
       <SlashFormDialog
         roomId="room-1"
         participants={participants}
-        request={{ command: 'routine', payload: { assignee_pid: 'p2', title: 'Daily report' } }}
+        request={{ command: 'routine', payload: { assignee_pid: 'p2', text: 'Daily report' } }}
         onClose={vi.fn()}
       />,
     )
@@ -42,7 +42,7 @@ describe('SlashFormDialog (#940)', () => {
       <SlashFormDialog
         roomId="room-1"
         participants={participants}
-        request={{ command: 'goal', payload: { title: 'Raise parser accuracy' } }}
+        request={{ command: 'goal', payload: { text: 'Raise parser accuracy' } }}
         onClose={vi.fn()}
       />,
     )

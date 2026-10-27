@@ -79,27 +79,27 @@ describe('parseTaskCommand', () => {
 })
 
 describe('parseRoutineCommand (#940)', () => {
-  it('takes the first mention as the assignee and the rest as the title', () => {
+  it('takes the first mention as the assignee and the rest as the draft text', () => {
     const r = parseRoutineCommand('<@user:a1> check host resources every morning')
-    expect(r).toEqual({ ok: true, payload: { assignee_pid: 'a1', title: 'check host resources every morning' } })
+    expect(r).toEqual({ ok: true, payload: { assignee_pid: 'a1', text: 'check host resources every morning' } })
   })
 
   it('opens an empty form when nothing follows the command', () => {
-    expect(parseRoutineCommand('')).toEqual({ ok: true, payload: { assignee_pid: null, title: '' } })
+    expect(parseRoutineCommand('')).toEqual({ ok: true, payload: { assignee_pid: null, text: '' } })
   })
 
-  it('keeps a title without an assignee', () => {
-    expect(parseRoutineCommand('nightly backup')).toEqual({ ok: true, payload: { assignee_pid: null, title: 'nightly backup' } })
+  it('keeps the text without an assignee', () => {
+    expect(parseRoutineCommand('nightly backup')).toEqual({ ok: true, payload: { assignee_pid: null, text: 'nightly backup' } })
   })
 })
 
 describe('parseGoalCommand (#940)', () => {
-  it('uses the text as the title and drops user mentions', () => {
-    expect(parseGoalCommand('<@user:a1> raise parser accuracy')).toEqual({ ok: true, payload: { title: 'raise parser accuracy' } })
+  it('keeps the text for the draft and drops user mentions', () => {
+    expect(parseGoalCommand('<@user:a1> raise parser accuracy')).toEqual({ ok: true, payload: { text: 'raise parser accuracy' } })
   })
 
   it('opens an empty form when nothing follows the command', () => {
-    expect(parseGoalCommand('   ')).toEqual({ ok: true, payload: { title: '' } })
+    expect(parseGoalCommand('   ')).toEqual({ ok: true, payload: { text: '' } })
   })
 })
 
