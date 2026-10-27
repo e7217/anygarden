@@ -401,6 +401,10 @@ async def test_only_an_admin_turns_workspace_tools_on(ws) -> None:
     done = await ws["client"].put(f"/api/v1/agents/{ws['agent']}", json=body, headers=ws["admin_headers"])
     assert done.status_code == 200, done.text
     assert done.json()["workspace_tools"] is False and done.json()["can_create_agents"] is True
+    # The switches must be committed, not only echoed in the response.
+    async with ws["factory"]() as db:
+        saved = await db.get(Agent, ws["agent"])
+        assert saved.workspace_tools is False and saved.can_create_agents is True
 
 
 async def _lease_turn_on(env: dict, message_id: str) -> dict:

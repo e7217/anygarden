@@ -806,6 +806,8 @@ async def update_agent(
     # need an explicit push; avatar edits don't qualify because
     # ``ParticipantBrief`` doesn't carry them.
     roster_changed = False
+    # #951 — workspace-tool switches must be saved; they need no respawn or roster push.
+    settings_changed = False
     if body.name is not None:
         agent.name = body.name
         runtime_changed = True
@@ -875,6 +877,7 @@ async def update_agent(
         if getattr(body, f"{field}_set"):
             previous, value = getattr(agent, field), bool(getattr(body, field))
             setattr(agent, field, value)
+            settings_changed = True
             if previous != value:
                 db.add(ActivityLog(
                     agent_id=agent.id,
@@ -911,7 +914,7 @@ async def update_agent(
         peer_metadata_changed = True
         roster_changed = True
 
-    if runtime_changed or peer_metadata_changed or archive_changed:
+    if runtime_changed or peer_metadata_changed or archive_changed or settings_changed:
         await db.commit()
         await db.refresh(agent)
 
