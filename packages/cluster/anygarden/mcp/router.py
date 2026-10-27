@@ -124,9 +124,19 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
     if method == "tools/list":
         from anygarden.mcp.campaign_tools import CAMPAIGN_TOOL_SCHEMAS
         from anygarden.mcp.project_tools import PROJECT_TOOL_SCHEMAS
+        from anygarden.mcp.workspace_tools import (
+            WORKSPACE_TOOL_SCHEMAS,
+            workspace_tools_enabled,
+        )
 
+        # #938 — workspace tools only for agents an admin turned them on for.
+        workspace = (
+            WORKSPACE_TOOL_SCHEMAS
+            if await workspace_tools_enabled(request.app.state.session_factory, agent_id)
+            else []
+        )
         return _jsonrpc_ok(
-            req_id, {"tools": [*TOOL_SCHEMAS, *PROJECT_TOOL_SCHEMAS, *CAMPAIGN_TOOL_SCHEMAS]}
+            req_id, {"tools": [*TOOL_SCHEMAS, *PROJECT_TOOL_SCHEMAS, *CAMPAIGN_TOOL_SCHEMAS, *workspace]}
         )
 
     # ── tools/call ──────────────────────────────────────────────
@@ -146,6 +156,15 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
 
         if name in PROJECT_TOOL_NAMES:
             result = await call_project_tool(request, agent_id=agent_id, name=name, arguments=arguments)
+            return _jsonrpc_ok(req_id, result)
+        # #938 — workspace tools act for the person who started the turn.
+        from anygarden.mcp.workspace_tools import (
+            WORKSPACE_TOOL_NAMES,
+            call_workspace_tool,
+        )
+
+        if name in WORKSPACE_TOOL_NAMES:
+            result = await call_workspace_tool(request, agent_id=agent_id, name=name, arguments=arguments)
             return _jsonrpc_ok(req_id, result)
         # #930 — campaign cycle tools; the turn proof picks the cycle.
         from anygarden.mcp.campaign_tools import CAMPAIGN_TOOL_NAMES, call_campaign_tool

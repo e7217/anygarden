@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -742,7 +742,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -923,7 +923,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -1025,7 +1025,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1065,7 +1065,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
             sync_engine.dispose()
         finally:
             try:
@@ -1099,7 +1099,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "099_campaign_eval_evaluator_digest"
+            assert head == "100_workspace_agent_tools"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1201,7 +1201,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "099_campaign_eval_evaluator_digest"
+                assert version == "100_workspace_agent_tools"
             sync_engine.dispose()
         finally:
             try:
@@ -1724,7 +1724,12 @@ def test_task_handoff_migrations_preserve_existing_rows(tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     with engine.begin() as conn:
         conn.execute(User.__table__.insert().values(id="u", email="migration@example.test", password_hash="x"))
-        conn.execute(Agent.__table__.insert().values(id="a", name="Test lead", engine="codex"))
+        # Columns from later revisions (e.g. 100's agents flags) do not exist yet.
+        conn.execute(text(
+            "INSERT INTO agents (id, name, engine, desired_state, actual_state, restart_policy, generation, "
+            "max_restarts, restart_window_seconds, context_window_opt_out, created_at) "
+            "VALUES ('a', 'Test lead', 'codex', 'idle', 'idle', 'restart_on_same_machine', 0, 3, 300, 0, CURRENT_TIMESTAMP)"
+        ))
         conn.execute(Goal.__table__.insert().values(
             id="g", owner_id="u", assignee_agent_id="a", title="Old goal", spec="Facts only",
             trigger_type="manual", trigger_config={}, materialize="full", status="active",
@@ -1932,4 +1937,25 @@ def test_099_adds_the_eval_evaluator_digest(tmp_path) -> None:
     with engine.connect() as conn:
         columns = {r[1] for r in conn.execute(text("PRAGMA table_info(campaign_attempts)"))}
         assert "eval_evaluator_digest" not in columns
+    engine.dispose()
+
+
+def test_100_adds_workspace_tools_and_requests(tmp_path) -> None:
+    path = str(tmp_path / "workspace.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "100_workspace_agent_tools")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.connect() as conn:
+        columns = {r[1] for r in conn.execute(text("PRAGMA table_info(agents)"))}
+        assert {"workspace_tools", "can_create_agents"} <= columns
+        tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        assert "workspace_action_requests" in tables
+    engine.dispose()
+    command.downgrade(cfg, "099_campaign_eval_evaluator_digest")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.connect() as conn:
+        columns = {r[1] for r in conn.execute(text("PRAGMA table_info(agents)"))}
+        assert "workspace_tools" not in columns
+        tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        assert "workspace_action_requests" not in tables
     engine.dispose()

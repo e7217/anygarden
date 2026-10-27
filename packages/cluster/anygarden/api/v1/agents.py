@@ -217,6 +217,12 @@ class AgentUpdate(BaseModel):
     # rename PATCH can't silently reset the flag back to False.
     context_window_opt_out: Optional[bool] = None
     context_window_opt_out_set: bool = False
+    # #938 — workspace tools and the right to propose hires (admin-only,
+    # like every field here).
+    workspace_tools: Optional[bool] = None
+    workspace_tools_set: bool = False
+    can_create_agents: Optional[bool] = None
+    can_create_agents_set: bool = False
     # Issue #237 — admin editable memory_md. Same ``_set`` flag pattern
     # as ``agents_md``: explicit opt-in lets an admin clear the field
     # (send ``memory_md=None, memory_md_set=True``) while omitting the
@@ -341,6 +347,9 @@ class AgentOut(BaseModel):
     # will wire this into the spawn path so agents actually honour
     # the flag at runtime.
     context_window_opt_out: bool = False
+    # #938 — see ``Agent.workspace_tools`` / ``Agent.can_create_agents``.
+    workspace_tools: bool = False
+    can_create_agents: bool = False
     # Unattributed legacy archive remains readable/editable and requires an
     # explicit room import before it can become runtime context.
     memory_md: Optional[str] = None
@@ -861,6 +870,19 @@ async def update_agent(
     if body.avatar_value_set:
         agent.avatar_value = body.avatar_value
         peer_metadata_changed = True
+    for field in ("workspace_tools", "can_create_agents"):
+        # #938 — security-relevant like the permission tier: audit the change.
+        if getattr(body, f"{field}_set"):
+            previous, value = getattr(agent, field), bool(getattr(body, field))
+            setattr(agent, field, value)
+            if previous != value:
+                db.add(ActivityLog(
+                    agent_id=agent.id,
+                    event_type=f"agent_{field}_changed",
+                    details={"from": previous, "to": value,
+                             "by_user_id": identity.id if identity.kind == "user" else None},
+                ))
+            # tools/list is read per call, so the change needs no respawn.
     if body.context_window_opt_out_set:
         # #148 Part 2 — pure server-side policy flag. The agent
         # subprocess reads its setting at spawn time (Part 3), so a

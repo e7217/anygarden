@@ -90,6 +90,10 @@ interface Props {
       turn_timeout_sec_set?: boolean
       permission_level?: string | null
       permission_level_set?: boolean
+      workspace_tools?: boolean
+      workspace_tools_set?: boolean
+      can_create_agents?: boolean
+      can_create_agents_set?: boolean
       description?: string | null
       description_set?: boolean
     },
@@ -306,6 +310,18 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
         permission_level: nextVal,
         permission_level_set: true,
       })
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : String(e))
+    }
+    setConfigSaving(false)
+  }
+
+  // #938 — the two workspace-tool switches save on change, like the tier.
+  const handleWorkspaceFlag = async (field: 'workspace_tools' | 'can_create_agents', value: boolean) => {
+    setConfigSaving(true)
+    setConfigError(null)
+    try {
+      await updateAgent(agent.id, { [field]: value, [`${field}_set`]: true })
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : String(e))
     }
@@ -609,6 +625,52 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               {t('admin.overview.trustedWarning')}
             </p>
           ) : null}
+        </dd>
+
+        {/* #938 — workspace tools act with the rights of the person who
+            wrote to the agent; hiring proposals still need an admin. */}
+        <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.workspaceTools')}</dt>
+        <dd className="space-y-2">
+          <div className="flex items-start gap-3">
+            <input
+              id={`${agent.id}-workspace-tools`}
+              type="checkbox"
+              checked={agent.workspace_tools ?? false}
+              onChange={e => void handleWorkspaceFlag('workspace_tools', e.target.checked)}
+              disabled={configSaving}
+              aria-describedby={`${agent.id}-workspace-tools-hint`}
+              data-testid="overview-workspace-tools"
+              className="mt-0.5 size-4 shrink-0 accent-[var(--color-brand)]"
+            />
+            <div className="min-w-0 space-y-1">
+              <label htmlFor={`${agent.id}-workspace-tools`} className="text-[var(--color-foreground)]">
+                {t('admin.overview.workspaceToolsLabel')}
+              </label>
+              <p id={`${agent.id}-workspace-tools-hint`} className="text-xs text-[var(--color-foreground-muted)]">
+                {t('admin.overview.workspaceToolsHint')}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3">
+            <input
+              id={`${agent.id}-can-create-agents`}
+              type="checkbox"
+              checked={agent.can_create_agents ?? false}
+              onChange={e => void handleWorkspaceFlag('can_create_agents', e.target.checked)}
+              disabled={configSaving || !(agent.workspace_tools ?? false)}
+              aria-describedby={`${agent.id}-can-create-agents-hint`}
+              data-testid="overview-can-create-agents"
+              className="mt-0.5 size-4 shrink-0 accent-[var(--color-brand)]"
+            />
+            <div className="min-w-0 space-y-1">
+              <label htmlFor={`${agent.id}-can-create-agents`} className="text-[var(--color-foreground)]">
+                {t('admin.overview.canCreateAgentsLabel')}
+              </label>
+              <p id={`${agent.id}-can-create-agents-hint`} className="text-xs text-[var(--color-foreground-muted)]">
+                {t('admin.overview.canCreateAgentsHint')}
+              </p>
+            </div>
+          </div>
         </dd>
 
         <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.state')}</dt>

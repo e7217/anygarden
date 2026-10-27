@@ -16,6 +16,8 @@ import {
 } from '@/lib/room-query'
 import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
+import WorkspaceActionCard, { WorkspaceActionResultNote } from '@/components/WorkspaceActionCard'
+import { parseWorkspaceActionRequest, parseWorkspaceActionResult } from '@/lib/workspaceActions'
 import AgentSenderMenu from '@/components/AgentSenderMenu'
 import { useAgentActionsEnabled } from '@/lib/agentActions'
 import { formatMessageTimestamp } from '@/lib/datetime'
@@ -187,6 +189,10 @@ export default memo(function MessageBubble({
     () => parseTaskAssignment(message),
     [message],
   )
+  // #938 — an agent's workspace change waiting for approval, and the
+  // server's report of how it ended.
+  const workspaceRequestMeta = useMemo(() => parseWorkspaceActionRequest(message.metadata), [message])
+  const workspaceResultMeta = useMemo(() => parseWorkspaceActionResult(message.metadata), [message])
   const isPendingQuestion = !!(
     questionMeta && pendingQueryIds?.has(questionMeta.query_id)
   )
@@ -422,6 +428,30 @@ export default memo(function MessageBubble({
           title={title || t('chat.untitledTask')}
           assignee={assignee}
         />
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    )
+  }
+
+  if (workspaceRequestMeta) {
+    return (
+      <div className="group flex flex-col items-start">
+        <div className="flex items-center gap-1.5 mb-1 pl-1">{sender}</div>
+        <WorkspaceActionCard meta={workspaceRequestMeta} fallbackText={message.content} />
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    )
+  }
+
+  // The report's body is written for the agent; people see the outcome.
+  if (workspaceResultMeta) {
+    return (
+      <div className="group flex flex-col items-start">
+        <WorkspaceActionResultNote meta={workspaceResultMeta} />
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>

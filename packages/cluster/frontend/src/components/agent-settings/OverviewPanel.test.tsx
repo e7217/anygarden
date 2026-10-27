@@ -424,3 +424,24 @@ describe('OverviewPanel machine row (#907)', () => {
     expect(startAgent).toHaveBeenCalledWith('agent_abc123')
   })
 })
+
+describe('OverviewPanel workspace tools (#938)', () => {
+  it('[WSP-01] turns workspace tools on and keeps hiring off until they are on', async () => {
+    const { updateAgent } = setup()
+    const hire = screen.getByTestId('overview-can-create-agents')
+    expect(hire).toBeDisabled()
+
+    fireEvent.click(screen.getByTestId('overview-workspace-tools'))
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+      workspace_tools: true, workspace_tools_set: true,
+    }))
+  })
+
+  it('offers hiring once workspace tools are on', async () => {
+    const { updateAgent } = setup({ agent: makeAgent({ workspace_tools: true }) })
+    fireEvent.click(screen.getByTestId('overview-can-create-agents'))
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+      can_create_agents: true, can_create_agents_set: true,
+    }))
+  })
+})

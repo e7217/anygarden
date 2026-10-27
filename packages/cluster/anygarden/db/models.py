@@ -412,6 +412,16 @@ class Agent(Base):
     context_window_opt_out: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_text("0")
     )
+    # #938 — workspace tools: the agent may look over and act on the
+    # workspace for the person who wrote to it, with that person's rights.
+    workspace_tools: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
+    # #938 — the agent may propose hiring another agent (an admin approves).
+    # Separate from any role or title: a lead is not a hiring manager.
+    can_create_agents: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
     # Preserved legacy archive. Its room provenance is unknown, so it is
     # never automatically copied to scoped memory or injected at runtime.
     memory_md: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
@@ -2981,3 +2991,4 @@ from anygarden.db import execution_request_models as _execution_request_models  
 from anygarden.db import execution_approval_models as _execution_approval_models  # noqa: E402,F401
 from anygarden.db import native_invocation_models as _native_invocation_models  # noqa: E402,F401
 from anygarden.db import task_input_request_models as _task_input_request_models  # noqa: E402,F401
+from anygarden.db import workspace_action_models as _workspace_action_models  # noqa: E402,F401

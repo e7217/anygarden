@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from anygarden.api.v1.agents import router as agents_api_router
 from anygarden.api.v1.budgets import router as budgets_router
 from anygarden.api.v1.campaigns import router as campaigns_router
+from anygarden.workspace.router import router as workspace_actions_router
 from anygarden.api.v1.engine_endpoints import (
     probe_router as engine_endpoint_probe_router,
 )
@@ -1954,6 +1955,7 @@ def create_app(
     app.include_router(workspaces_router)
     app.include_router(goals_router)
     app.include_router(campaigns_router)
+    app.include_router(workspace_actions_router)
     app.include_router(system_router)
     app.include_router(routing_router)
     # Engine-neutral usage aggregation preserves historical rows.
