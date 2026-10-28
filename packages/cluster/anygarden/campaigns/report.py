@@ -167,7 +167,10 @@ _STATUS_LINE = {
 _NEXT_ACTION = {
     "confirmation": (
         "What the person should check before they confirm or reject the result on the goal,"
-        " and what you would change if they reject it."
+        " and what you would change if they reject it. Also call `advise_goal_confirmation`"
+        " once: advice=confirm if the result really meets the goal's purpose, hold if it does"
+        " not (for example the score counts something the metric name does not mean), with a"
+        " one-sentence reason. It is shown next to the confirm button."
     ),
     "ended": (
         "What is still limited or unverified in the result, and what the person could do next"

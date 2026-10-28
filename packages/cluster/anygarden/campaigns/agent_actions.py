@@ -453,6 +453,68 @@ async def report_blocked(
     }
 
 
+CONFIRM_ADVICE = frozenset({"confirm", "hold"})
+
+
+async def advise_confirmation(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    proof,
+    advice: Any,
+    reason: Any,
+    clock: Clock = utcnow,
+) -> dict[str, Any]:
+    """``advise_goal_confirmation`` — the lead's advice on confirming a goal
+    that reached its target (#969), shown next to the confirm button.
+
+    Only the lead's confirmation report turn may give it, and only while the
+    goal still waits in the state that turn reports on; a later call in the
+    same turn replaces the earlier advice.
+    """
+    from anygarden.campaigns.report import report_key
+    from anygarden.campaigns.views import CONFIRM_ADVICE_EVENT
+    from anygarden.project_executions.service import authorize_turn
+
+    if advice not in CONFIRM_ADVICE:
+        raise CampaignToolError("CAMPAIGN_INVALID_ARGUMENT", "advice must be confirm or hold")
+    reason_text = _text(reason, field="reason", limit=REASON_MAX)
+    turn = await authorize_turn(db, agent_id=agent_id, proof=proof)
+    key = turn.idempotency_key or ""
+    parts = key.split(":")
+    campaign = (
+        await db.get(Campaign, parts[1], populate_existing=True)
+        if len(parts) == 4 and parts[0] == "goal-report" and parts[2] == "confirmation"
+        else None
+    )
+    if campaign is None or campaign.agent_id != agent_id:
+        raise CampaignToolError(
+            "CAMPAIGN_REPORT_TURN_REQUIRED",
+            "Only the lead's report turn for a goal that waits for confirmation can give "
+            "confirm advice.",
+        )
+    if campaign.status != "awaiting_confirmation" or key != report_key(campaign, "confirmation"):
+        raise CampaignToolError(
+            "CAMPAIGN_CONFIRMATION_DECIDED",
+            f"The goal no longer waits for this confirmation (status: {campaign.status}). "
+            "Nothing was recorded.",
+        )
+    await record_event(
+        db, campaign.id,
+        key=f"campaign:{campaign.id}:confirm_advice:{uuid4().hex}",
+        type=CONFIRM_ADVICE_EVENT,
+        details={"advice": advice, "reason": reason_text,
+                 "state_revision": campaign.state_revision},
+        actor=f"agent:{agent_id}", clock=clock,
+    )
+    mark(db, campaign_id=campaign.id)
+    return {
+        "campaign_id": campaign.id,
+        "advice": advice,
+        "note": "Recorded. It is shown next to the confirm button; finish your report reply.",
+    }
+
+
 async def read_attempts(
     db: AsyncSession, ctx: CycleContext, *, offset: Any = 0, limit: Any = 10
 ) -> dict[str, Any]:

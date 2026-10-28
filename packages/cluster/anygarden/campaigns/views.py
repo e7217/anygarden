@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.campaigns.policy import usable_tokens
-from anygarden.db.models import Campaign, CampaignAttempt
+from anygarden.db.models import Campaign, CampaignAttempt, CampaignEvent
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -68,6 +68,33 @@ def _score_ref(attempt: CampaignAttempt | None) -> dict[str, Any] | None:
     }
 
 
+CONFIRM_ADVICE_EVENT = "confirm_advice"
+
+
+async def confirm_advice(db: AsyncSession, campaign: Campaign) -> dict[str, Any] | None:
+    """The lead's advice on confirming (#969), while it still applies: the
+    goal waits for confirmation in the same state the advice was given in."""
+    if campaign.status != "awaiting_confirmation":
+        return None
+    event = await db.scalar(
+        select(CampaignEvent)
+        .where(
+            CampaignEvent.campaign_id == campaign.id,
+            CampaignEvent.type == CONFIRM_ADVICE_EVENT,
+        )
+        .order_by(CampaignEvent.created_at.desc(), CampaignEvent.id.desc())
+        .limit(1)
+    )
+    details = (event.details or {}) if event is not None else {}
+    if details.get("state_revision") != campaign.state_revision:
+        return None
+    return {
+        "advice": details.get("advice"),
+        "reason": details.get("reason"),
+        "at": _iso(event.created_at),
+    }
+
+
 async def campaign_view(db: AsyncSession, campaign: Campaign) -> dict[str, Any]:
     best = (
         await db.get(CampaignAttempt, campaign.best_attempt_id)
@@ -115,6 +142,7 @@ async def campaign_view(db: AsyncSession, campaign: Campaign) -> dict[str, Any]:
         "consecutive_eval_failures": campaign.consecutive_eval_failures,
         "retro_due": campaign.retro_due,
         "state_revision": campaign.state_revision,
+        "confirm_advice": await confirm_advice(db, campaign),
         "created_at": _iso(campaign.created_at),
         "updated_at": _iso(campaign.updated_at),
     }

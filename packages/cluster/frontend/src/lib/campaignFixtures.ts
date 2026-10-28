@@ -26,6 +26,7 @@ export function campaignFixture(overrides: Partial<Campaign> = {}): Campaign {
     consecutive_eval_failures: 0,
     retro_due: null,
     state_revision: 1,
+    confirm_advice: null,
     created_at: '2026-10-26T00:00:00Z',
     updated_at: '2026-10-26T00:00:00Z',
     best: null,

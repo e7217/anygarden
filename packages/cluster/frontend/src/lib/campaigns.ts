@@ -63,6 +63,13 @@ export interface CampaignOpenAttempt {
   task_id: string | null
 }
 
+/** The lead's advice on confirming, while the goal waits for it (#969). */
+export interface CampaignConfirmAdvice {
+  advice: 'confirm' | 'hold'
+  reason: string
+  at: string | null
+}
+
 export interface Campaign {
   id: string
   room_id: string
@@ -88,6 +95,7 @@ export interface Campaign {
   consecutive_eval_failures: number
   retro_due: string | null
   state_revision: number
+  confirm_advice: CampaignConfirmAdvice | null
   created_at: string | null
   updated_at: string | null
   best: CampaignScoreRef | null

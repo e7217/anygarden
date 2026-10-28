@@ -188,6 +188,12 @@ class OpenAttemptRef(BaseModel):
     task_id: str | None
 
 
+class ConfirmAdviceOut(BaseModel):
+    advice: Literal["confirm", "hold"]
+    reason: str
+    at: str | None
+
+
 class CampaignOut(BaseModel):
     id: str
     room_id: str
@@ -217,6 +223,8 @@ class CampaignOut(BaseModel):
     consecutive_eval_failures: int
     retro_due: str | None
     state_revision: int
+    confirm_advice: ConfirmAdviceOut | None = None
+    """The lead's advice on confirming, while the goal waits for it (#969)."""
     created_at: str | None
     updated_at: str | None
 

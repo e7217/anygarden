@@ -5,7 +5,7 @@ describe('parseGoalStatus', () => {
   it('reads the notice block', () => {
     expect(parseGoalStatus({
       goal_status: { campaign_id: 'c1', title: 'Ideas', status: 'blocked', previous: 'active', detail: 'Fix it.' },
-    })).toEqual({ campaign_id: 'c1', title: 'Ideas', status: 'blocked', detail: 'Fix it.', report: null })
+    })).toEqual({ campaign_id: 'c1', title: 'Ideas', status: 'blocked', detail: 'Fix it.', report: null, stopReason: null })
   })
 
   it('treats an empty detail as none', () => {
@@ -27,6 +27,16 @@ describe('parseGoalStatus', () => {
       goal_status: { campaign_id: 'c1', title: 'Ideas', status: 'blocked', detail: null },
       goal_report: { reason: 'nonsense' },
     })?.report).toBeNull()
+  })
+
+  it('reads a stop reason code only for a stopped goal (#969) [CMP-16]', () => {
+    const stopped = (stop_reason: unknown, status = 'stopped') => parseGoalStatus({
+      goal_status: { campaign_id: 'c1', title: 'Ideas', status, detail: null, stop_reason },
+    })?.stopReason
+    expect(stopped('user')).toBe('user')
+    expect(stopped('room_archived')).toBe('room_archived')
+    expect(stopped('something_new')).toBeNull()
+    expect(stopped('user', 'achieved')).toBeNull()
   })
 
   it('ignores other messages and unknown statuses', () => {

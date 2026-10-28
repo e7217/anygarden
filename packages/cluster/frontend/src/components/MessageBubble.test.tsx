@@ -669,6 +669,29 @@ describe('MessageBubble — goal report request (#964)', () => {
     expect(screen.queryByText(/REQUIRED brief text/)).toBeNull()
   })
 
+  it('says who stopped a goal in words, never the reason code [CMP-16]', () => {
+    localStorage.setItem('anygarden_locale', 'en')
+    render(
+      <LocaleProvider>
+        <MessageBubble
+          message={baseMsg({
+            participant_id: null,
+            content: 'Goal “Explore 30 ideas” was stopped.',
+            metadata: { goal_status: {
+              campaign_id: 'c1', title: 'Explore 30 ideas', status: 'stopped',
+              previous: 'active', detail: null, stop_reason: 'room_archived',
+            } },
+          })}
+          participants={participants}
+          isMine={false}
+        />
+      </LocaleProvider>,
+    )
+    const card = screen.getByTestId('goal-status-card')
+    expect(screen.getByTestId('goal-stop-reason')).toHaveTextContent('Stopped because the room was archived')
+    expect(card).not.toHaveTextContent('room_archived')
+  })
+
   it("maps the lead's outbox link to the attached file [CMP-18]", () => {
     render(
       <MessageBubble

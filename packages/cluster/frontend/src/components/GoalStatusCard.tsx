@@ -52,6 +52,11 @@ export default function GoalStatusCard({
           {t(`campaigns.status.${meta.status}`)}
         </span>
       </div>
+      {meta.stopReason && (
+        <p data-testid="goal-stop-reason" className="text-caption text-[var(--color-foreground-muted)]">
+          {t(`chat.goalStopReason.${meta.stopReason}`)}
+        </p>
+      )}
       {meta.detail && (
         <p className="text-caption text-[var(--color-foreground-muted)] break-words">{meta.detail}</p>
       )}

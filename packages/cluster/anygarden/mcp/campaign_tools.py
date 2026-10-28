@@ -79,6 +79,19 @@ CAMPAIGN_TOOL_SCHEMAS = [
         [],
     ),
     _tool(
+        "advise_goal_confirmation",
+        "Goal report turns only, when the goal reached its target and waits for a person "
+        "to confirm: say whether you advise confirming. advice=confirm when the result "
+        "really meets the goal's purpose, hold when it does not. The advice and reason are "
+        "shown next to the confirm button. A later call in the same turn replaces it.",
+        {
+            "advice": {"type": "string", "enum": ["confirm", "hold"]},
+            "reason": {**_string, "maxLength": 1000,
+                       "description": "One sentence the person reads before deciding"},
+        },
+        ["advice", "reason"],
+    ),
+    _tool(
         "apply_campaign_learning",
         "Retrospective cycles only: turn a lesson into lasting know-how. "
         "target=agents_md sets the body of the '## Campaign learnings' section of your "
@@ -120,8 +133,16 @@ async def call_campaign_tool(request: Request, *, agent_id: str, name: str, argu
     try:
         proof = turn_proof(request)
         async with request.app.state.session_factory() as db:
-            ctx = await agent_actions.current_cycle(db, agent_id=agent_id, proof=proof)
             messages: list = []
+            if name == "advise_goal_confirmation":
+                # A report turn, not a cycle (#969).
+                payload = await agent_actions.advise_confirmation(
+                    db, agent_id=agent_id, proof=proof, **arguments
+                )
+                await commit_and_publish(db, manager)
+                return {"content": [{"type": "text", "text": str(payload)}],
+                        "structuredContent": payload, "isError": False}
+            ctx = await agent_actions.current_cycle(db, agent_id=agent_id, proof=proof)
             if name == "record_campaign_attempt":
                 payload = await agent_actions.record_attempt(db, ctx, **arguments)
             elif name == "schedule_campaign_wakeup":
