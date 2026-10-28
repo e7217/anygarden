@@ -27,6 +27,7 @@ from anygarden.db.models import (
     Participant,
     PeerAskGroup,
     PeerAskTarget,
+    RoomArtifact,
 )
 from anygarden.orchestration.peer_fanin import dispatch_peer_ask_groups
 from tests.test_peer_mention_safety_net import _add_token
@@ -320,6 +321,126 @@ class TestAskPeerPostsAtOnce:
         assert by_pid[other_pid]["status"] == "accepted"
         assert by_pid[peer_pid] == {**by_pid[peer_pid], "status": "rejected", "reason": "limit_reached"}
         assert set(await _targets(sf)) == {other_pid}
+
+
+async def _add_artifact(sf, room, *, filename: str, agent_pid: str | None, sha: str) -> str:
+    async with sf() as db:
+        agent_id = (await db.get(Participant, agent_pid)).agent_id if agent_pid else None
+        row = RoomArtifact(
+            room_id=room.id, produced_by_agent_id=agent_id, filename=filename,
+            storage_path=f"{room.id}/{sha}", sha256=sha * 64, size_bytes=31118,
+            mime="text/markdown",
+        )
+        db.add(row)
+        await db.commit()
+        return row.id
+
+
+def _ask_peer_raw(client, token: str, room_id: str, asks: list[dict]) -> dict:
+    resp = client.post(
+        "/mcp/rpc",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "ask_peer", "arguments": {"room_id": room_id, "asks": asks},
+        }},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["result"]
+
+
+class TestAskPeerAttachments:
+    """#969 — a peer reviewing a long draft got only the 2,000-character
+    question. The caller now names room files and the question carries
+    them as ``artifact`` references, which the peer's turn downloads into
+    its inbox like any attached file."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("COL-10")
+    async def test_named_files_ride_on_the_question(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        other_pid = await _add_running_agent(sf, room, "agent01")
+        draft_id = await _add_artifact(
+            sf, room, filename="hai-30-ideas-draft-v1.md", agent_pid=sender_pid, sha="a",
+        )
+        # A person's upload in the same room can be passed on too.
+        upload_id = await _add_artifact(sf, room, filename="rules.pdf", agent_pid=None, sha="b")
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 검토 받아 줘")
+            result = _ask_peer_raw(client, sender_token, room.id, [
+                {"participant_id": peer_pid, "question": "초안 검토해 줘",
+                 "attachments": ["hai-30-ideas-draft-v1.md", "rules.pdf"]},
+                {"participant_id": other_pid, "question": "일정만 봐 줘"},
+            ])
+
+        assert result["isError"] is False, result
+        targets = await _targets(sf)
+        async with sf() as db:
+            with_files = await db.get(Message, targets[peer_pid].question_message_id)
+            without = await db.get(Message, targets[other_pid].question_message_id)
+        refs = with_files.extra_metadata["references"]
+        assert [(r["type"], r["id"], r["name"], r["room_id"]) for r in refs] == [
+            ("artifact", draft_id, "hai-30-ideas-draft-v1.md", room.id),
+            ("artifact", upload_id, "rules.pdf", room.id),
+        ]
+        assert refs[0]["sha256"] == "a" * 64 and refs[0]["size_bytes"] == 31118
+        assert "references" not in without.extra_metadata
+
+    @pytest.mark.asyncio
+    async def test_a_reused_name_picks_the_callers_newest_file(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        await _add_artifact(sf, room, filename="draft.md", agent_pid=sender_pid, sha="c")
+        newest = await _add_artifact(sf, room, filename="draft.md", agent_pid=sender_pid, sha="d")
+        # Someone else's file with the same name does not shadow the caller's.
+        await _add_artifact(sf, room, filename="draft.md", agent_pid=peer_pid, sha="e")
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 검토")
+            result = _ask_peer_raw(client, sender_token, room.id, [
+                {"participant_id": peer_pid, "question": "봐 줘", "attachments": ["draft.md"]},
+            ])
+
+        assert result["isError"] is False, result
+        async with sf() as db:
+            question = await db.get(Message, (await _targets(sf))[peer_pid].question_message_id)
+        assert [r["id"] for r in question.extra_metadata["references"]] == [newest]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_is_a_tool_error_and_nothing_is_sent(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        await _add_artifact(sf, room, filename="draft-v1.md", agent_pid=sender_pid, sha="f")
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 검토")
+            result = _ask_peer_raw(client, sender_token, room.id, [
+                {"participant_id": peer_pid, "question": "봐 줘", "attachments": ["draft-v2.md"]},
+            ])
+
+        assert result["isError"] is True
+        text = result["content"][0]["text"]
+        assert "draft-v2.md" in text
+        # The model learns which names exist and why a file from this turn is missing.
+        assert "draft-v1.md" in text
+        assert "when your turn ends" in text
+        assert await _targets(sf) == {}
+
+    @pytest.mark.asyncio
+    async def test_too_many_files_is_a_tool_error(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 검토")
+            result = _ask_peer_raw(client, sender_token, room.id, [
+                {"participant_id": peer_pid, "question": "봐 줘",
+                 "attachments": [f"f{i}.md" for i in range(6)]},
+            ])
+
+        assert result["isError"] is True
+        assert "at most 5" in result["content"][0]["text"]
 
 
 class TestFanIn:

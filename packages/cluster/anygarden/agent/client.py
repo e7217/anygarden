@@ -785,11 +785,15 @@ class ChatClient:
         # synthesize" rule, whose premise — peer replies in the main channel
         # — ended with #737's threads). A routing token only as the
         # fallback, display names in prose, and the don't-peer-ask-over-
-        # trivia brake. Roster tests pin the phrases.
+        # trivia brake. #969: files go as attachments, not summaries.
+        # Roster tests pin the phrases.
         suffix += (
             "\n\nWhen you need other agents to actively answer, call the "
             "ask_peer tool once with this room ID and one entry per agent "
             "(its id from the list above and a self-contained question). "
+            "To have an agent read a file of this room in full, put its file "
+            "name in that entry's attachments instead of summarizing it into "
+            "the question. "
             "The server posts the questions in a thread at once and the "
             "agents start working, so do not also write the requests in "
             "your reply. Your reply for that turn is not posted: write only "
