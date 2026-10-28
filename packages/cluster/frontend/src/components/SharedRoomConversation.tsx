@@ -84,7 +84,7 @@ export default function SharedRoomConversation({ currentRoom, channel }: {
     <div className="flex h-dvh overflow-hidden bg-[var(--color-background)]">
       <Sidebar selectedRoom={currentRoom.id} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <SidebarExpandButton />
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col md:min-w-[var(--chat-min-w)]">
         <header className="flex min-h-14 shrink-0 items-center gap-2 border-b bg-[var(--color-surface)] px-3 sm:px-4">
           <Button variant="ghost" size="icon" className="md:hidden" aria-label={t('workspace.openSidebar')} onClick={() => setSidebarOpen(true)}><Menu className="size-5" /></Button>
           <Link2 className="hidden size-4 shrink-0 text-[var(--color-foreground-muted)] sm:block" aria-hidden="true" />

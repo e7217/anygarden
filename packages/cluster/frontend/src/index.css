@@ -129,6 +129,11 @@
      controls). The sidebar footer uses the same minimum so both top
      dividers form one line (#827). */
   --footer-min-height: calc(var(--control-icon-size) + 2.4375rem);
+  /* Desktop floor for the conversation (#967). The sidebar and the right
+     rail shrink toward their own minimums before the chat column goes
+     below this; 28rem keeps the default 256 + 320 layout unchanged at
+     1024px. */
+  --chat-min-w: 28rem;
 }
 
 @media (min-width: 640px) {

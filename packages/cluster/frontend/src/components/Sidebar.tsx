@@ -26,6 +26,7 @@ import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import SidebarAdminMenu from '@/components/SidebarAdminMenu'
+import SidebarResizeHandle from '@/components/SidebarResizeHandle'
 import SidebarSplitHandle, { SIDEBAR_SPLIT_VAR, splitPercent } from '@/components/SidebarSplitHandle'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
@@ -170,7 +171,7 @@ export default function Sidebar({
   // provider so every page hosting <Sidebar> gets identical behaviour
   // without prop drilling. The hook throws when used outside the
   // provider, matching useRooms's discipline.
-  const { collapsed, toggleCollapsed } = useSidebarLayout()
+  const { collapsed, toggleCollapsed, width } = useSidebarLayout()
   const panelRef = useRef<HTMLElement>(null)
   const { desktop, active: drawerActive } = useModalDrawer({ open, onClose, panelRef, desktopMinWidth: 768 })
   const hidden = desktop ? collapsed : !open
@@ -441,15 +442,20 @@ export default function Sidebar({
         id="workspace-sidebar"
         aria-hidden={hidden || undefined}
         inert={hidden}
+        // #967 — the desktop width is the user's (``--sidebar-w``). It may
+        // shrink toward its 208px floor when the chat column needs its
+        // ``--chat-min-w``; the mobile drawer keeps w-64.
+        style={{ '--sidebar-w': `${width}px` } as CSSProperties}
         className={`
           fixed inset-y-0 left-0 z-40 flex h-full w-64 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface-alt)]
           transform ${open ? 'transition-transform duration-200 ease-out' : 'transition-none'}
           ${open ? 'visible translate-x-0 shadow-deep' : 'invisible -translate-x-full'}
           ${collapsed
             ? 'md:invisible md:-translate-x-full md:w-0 md:overflow-hidden md:border-r-0'
-            : 'md:visible md:static md:z-auto md:translate-x-0 md:w-64'}
+            : 'md:visible md:relative md:z-auto md:translate-x-0 md:w-[var(--sidebar-w)] md:min-w-52 md:shrink'}
         `}
       >
+      {desktop && !collapsed && <SidebarResizeHandle panelRef={panelRef} />}
       {/* Wordmark first; the desktop collapse toggle and the mobile close
           button share the trailing slot (#827). */}
       <div className="flex h-14 shrink-0 items-center gap-2 px-3">

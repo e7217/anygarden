@@ -127,7 +127,7 @@ export default function ThreadPanel({
           fixed inset-y-0 right-0 z-40 flex h-full min-w-0 w-full flex-col
           border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep
           sm:w-96
-          lg:relative lg:z-auto lg:w-[var(--right-rail-w)] lg:max-w-[40vw] lg:shadow-none
+          lg:relative lg:z-auto lg:w-[var(--right-rail-w)] lg:min-w-70 lg:shrink lg:shadow-none
         "
       >
         <RailResizeHandle panelRef={panelRef} controls="thread-panel" />

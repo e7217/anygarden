@@ -92,9 +92,9 @@ export default function RightContextRail({
         // longer eats a fixed 384px below xl: w-72 (288px) on the
         // mobile drawer and md desktop, w-80 (320px) on lg, full
         // w-96 (384px) only at xl+. #760 — desktop width is now the
-        // user's, shared with ThreadPanel through ``--right-rail-w``
-        // and capped at 40vw so a width saved on a wide screen cannot
-        // crush the chat column on a narrow one. Only transform and
+        // user's, shared with ThreadPanel through ``--right-rail-w``.
+        // #967 — instead of a 40vw cap the rail shrinks (to 280px at
+        // most) so the chat column keeps ``--chat-min-w``. Only transform and
         // shadow animate; the width snaps so the chat column reflows once
         // rather than on every frame.
         className={`
@@ -103,7 +103,7 @@ export default function RightContextRail({
           ${open ? 'translate-x-0 shadow-deep' : 'translate-x-full'}
           ${collapsed
             ? 'lg:translate-x-full lg:w-0 lg:overflow-hidden lg:border-l-0'
-            : 'lg:relative lg:z-auto lg:translate-x-0 lg:w-[var(--right-rail-w)] lg:max-w-[40vw]'}
+            : 'lg:relative lg:z-auto lg:translate-x-0 lg:w-[var(--right-rail-w)] lg:min-w-70 lg:shrink'}
         `}
       >
         {!collapsed && <RailResizeHandle panelRef={panelRef} controls="room-context-rail" />}
