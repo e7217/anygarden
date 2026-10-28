@@ -161,6 +161,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | CMP-13 | 에이전트의 시도 보고(`record_campaign_attempt`)는 사이클당 한 번, 현재 사이클의 평가 시작 전에만 받는다. 응답에는 사이클 시작 뒤 들어온 사람의 후속 지시(캠페인 수정 포함)가 담긴다 | pytest |
 | CMP-14 | 회고의 지침 변경은 승인 없이 적용되고, source=campaign 리비전·이벤트·방 메시지로 기록되며 리비전 복원으로 되돌릴 수 있다. AGENTS.md는 `## Campaign learnings` 섹션 밖을 수정할 수 없고, 회고당 3건·16KB를 넘을 수 없다 | pytest |
 | CMP-15 | 사이클 브리프의 실패 패턴에는 최근 사이클 목록에서 빠진 사이클 중 평가기가 효과 없음(no_gain·regressed·guardrail_violation·invalid)으로 판정한 가설이 최신순·상한 30줄로 남는다. 평가·기록 실패 사이클은 넣지 않고, 넘치면 `read_campaign_attempts`로 안내한다 | pytest |
+| CMP-16 | 목표가 사람이 필요한 상태(막힘·정체·확인 필요)가 되거나 끝나면(달성·마감·예산 소진·중단) 방 채팅에 아무도 멘션하지 않는 시스템 메시지가 전이마다 한 번 올라오고, 채팅은 이를 상태 라벨과 사유가 있는 카드로 보여 준다. 일시 정지·재개·수정은 올리지 않는다 | pytest, e2e |
 
 ## 인박스·알림 (INB)
 

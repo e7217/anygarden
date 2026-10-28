@@ -16,6 +16,8 @@ import {
 } from '@/lib/room-query'
 import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
+import GoalStatusCard from '@/components/GoalStatusCard'
+import { parseGoalStatus } from '@/lib/goalStatus'
 import WorkspaceActionCard, { WorkspaceActionResultNote } from '@/components/WorkspaceActionCard'
 import { parseWorkspaceActionRequest, parseWorkspaceActionResult } from '@/lib/workspaceActions'
 import { parseDraftFailed, parseDraftRequest } from '@/lib/drafts'
@@ -191,6 +193,8 @@ export default memo(function MessageBubble({
     () => parseTaskAssignment(message),
     [message],
   )
+  // #957 — a goal that needs a person or has ended.
+  const goalStatusMeta = useMemo(() => parseGoalStatus(message.metadata), [message])
   // #938 — an agent's workspace change waiting for approval, and the
   // server's report of how it ended.
   const workspaceRequestMeta = useMemo(() => parseWorkspaceActionRequest(message.metadata), [message])
@@ -433,6 +437,17 @@ export default memo(function MessageBubble({
           title={title || t('chat.untitledTask')}
           assignee={assignee}
         />
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    )
+  }
+
+  if (goalStatusMeta) {
+    return (
+      <div className="group flex flex-col items-start">
+        <GoalStatusCard meta={goalStatusMeta} />
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
