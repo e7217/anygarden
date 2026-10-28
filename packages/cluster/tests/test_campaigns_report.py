@@ -252,6 +252,9 @@ async def test_a_person_stopping_the_goal_is_not_reported(env):  # noqa: F811
         await db.commit()
     [stopped] = await _goal_messages(env)
     assert stopped.extra_metadata["goal_status"]["status"] == "stopped"
+    # #969 — the card translates the code; the body never shows it.
+    assert stopped.extra_metadata["goal_status"]["stop_reason"] == "user"
+    assert "user" not in stopped.content.split("”")[-1]
     assert "goal_report" not in stopped.extra_metadata
     assert await _turns_for(env, stopped.id) == []
 

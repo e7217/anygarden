@@ -311,10 +311,14 @@ async def _post_status_notice(
     if detail:
         text = f"{text} {detail}"
     try:
-        message = await append_message(db, campaign.room_id, None, text, {"goal_status": {
+        goal_status = {
             "campaign_id": campaign.id, "title": campaign.title, "status": campaign.status,
             "previous": previous, "detail": detail,
-        }})
+        }
+        if campaign.status == "stopped" and campaign.stop_reason:
+            # #969 — a code (``user``, ``room_archived``) the card translates.
+            goal_status["stop_reason"] = campaign.stop_reason
+        message = await append_message(db, campaign.room_id, None, text, {"goal_status": goal_status})
     except ChannelError:
         return
     mark(db, message_id=message.id)

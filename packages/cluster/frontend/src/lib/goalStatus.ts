@@ -29,6 +29,11 @@ export const GOAL_REPORT_REASONS = ['confirmation', 'ended', 'needs_person', 'pr
 
 export type GoalReportReason = (typeof GOAL_REPORT_REASONS)[number]
 
+// #969 — a stop notice carries the server's code; the card says it in words.
+export const GOAL_STOP_REASONS = ['user', 'room_archived'] as const
+
+export type GoalStopReason = (typeof GOAL_STOP_REASONS)[number]
+
 export interface GoalReportMeta {
   reason: GoalReportReason
   leadParticipantId: string | null
@@ -40,6 +45,7 @@ export interface GoalStatusMeta {
   status: GoalNoticeStatus
   detail: string | null
   report: GoalReportMeta | null
+  stopReason: GoalStopReason | null
 }
 
 function parseGoalReport(raw: unknown): GoalReportMeta | null {
@@ -57,7 +63,7 @@ export function parseGoalStatus(metadata: unknown): GoalStatusMeta | null {
   const raw = (metadata as Record<string, unknown>).goal_status
   if (!raw || typeof raw !== 'object') return null
   const obj = raw as Record<string, unknown>
-  const { campaign_id, title, status, detail } = obj
+  const { campaign_id, title, status, detail, stop_reason } = obj
   if (typeof campaign_id !== 'string' || typeof title !== 'string') return null
   if (!GOAL_NOTICE_STATUSES.includes(status as GoalNoticeStatus)) return null
   const report = parseGoalReport((metadata as Record<string, unknown>).goal_report)
@@ -69,5 +75,8 @@ export function parseGoalStatus(metadata: unknown): GoalStatusMeta | null {
     status: status as GoalNoticeStatus,
     detail: typeof detail === 'string' && detail ? detail : null,
     report,
+    stopReason: status === 'stopped' && GOAL_STOP_REASONS.includes(stop_reason as GoalStopReason)
+      ? stop_reason as GoalStopReason
+      : null,
   }
 }

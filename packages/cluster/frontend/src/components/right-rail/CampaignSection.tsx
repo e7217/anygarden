@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Plus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +19,7 @@ import {
   type Campaign,
   type CampaignAction,
   type CampaignAttempt,
+  type CampaignConfirmAdvice,
   type CampaignExtendInput,
   type CampaignStatus,
 } from '@/lib/campaigns'
@@ -187,6 +188,31 @@ function ExtendForm({ campaign, onExtend, onCancel }: {
   )
 }
 
+/** #969 — the lead's advice, so a person does not confirm against it unknowingly. */
+function ConfirmAdvice({ advice }: { advice: CampaignConfirmAdvice }) {
+  const { t } = useLocale()
+  const hold = advice.advice === 'hold'
+  const Icon = hold ? AlertTriangle : CheckCircle2
+  return (
+    <div
+      data-testid="campaign-confirm-advice"
+      data-advice={advice.advice}
+      className="flex min-w-0 gap-2 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] px-2 py-1.5"
+    >
+      <Icon
+        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${hold ? 'text-[var(--color-warning)]' : 'text-[var(--color-success)]'}`}
+        aria-hidden
+      />
+      <div className="min-w-0 text-caption">
+        <p className="font-medium text-[var(--color-foreground)]">
+          {t(hold ? 'campaigns.advice.hold' : 'campaigns.advice.confirm')}
+        </p>
+        <p className="text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">{advice.reason}</p>
+      </div>
+    </div>
+  )
+}
+
 function CampaignCard({ campaign, attempts, canManage, now, onAction, onExtend }: {
   campaign: Campaign
   now: number
@@ -257,6 +283,7 @@ function CampaignCard({ campaign, attempts, canManage, now, onAction, onExtend }
         <p className="text-caption text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">{campaignStatusDetail(t, campaign.status_detail)}</p>
       )}
       {allowed.decide && <p className="text-caption text-[var(--color-foreground)]">{t('campaigns.confirmPrompt')}</p>}
+      {allowed.decide && campaign.confirm_advice && <ConfirmAdvice advice={campaign.confirm_advice} />}
 
       <details className="min-w-0">
         <summary className="min-h-11 cursor-pointer content-center text-caption font-medium text-[var(--color-foreground-muted)]">

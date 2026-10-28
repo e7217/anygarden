@@ -31,7 +31,7 @@ flow_harness = _flow.harness
 
 CAMPAIGN_TOOLS = {
     "record_campaign_attempt", "schedule_campaign_wakeup", "report_campaign_blocked",
-    "read_campaign_attempts", "apply_campaign_learning",
+    "read_campaign_attempts", "apply_campaign_learning", "advise_goal_confirmation",
 }
 
 
@@ -466,3 +466,72 @@ async def test_a_cycle_closed_meanwhile_refuses_wakeup_and_block_reports(flow_ha
                 await agent_actions.report_blocked(db, ctx, reason="r", unblock_hint="h")
         assert err.value.code == "CAMPAIGN_CYCLE_CLOSED"
         assert attempt.wake_at is None and attempt.block_reason is None
+
+
+# ── #969: the lead's confirm advice ─────────────────────────────────
+
+
+async def _awaiting_with_report_turn(h: Harness) -> tuple[dict, object]:
+    """Reach awaiting_confirmation and deliver the lead's report turn."""
+    cycle = await _open_cycle(h)
+    turn = cycle["turn"]
+    await h.tool(turn, "begin_project_execution", objective="Improve accuracy")
+    await _record(h, turn)
+    assert await _complete_and_score(h, cycle, turn, score=0.95) == "judged"
+    await h.end_turn(turn)
+    report_turn = await h.deliver("lead")
+    assert report_turn.frame["metadata"].get("system_origin") == "goal_report"
+    return cycle, report_turn
+
+
+async def _campaign_json(h: Harness, campaign_id: str) -> dict:
+    resp = await h.client.get(f"/api/v1/campaigns/{campaign_id}", headers=h.user())
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+@pytest.mark.req("CMP-20")
+async def test_the_leads_confirm_advice_is_shown_on_the_goal(flow_harness):
+    """#969 — the lead advised against confirming in its chat reply only;
+    the person confirmed without seeing it. The advice is now a value the
+    goal carries while it waits for that decision."""
+    h = flow_harness
+    cycle, report_turn = await _awaiting_with_report_turn(h)
+    assert (await _campaign_json(h, cycle["campaign_id"]))["confirm_advice"] is None
+
+    out = await h.tool(report_turn, "advise_goal_confirmation", advice="hold",
+                       reason="6 of the 30 ideas repeat others in meaning; 24 are distinct.")
+    assert out["advice"] == "hold"
+    advice = (await _campaign_json(h, cycle["campaign_id"]))["confirm_advice"]
+    assert advice["advice"] == "hold"
+    assert advice["reason"].startswith("6 of the 30 ideas")
+    assert advice["at"]
+
+    # A second call in the same turn replaces the advice.
+    await h.tool(report_turn, "advise_goal_confirmation", advice="confirm", reason="Rechecked.")
+    assert (await _campaign_json(h, cycle["campaign_id"]))["confirm_advice"]["advice"] == "confirm"
+
+    # Once the person decides, the advice no longer applies.
+    resp = await h.client.post(f"/api/v1/campaigns/{cycle['campaign_id']}/reject",
+                               headers=h.user(), json={})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["confirm_advice"] is None
+
+
+async def test_confirm_advice_needs_the_confirmation_report_turn(flow_harness):
+    h = flow_harness
+    cycle = await _open_cycle(h)
+    error = await _error(h, cycle["turn"], "advise_goal_confirmation",
+                         advice="confirm", reason="Looks good.")
+    assert error["code"] == "CAMPAIGN_REPORT_TURN_REQUIRED"
+    async with h.sessions() as db:
+        events = await db.scalars(select(CampaignEvent).where(
+            CampaignEvent.campaign_id == cycle["campaign_id"],
+            CampaignEvent.type == "confirm_advice"))
+        assert list(events) == []
+
+
+async def test_the_confirmation_report_brief_asks_for_the_advice(flow_harness):
+    h = flow_harness
+    _, report_turn = await _awaiting_with_report_turn(h)
+    assert "advise_goal_confirmation" in report_turn.frame["content"]

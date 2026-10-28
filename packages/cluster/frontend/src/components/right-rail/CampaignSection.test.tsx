@@ -84,6 +84,31 @@ describe('CampaignSection', () => {
     expect(screen.getByTestId('campaign-score')).toHaveTextContent('improving until')
   })
 
+  it('[CMP-20] shows the lead\'s confirm advice next to the confirm button', () => {
+    mocks.campaigns = [campaignFixture({
+      status: 'awaiting_confirmation',
+      confirm_advice: { advice: 'hold', reason: '6 ideas repeat others; 24 are distinct.', at: '2026-10-28T08:00:00Z' },
+    })]
+    renderSection()
+    const advice = screen.getByTestId('campaign-confirm-advice')
+    expect(advice).toHaveTextContent('The lead advises not to confirm yet')
+    expect(advice).toHaveTextContent('6 ideas repeat others; 24 are distinct.')
+    expect(advice).toHaveAttribute('data-advice', 'hold')
+  })
+
+  it('shows no advice when the lead gave none or the goal is not waiting', () => {
+    mocks.campaigns = [campaignFixture({ status: 'awaiting_confirmation' })]
+    renderSection()
+    expect(screen.queryByTestId('campaign-confirm-advice')).toBeNull()
+    cleanup()
+    mocks.campaigns = [campaignFixture({
+      status: 'active',
+      confirm_advice: { advice: 'confirm', reason: 'old', at: null },
+    })]
+    renderSection()
+    expect(screen.queryByTestId('campaign-confirm-advice')).toBeNull()
+  })
+
   it('hides actions from someone who is neither owner nor admin', () => {
     mocks.user = { id: 'someone-else', email: 'x@y.z', is_admin: false }
     mocks.campaigns = [campaignFixture()]
