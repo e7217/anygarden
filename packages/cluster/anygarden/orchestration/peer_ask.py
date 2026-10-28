@@ -21,7 +21,14 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import AgentTurn, AgentTurnAttempt, Message, Participant
+from anygarden.db.models import (
+    AgentTurn,
+    AgentTurnAttempt,
+    Message,
+    Participant,
+    RoomArtifact,
+)
+from anygarden.messages.references import artifact_reference
 from anygarden.rooms.roster import build_participants_brief
 from anygarden.turns.service import OPEN_TURN_STATES
 
@@ -31,6 +38,10 @@ MAX_QUESTION_CHARS = 2000
 MAX_ASKS_PER_CALL = 8
 MAX_SINCE_MESSAGES = 10
 MAX_SINCE_CHARS = 400
+# Files one question may carry (#969); the peer's inbox takes up to 10.
+MAX_ATTACHMENTS = 5
+# Names offered back when a requested file is not in the room.
+MAX_KNOWN_NAMES = 10
 
 # Same vocabulary as ``metadata.peer_call_undelivered`` (#743).
 REASON_ALREADY_ANSWERING = "already_answering"
@@ -228,3 +239,50 @@ async def _open_turn(
         if attempt_state in {"leased", "started"}:
             return turn
     return rows[0][0] if rows else None
+
+
+async def resolve_attachments(
+    db: AsyncSession, *, room_id: str, agent_id: str, names: list[str]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Turn file names into ``artifact`` references for a question (#969).
+
+    A name matches the room's files; on a reused name the caller's own
+    newest file wins, then anyone's newest (a person's upload can be
+    passed on — every participant already sees the room's files).
+    Returns the references and the names that matched nothing.
+    """
+    if not names:
+        return [], []
+    rows = (
+        await db.scalars(
+            select(RoomArtifact)
+            .where(RoomArtifact.room_id == room_id, RoomArtifact.filename.in_(names))
+            .order_by(RoomArtifact.created_at.desc(), RoomArtifact.id.desc())
+        )
+    ).all()
+    best: dict[str, RoomArtifact] = {}
+    for row in rows:
+        current = best.get(row.filename)
+        if current is None or (
+            row.produced_by_agent_id == agent_id
+            and current.produced_by_agent_id != agent_id
+        ):
+            best[row.filename] = row
+    refs = [artifact_reference(best[n]) for n in names if n in best]
+    return refs, [n for n in names if n not in best]
+
+
+async def known_attachment_names(
+    db: AsyncSession, *, room_id: str, agent_id: str
+) -> list[str]:
+    """The caller's newest file names in the room, for a "not found" hint."""
+    rows = await db.scalars(
+        select(RoomArtifact.filename)
+        .where(
+            RoomArtifact.room_id == room_id,
+            RoomArtifact.produced_by_agent_id == agent_id,
+        )
+        .order_by(RoomArtifact.created_at.desc(), RoomArtifact.id.desc())
+        .limit(MAX_KNOWN_NAMES * 3)
+    )
+    return list(dict.fromkeys(rows))[:MAX_KNOWN_NAMES]

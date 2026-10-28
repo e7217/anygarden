@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Campaign, CampaignAttempt, Message, RoomArtifact
+from anygarden.messages.references import artifact_reference
 
 SYSTEM_ORIGIN = "goal_report"
 MAX_REPORT_ARTIFACTS = 10
@@ -75,19 +76,6 @@ def _clip(text: str | None, limit: int = _FIELD_MAX) -> str:
 
 def _score(value: float | None) -> str:
     return "—" if value is None else f"{value:.6g}"
-
-
-def artifact_reference(row: RoomArtifact) -> dict[str, Any]:
-    """The canonical ``artifact`` reference (``messages/references.py``)."""
-    return {
-        "type": "artifact",
-        "id": row.id,
-        "room_id": row.room_id,
-        "name": row.filename,
-        "mime": row.mime,
-        "size_bytes": row.size_bytes,
-        "sha256": row.sha256,
-    }
 
 
 async def cycle_artifacts(

@@ -173,6 +173,7 @@ async def post_question(
     group: PeerAskGroup,
     target: Participant,
     question: str,
+    references: list[dict[str, Any]] | None = None,
 ) -> PostedQuestion:
     """Post one question in the trigger's thread and start the peer's turn.
 
@@ -193,17 +194,22 @@ async def post_question(
         if origin is not None
         else group.scope_thread_root_id
     )
+    metadata: dict[str, Any] = {
+        "mentions": [{"type": "user", "id": target.id}],
+        "peer_ask": {"via": "tool", "group_id": group.id},
+        "peer_depth": 1,
+        "kind": "peer_query",
+    }
+    # #969 — files the caller named; the peer's turn downloads them into
+    # its inbox like any attached file.
+    if references:
+        metadata["references"] = references
     msg = await append_message(
         db,
         group.room_id,
         group.caller_participant_id,
         f"<@user:{target.id}> {question}",
-        {
-            "mentions": [{"type": "user", "id": target.id}],
-            "peer_ask": {"via": "tool", "group_id": group.id},
-            "peer_depth": 1,
-            "kind": "peer_query",
-        },
+        metadata,
         thread_root_id=thread_root,
     )
     rid = str(uuid4())

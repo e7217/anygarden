@@ -259,6 +259,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                                     "conversation."
                                 ),
                             },
+                            "attachments": {
+                                "type": "array",
+                                "maxItems": 5,
+                                "items": {"type": "string", "minLength": 1},
+                                "description": (
+                                    "File names in this room (for example a "
+                                    "file you put in your outbox in an earlier "
+                                    "turn) for the peer to read in full. The "
+                                    "peer gets the files with the question; "
+                                    "do not paste their content into it. A "
+                                    "file you wrote in this turn reaches the "
+                                    "room only when your turn ends."
+                                ),
+                            },
                         },
                         "required": ["participant_id", "question"],
                     },
@@ -1443,9 +1457,12 @@ async def ask_peer(
     """
     from anygarden.orchestration.peer_ask import (
         MAX_ASKS_PER_CALL,
+        MAX_ATTACHMENTS,
         MAX_QUESTION_CHARS,
         REASON_LIMIT_REACHED,
         check_peer_ask,
+        known_attachment_names,
+        resolve_attachments,
         resolve_caller,
         since_turn_start,
     )
@@ -1470,6 +1487,7 @@ async def ask_peer(
     if len(raw_asks) > MAX_ASKS_PER_CALL:
         return _error_result(f"at most {MAX_ASKS_PER_CALL} asks per call"), []
     asks: list[tuple[str, str]] = []
+    files: dict[str, list[str]] = {}
     for item in raw_asks:
         pid = item.get("participant_id") if isinstance(item, dict) else None
         question = item.get("question") if isinstance(item, dict) else None
@@ -1482,8 +1500,19 @@ async def ask_peer(
             return _error_result(
                 f"question is longer than {MAX_QUESTION_CHARS} characters"
             ), []
+        raw_files = item.get("attachments") or []
+        if not isinstance(raw_files, list) or not all(
+            isinstance(n, str) and n.strip() for n in raw_files
+        ):
+            return _error_result("attachments must be a list of file names"), []
+        names = list(dict.fromkeys(n.strip() for n in raw_files))
+        if len(names) > MAX_ATTACHMENTS:
+            return _error_result(
+                f"at most {MAX_ATTACHMENTS} attachments per question"
+            ), []
         # A repeated target keeps its last question.
         asks = [a for a in asks if a[0] != pid] + [(pid, question)]
+        files[pid] = names
 
     caller = await resolve_caller(db, agent_id=agent_id, room_id=room_id)
     if caller is None:
@@ -1491,6 +1520,31 @@ async def ask_peer(
     if caller.turn is None:
         return _error_result(
             "ask_peer can only be used while you are answering a message."
+        ), []
+
+    # #969 — resolve every named file before anything is posted, so a
+    # wrong name sends nothing and the model can retry with the right one.
+    references: dict[str, list[dict[str, Any]]] = {}
+    missing: list[str] = []
+    for pid, names in files.items():
+        references[pid], absent = await resolve_attachments(
+            db, room_id=room_id, agent_id=agent_id, names=names
+        )
+        missing += [n for n in absent if n not in missing]
+    if missing:
+        known = await known_attachment_names(db, room_id=room_id, agent_id=agent_id)
+        return _error_result(
+            "Nothing was sent. Not a file in this room: "
+            + ", ".join(missing)
+            + ". "
+            + (
+                "Your files here: " + ", ".join(known) + ". "
+                if known
+                else "You have no files in this room yet. "
+            )
+            + "A file you wrote in this turn reaches the room only when your "
+            "turn ends; put what the peer needs into the question instead, or "
+            "ask without it."
         ), []
 
     # Hop 2: this turn was started by a peer's question. Hand the request
@@ -1561,7 +1615,10 @@ async def ask_peer(
             db, caller_turn=caller.turn, caller_participant_id=caller.participant.id
         )
         for target, question in accepted:
-            posted.append(await post_question(db, group=group, target=target, question=question))
+            posted.append(await post_question(
+                db, group=group, target=target, question=question,
+                references=references.get(target.id),
+            ))
         if budget is not None:
             budget.mark_peer_called(room_id, [t.id for t, _ in accepted])
 

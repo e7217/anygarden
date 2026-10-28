@@ -14,6 +14,19 @@ class InvalidSharedFileReference(ValueError):
     """Raised when metadata references a missing or inaccessible file."""
 
 
+def artifact_reference(row: RoomArtifact) -> dict[str, Any]:
+    """The canonical ``artifact`` reference for *row*."""
+    return {
+        "type": "artifact",
+        "id": row.id,
+        "room_id": row.room_id,
+        "name": row.filename,
+        "mime": row.mime,
+        "size_bytes": row.size_bytes,
+        "sha256": row.sha256,
+    }
+
+
 def _valid_origin(value: Any) -> str | None:
     return value if value in {"inline", "attachment"} else None
 
@@ -123,16 +136,7 @@ async def canonicalize_message_references(
             if origin is not None:
                 item["origin"] = origin
         elif ref_type == "artifact" and file_id in artifact_by_id:
-            artifact = artifact_by_id[file_id]
-            item = {
-                "type": "artifact",
-                "id": artifact.id,
-                "room_id": artifact.room_id,
-                "name": artifact.filename,
-                "mime": artifact.mime,
-                "size_bytes": artifact.size_bytes,
-                "sha256": artifact.sha256,
-            }
+            item = artifact_reference(artifact_by_id[file_id])
         else:
             continue
         key = (ref_type, file_id)
