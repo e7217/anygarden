@@ -9,7 +9,7 @@ room-visibility check here stand in for them.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from fastapi import BackgroundTasks, HTTPException, Request
@@ -51,7 +51,12 @@ async def require_visible_room(db: AsyncSession, request: Request, identity: Ide
 
 
 def _brief(obj: Any, *fields: str) -> dict[str, Any]:
-    data = obj.model_dump(mode="json") if isinstance(obj, BaseModel) else {f: getattr(obj, f, None) for f in fields}
+    if isinstance(obj, BaseModel):
+        data = obj.model_dump(mode="json")
+    elif isinstance(obj, Mapping):
+        data = obj
+    else:
+        data = {f: getattr(obj, f, None) for f in fields}
     return {f: data.get(f) for f in fields}
 
 

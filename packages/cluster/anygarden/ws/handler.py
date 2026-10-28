@@ -2258,6 +2258,14 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                     db, execution_id=settlement.execution_id,
                                     reason_code=settlement.limit_reason,
                                 )
+                            if settlement.summary_changed and settlement.execution_id:
+                                # #956 — usage is measured after the run (and
+                                # usually its goal cycle) ended; count it now.
+                                from anygarden.campaigns.lifecycle import (
+                                    on_usage_settled,
+                                )
+
+                                await on_usage_settled(db, settlement.execution_id)
                             # #625 (D-2) — quota availability as a first-class
                             # state: a quota-classified engine failure blocks
                             # routing with the promised reset instant; any

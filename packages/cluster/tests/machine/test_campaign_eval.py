@@ -266,6 +266,33 @@ async def test_runner_refuses_a_second_job_while_busy_and_resends_finished(agent
     await runner.close()
 
 
+async def test_paths_resolve_inside_the_agents_work_dir(agents_root):
+    """#956 — codex-cli runs in ``<agent>/workspace``; the evaluator, its
+    cwd and its pins resolve where the agent wrote them."""
+    work = agents_root / AGENT / "workspace"
+    (work / "goals").mkdir(parents=True)
+    (work / "goals" / "eval.py").write_text(
+        "import json, os; print(json.dumps({'score': 22, 'valid': True, 'cwd': os.getcwd()}))"
+    )
+    job = _job(f"{sys.executable} eval.py", cwd="goals", pin_paths=("goals/eval.py",),
+               work_dir="workspace")
+    result = await run_eval(agents_root, job)
+    assert result.status == "ok", result
+    assert result.parsed["cwd"] == str((work / "goals").resolve())
+    assert list(result.pins) == ["goals/eval.py"]
+    escaped = await run_eval(agents_root, _job("true", cwd="..", work_dir="workspace"))
+    assert escaped.error == "path_escape"
+
+
+async def test_a_missing_or_symlinked_work_dir_is_refused(agents_root, tmp_path):
+    result = await run_eval(agents_root, _job("true", work_dir="workspace"))
+    assert result.error == "workspace_missing"
+    (tmp_path / "elsewhere").mkdir()
+    os.symlink(tmp_path / "elsewhere", agents_root / AGENT / "workspace")
+    result = await run_eval(agents_root, _job("true", work_dir="workspace"))
+    assert result.error == "workspace_missing"
+
+
 # ── Daemon dispatch ─────────────────────────────────────────────────
 
 
@@ -308,3 +335,32 @@ async def test_daemon_acks_at_once_and_reports_the_result_later(tmp_path, monkey
     assert (result.job_id, result.status) == ("job-9", "ok")
     assert result.parsed == {"score": 0.5, "valid": True, "leak": ""}
     await daemon._campaign_evals.close()
+
+
+@pytest.mark.parametrize(("engine", "work_dir"), [
+    ("codex-cli", "workspace"), ("claude-code", "."), (None, "."),
+])
+def test_daemon_runs_the_evaluator_in_the_engines_work_dir(tmp_path, engine, work_dir):
+    """#956 — the machine knows the layout it spawned; no manifest → root."""
+    from anygarden.machine.daemon import MachineDaemon
+    from anygarden.machine.protocol.frames import (
+        CampaignEvalRequestFrame,
+        SyncDesiredStateFrame,
+    )
+
+    daemon = MachineDaemon(
+        server_url="wss://localhost:8000/ws/machines/m-1",
+        machine_id="m-1",
+        machine_token="t",
+        agent_dirs_root=tmp_path / "agents",
+        workspace_registry_path=tmp_path / "workspaces.json",
+        workspace_signing_key_path=tmp_path / "workspace-signing.key",
+    )
+    if engine is not None:
+        daemon._manifest_store.save(SyncDesiredStateFrame(
+            agent_id=AGENT, desired_state="running", generation=1, engine=engine,
+        ))
+    job = daemon._eval_job(CampaignEvalRequestFrame(
+        request_id="r-1", job_id="job-1", agent_id=AGENT, command="true", timeout_sec=5,
+    ))
+    assert job.work_dir == work_dir

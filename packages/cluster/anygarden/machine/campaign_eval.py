@@ -94,6 +94,9 @@ class EvalJob:
     pin_paths: tuple[str, ...] = ()
     expected_pins: Mapping[str, str] | None = None
     score_key: str = "score"
+    # #956 — the agent's work directory under its root (``work_dir_name``):
+    # cwd, pins and the command resolve there, as the agent sees them.
+    work_dir: str = "."
 
 
 @dataclass
@@ -126,7 +129,7 @@ class EvalResult:
 # ── Paths ───────────────────────────────────────────────────────────
 
 
-def workspace_root(agents_root: Path, agent_id: str) -> Path:
+def workspace_root(agents_root: Path, agent_id: str, work_dir: str = ".") -> Path:
     """The agent's workspace (its process cwd), resolved.
 
     The workspace itself must be a real directory, not a symlink.
@@ -135,10 +138,13 @@ def workspace_root(agents_root: Path, agent_id: str) -> Path:
         validate_agent_id(agent_id)
     except AgentFilePathError as exc:
         raise EvalRequestError("invalid_agent_id") from exc
-    root = Path(agents_root) / agent_id
-    if root.is_symlink() or not root.is_dir():
+    if work_dir not in {".", "workspace"}:
         raise EvalRequestError("workspace_missing")
-    return root.resolve()
+    root = Path(agents_root) / agent_id
+    for path in (root, root / work_dir):
+        if path.is_symlink() or not path.is_dir():
+            raise EvalRequestError("workspace_missing")
+    return (root / work_dir).resolve()
 
 
 def resolve_inside(root: Path, relative: str) -> Path:
@@ -293,7 +299,7 @@ async def run_eval(
     bad request or a failing command; the result says what happened."""
     result = EvalResult(job_id=job.job_id, agent_id=job.agent_id, status="failed")
     try:
-        root = workspace_root(agents_root, job.agent_id)
+        root = workspace_root(agents_root, job.agent_id, job.work_dir)
         cwd = resolve_inside(root, job.cwd or ".")
         if not cwd.is_dir():
             raise EvalRequestError("cwd_missing")

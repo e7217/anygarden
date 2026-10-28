@@ -172,11 +172,8 @@ async def _sync_tokens(db: AsyncSession, attempt: CampaignAttempt) -> int:
     """Copy the run's measured tokens onto the attempt; return the increase
     the campaign's ``tokens_used`` still has to absorb.
 
-    Known v1 gap: this runs at the run's terminal event and when the cycle
-    closes. Usage that is measured only after both (a late engine usage
-    report) is not added to the campaign; ``tokens_used`` can therefore
-    undercount slightly. Accepted for v1 — the cycle's execution limit
-    still bounded the run itself."""
+    Runs at the run's terminal event, when the cycle closes and when the
+    engine's usage is measured (``on_usage_settled``, #956) — usually last."""
     if attempt.execution_id is None:
         return 0
     from anygarden.project_executions.usage import execution_usage_summary
@@ -462,6 +459,29 @@ async def request_eval(
         actor=SYSTEM_ACTOR, clock=clock,
     )
     queue_dispatch_after_commit(db, attempt.id)
+
+
+async def on_usage_settled(
+    db: AsyncSession, execution_id: str, *, clock: Clock = utcnow
+) -> None:
+    """A run's engine usage was measured (#956).
+
+    The measurement arrives after the run's terminal event and usually
+    after the evaluation closed the cycle, so the goal counts it here too.
+    ``_sync_tokens`` adds only the increase, so a replay adds nothing; a
+    spent budget stops the goal at the next scheduler tick."""
+    attempt = await db.scalar(
+        select(CampaignAttempt)
+        .where(CampaignAttempt.execution_id == execution_id)
+        .order_by(CampaignAttempt.cycle_no.desc())
+        .limit(1)
+    )
+    if attempt is None:
+        return
+    campaign = await _campaign(db, attempt.campaign_id)
+    if campaign is None:
+        return
+    await _add_tokens(db, campaign, await _sync_tokens(db, attempt), clock=clock)
 
 
 async def on_execution_terminal(
@@ -806,6 +826,7 @@ __all__ = [
     "on_cycle_task_closed",
     "on_eval_result",
     "on_execution_terminal",
+    "on_usage_settled",
     "reconcile_open_cycles",
     "request_eval",
     "stop_campaign",
