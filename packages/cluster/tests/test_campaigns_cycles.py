@@ -1007,3 +1007,45 @@ async def test_usage_of_a_run_outside_any_goal_is_ignored(env):
 
     async with env.factory() as db:
         await on_usage_settled(db, "no-such-execution")
+
+
+async def _goal_notices(env) -> list[Message]:
+    async with env.factory() as db:
+        rows = await db.scalars(select(Message).where(
+            Message.room_id == env.ids["room"]).order_by(Message.seq))
+        return [m for m in rows if (m.extra_metadata or {}).get("goal_status")]
+
+
+@pytest.mark.req("CMP-16")
+async def test_a_goal_that_ends_or_needs_a_person_says_so_in_the_room(env):
+    """#957 — the room's chat shows a goal ending or blocking, once each."""
+    from anygarden.campaigns import notify
+    from anygarden.campaigns.actions import pause_campaign, resume_campaign
+    from anygarden.campaigns.service import apply_transition
+
+    cid = await env.create(max_total_tokens=100_000)
+    async with env.factory() as db:
+        campaign = await db.get(Campaign, cid)
+        await pause_campaign(db, campaign, actor="user:x")
+        await resume_campaign(db, campaign, actor="user:x")
+        await apply_transition(db, campaign, "block", actor="system", status_detail="Fix the evaluator.")
+        assert notify.take(db).messages  # broadcast after commit
+        await db.commit()
+    [blocked] = await _goal_notices(env)
+    assert blocked.participant_id is None
+    assert blocked.extra_metadata["goal_status"] == {
+        "campaign_id": cid, "title": "Win the contest", "status": "blocked",
+        "previous": "active", "detail": "Fix the evaluator.",
+    }
+    assert "Win the contest" in blocked.content and "<@" not in blocked.content
+
+    async with env.factory() as db:
+        campaign = await db.get(Campaign, cid)
+        await resume_campaign(db, campaign, actor="user:x")
+        await db.commit()
+    now = T0 + timedelta(hours=1)
+    for _ in range(3):
+        await env.run_cycle(now, score=0.1, tokens=40_000)
+        now += timedelta(hours=1)
+    notices = await _goal_notices(env)
+    assert [n.extra_metadata["goal_status"]["status"] for n in notices] == ["blocked", "budget_exhausted"]

@@ -265,7 +265,53 @@ async def apply_transition(
         actor=actor,
         clock=clock,
     )
+    if new_status != previous and new_status in NOTICE_STATUSES:
+        await _post_status_notice(
+            db, campaign, previous=previous,
+            detail=values.get("status_detail") or (details or {}).get("reason"),
+        )
     return True
+
+
+NOTICE_STATUSES: frozenset[str] = frozenset({
+    "blocked", "plateau", "awaiting_confirmation",
+    "achieved", "deadline_reached", "budget_exhausted", "stopped",
+})
+"""Statuses the room's chat is told about (#957): a goal that needs a
+person or has ended. Pause and resume are the person's own clicks."""
+
+_NOTICE_TEXT = {
+    "blocked": "is blocked",
+    "plateau": "stopped improving",
+    "awaiting_confirmation": "reached its target and waits for confirmation",
+    "achieved": "was achieved",
+    "deadline_reached": "reached its deadline",
+    "budget_exhausted": "used up its token budget",
+    "stopped": "was stopped",
+}
+
+
+async def _post_status_notice(
+    db: AsyncSession, campaign: Campaign, *, previous: str, detail: Any
+) -> None:
+    """One system message in the goal's room; it mentions nobody, so no
+    agent wakes. Skipped where the room takes no direct messages."""
+    from anygarden.campaigns.notify import mark
+    from anygarden.messages.service import append_message
+    from anygarden.shared_channels.schemas import ChannelError
+
+    detail = detail if isinstance(detail, str) and detail else None
+    text = f"Goal “{campaign.title}” {_NOTICE_TEXT[campaign.status]}."
+    if detail:
+        text = f"{text} {detail}"
+    try:
+        message = await append_message(db, campaign.room_id, None, text, {"goal_status": {
+            "campaign_id": campaign.id, "title": campaign.title, "status": campaign.status,
+            "previous": previous, "detail": detail,
+        }})
+    except ChannelError:
+        return
+    mark(db, message_id=message.id)
 
 
 RETRO_STATUSES: frozenset[str] = frozenset({"achieved", "deadline_reached", "budget_exhausted"})

@@ -36,7 +36,7 @@ function campaignFrom(body: Body, status = 'active', revision = 1) {
   }
 }
 
-async function stubApi(page: Page) {
+async function stubApi(page: Page, messages: unknown[] = []) {
   const state: { created: Body | null; status: string; revision: number; requests: Body[] } = {
     created: null, status: 'active', revision: 1, requests: [],
   }
@@ -64,7 +64,7 @@ async function stubApi(page: Page) {
         ],
       })
     }
-    if (pathname === `/api/v1/rooms/${ROOM_ID}/messages`) return fulfillJson(route, 200, [])
+    if (pathname === `/api/v1/rooms/${ROOM_ID}/messages`) return fulfillJson(route, 200, messages)
 
     if (pathname === `/api/v1/rooms/${ROOM_ID}/campaigns`) {
       if (method === 'POST') {
@@ -167,4 +167,30 @@ test('[CMP-01] start a campaign, see it in the rail and pause it', async ({ page
   await expect(card.getByTestId('campaign-status')).toHaveText('Paused')
   await expect(card.getByRole('button', { name: 'Resume' })).toBeVisible()
   await expect(card.getByRole('button', { name: 'Pause' })).toHaveCount(0)
+})
+
+test('[CMP-16] a goal that is blocked shows up in the room chat', async ({ page }) => {
+  await stubApi(page, [{
+    type: 'message', id: 'msg-goal', room_id: ROOM_ID, participant_id: null, seq: 1,
+    created_at: '2026-10-28T02:46:49Z',
+    content: 'Goal “Explore 20 ideas” is blocked. The evaluation failed 3 times in a row; check the evaluator.',
+    metadata: { goal_status: {
+      campaign_id: 'camp-1', title: 'Explore 20 ideas', status: 'blocked', previous: 'active',
+      detail: 'The evaluation failed 3 times in a row; check the evaluator.',
+    } },
+  }])
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/login')
+  await page.locator('#login-email').fill(user.email)
+  await page.locator('#login-password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign In' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await page.goto(`/rooms/${ROOM_ID}`)
+
+  const card = page.getByTestId('goal-status-card')
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('Goal')
+  await expect(card).toContainText('Explore 20 ideas')
+  await expect(card).toContainText('Blocked')
+  await expect(card).toContainText('check the evaluator')
 })

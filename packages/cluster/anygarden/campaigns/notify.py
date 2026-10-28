@@ -8,7 +8,8 @@ back. Instead they *mark* what changed on the session:
 - ``campaign.updated`` for a campaign whose row changed,
 - ``campaign.attempt_updated`` for an attempt that changed,
 - ``task.updated`` for a cycle Task the campaign failed (the same
-  ``fanout_task_event`` the sweeper and Task API use).
+  ``fanout_task_event`` the sweeper and Task API use),
+- a new room message (the goal's status notice, #957).
 
 What happens to the marks after a commit:
 
@@ -48,9 +49,10 @@ class Pending:
     campaigns: set[str] = field(default_factory=set)
     attempts: set[str] = field(default_factory=set)
     tasks: set[str] = field(default_factory=set)
+    messages: set[str] = field(default_factory=set)
 
     def __bool__(self) -> bool:
-        return bool(self.campaigns or self.attempts or self.tasks)
+        return bool(self.campaigns or self.attempts or self.tasks or self.messages)
 
 
 def mark(
@@ -59,6 +61,7 @@ def mark(
     campaign_id: str | None = None,
     attempt_id: str | None = None,
     task_id: str | None = None,
+    message_id: str | None = None,
 ) -> None:
     pending: Pending = db.sync_session.info.setdefault(_KEY, Pending())
     if campaign_id:
@@ -67,6 +70,8 @@ def mark(
         pending.attempts.add(attempt_id)
     if task_id:
         pending.tasks.add(task_id)
+    if message_id:
+        pending.messages.add(message_id)
 
 
 def take(db: AsyncSession) -> Pending:
@@ -81,7 +86,8 @@ async def publish(
     if manager is None or not pending:
         return
     from anygarden.campaigns.views import attempt_view, campaign_view
-    from anygarden.db.models import Campaign, CampaignAttempt, Room, Task
+    from anygarden.db.models import Campaign, CampaignAttempt, Message, Room, Task
+    from anygarden.messages.serialization import message_to_frame
     from anygarden.messages.service import fanout_task_event
     from anygarden.ws.protocol import CampaignAttemptUpdatedOut, CampaignUpdatedOut
 
@@ -114,6 +120,10 @@ async def publish(
             db, manager=manager, event="updated", task=task,
             room_name=room.name if room is not None else "",
         )
+    for message_id in sorted(pending.messages):
+        message = await db.get(Message, message_id)
+        if message is not None:
+            await manager.broadcast(message.room_id, message_to_frame(message))
 
 
 async def commit_and_publish(db: AsyncSession, manager: ConnectionManager | None) -> None:

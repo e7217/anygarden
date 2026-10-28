@@ -56,6 +56,9 @@ async def test_a_task_failed_by_the_campaign_is_fanned_out(env):  # noqa: F811
     assert task_frame["task"]["id"] == task_id and task_frame["task"]["status"] == "failed"
     campaign_frame = next(f for _, f in manager.frames if f["type"] == "campaign.updated")
     assert campaign_frame["campaign"]["status"] == "stopped"
+    # #957 — the room's chat hears about it too.
+    notice = next(f for _, f in manager.frames if f["type"] == "message")
+    assert notice["metadata"]["goal_status"]["status"] == "stopped"
     assert all(room == env.ids["room"] for room, _ in manager.frames)
 
 
