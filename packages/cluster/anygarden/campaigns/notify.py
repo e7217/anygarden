@@ -30,7 +30,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
@@ -86,7 +86,14 @@ async def publish(
     if manager is None or not pending:
         return
     from anygarden.campaigns.views import attempt_view, campaign_view
-    from anygarden.db.models import Campaign, CampaignAttempt, Message, Room, Task
+    from anygarden.db.models import (
+        AgentTurn,
+        Campaign,
+        CampaignAttempt,
+        Message,
+        Room,
+        Task,
+    )
     from anygarden.messages.serialization import message_to_frame
     from anygarden.messages.service import fanout_task_event
     from anygarden.ws.protocol import CampaignAttemptUpdatedOut, CampaignUpdatedOut
@@ -122,8 +129,22 @@ async def publish(
         )
     for message_id in sorted(pending.messages):
         message = await db.get(Message, message_id)
-        if message is not None:
-            await manager.broadcast(message.room_id, message_to_frame(message))
+        if message is None:
+            continue
+        frame = message_to_frame(message)
+        # #969 — a report request opens its lead's turn on this message. The
+        # lead gets only that leased delivery, like a draft request's drafter:
+        # the plain frame mentions it too, and it would answer twice.
+        target = await db.scalar(select(AgentTurn.target_participant_id).where(
+            AgentTurn.trigger_message_id == message.id,
+        ))
+        if target is not None and hasattr(manager, "broadcast_tailored"):
+            await manager.broadcast_tailored(
+                message.room_id,
+                lambda pid, frame=frame, target=target: None if pid == target else frame,
+            )
+        else:
+            await manager.broadcast(message.room_id, frame)
 
 
 async def commit_and_publish(db: AsyncSession, manager: ConnectionManager | None) -> None:
