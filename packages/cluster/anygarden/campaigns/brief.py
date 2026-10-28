@@ -2,8 +2,9 @@
 
 A pure function of the campaign and its attempts, so a restart renders
 the same brief and tests need no DB. The brief is capped at
-``BRIEF_MAX_CHARS``: only the best attempt, the last five cycles and
-outcome tallies go in; older history is for ``read_campaign_attempts``.
+``BRIEF_MAX_CHARS``: only the best attempt, the last five cycles, outcome
+tallies and the hypotheses of older cycles without gain go in; the rest of
+the history is for ``read_campaign_attempts``.
 Free text is clipped per field, and the rules section is always kept
 whole at the end.
 """
@@ -33,11 +34,16 @@ plateaus (mirrors ``lifecycle.STRATEGY_CHANGE``)."""
 
 RECENT_ATTEMPTS = 5
 RECENT_LESSONS = 5
+OLDER_FAILED_MAX = 30
+"""Older cycles without gain listed under failure patterns, newest first."""
 DEADLINE_CLOSE_RATIO = 0.10
 
 _PURPOSE_MAX = 3000
 _FIELD_MAX = 500
 _LESSON_MAX = 300
+_OLDER_FAILED_FIELD_MAX = 160
+_NO_GAIN_OUTCOMES = frozenset({"no_gain", "regressed", "guardrail_violation", "invalid"})
+"""Outcomes that judge the idea itself; evaluation and record failures do not."""
 _TRUNCATED = "…"
 
 
@@ -130,6 +136,22 @@ def _patterns(cycles: Sequence[CampaignAttempt]) -> str:
     if lessons:
         lines.append("Recent lessons:")
         lines.extend(f"- Cycle {a.cycle_no}: {_clip(a.lessons, _LESSON_MAX)}" for a in lessons)
+    # Ideas the evaluator already judged, from cycles that left "Recent attempts".
+    older = [a for a in closed[:-RECENT_ATTEMPTS] if a.outcome in _NO_GAIN_OUTCOMES and a.hypothesis]
+    if older:
+        lines.append(
+            "Tried earlier without gain (scored by the evaluator on the code of that cycle)."
+            " Do not repeat one unchanged. A retry is fine when the code or setup has changed"
+            " since then: say in your hypothesis what changed and why it may help now:"
+        )
+        lines.extend(
+            f"- Cycle {a.cycle_no} ({a.outcome}): {_clip(a.hypothesis, _OLDER_FAILED_FIELD_MAX)}"
+            for a in reversed(older[-OLDER_FAILED_MAX:])
+        )
+        if len(older) > OLDER_FAILED_MAX:
+            lines.append(
+                f"- …and {len(older) - OLDER_FAILED_MAX} older ones (read_campaign_attempts)."
+            )
     return "\n".join(lines)
 
 
