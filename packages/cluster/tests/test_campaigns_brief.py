@@ -178,6 +178,19 @@ def test_rules_ask_for_deliverables_as_outbox_files():
     assert "memory/outbox/room-1/" in rules
 
 
+@pytest.mark.req("CMP-19")
+def test_cycle_and_retro_rules_ask_for_a_readable_final_message():
+    """#969 — a cycle's completion message read like an internal log
+    ("시도기록1회 완료, follow_up 없음"). People in the room read it."""
+    cycle = render_brief(_campaign(), [], cycle_no=1, now=NOW)
+    retro = render_retro_brief(
+        _campaign(), [], reason="achieved", cycle_no=2, now=NOW, agents_md="", skills=[],
+    )
+    for rules in (cycle[cycle.index(SECTION_TITLES[6]):], retro[retro.index("## Rules"):]):
+        assert "complete sentences" in rules
+        assert "tool names" in rules and "follow_up" in rules
+
+
 def test_brief_is_capped_and_keeps_the_rules():
     huge = "x" * 50_000
     attempts = [_attempt(n, hypothesis=huge, change_summary=huge, lessons=huge) for n in range(1, 30)]

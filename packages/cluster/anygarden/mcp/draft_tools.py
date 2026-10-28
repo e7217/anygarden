@@ -33,7 +33,8 @@ DRAFT_TOOL_SCHEMAS = [
             "metric": {
                 "type": "object",
                 "properties": {
-                    "name": {**_string, "maxLength": 120},
+                    "name": {**_string, "maxLength": 120,
+                             "description": "Says exactly what the evaluator counts"},
                     "direction": {"type": "string", "enum": ["maximize", "minimize"]},
                     "target": {"type": "number", "description": "Required for mode=target; omit for optimize"},
                     "min_delta": {"type": "number", "minimum": 0},

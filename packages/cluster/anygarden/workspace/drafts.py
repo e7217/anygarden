@@ -124,7 +124,11 @@ def _goal_brief(pid: str, description: str) -> str:
             "line of its stdout must be one JSON object with the score under evaluator.score_key and "
             'a boolean "valid", e.g. {"score": 22, "valid": true} ("valid": false when the '
             "measurement itself could not be trusted). It is never prose. If no script measures the "
-            "metric yet, write one in your workspace first, run it once and point the command at it."),
+            "metric yet, write one in your workspace first, run it once and point the command at it. "
+            "The script must count exactly what the metric name says. When part of it needs "
+            "judgement (for example ideas that repeat each other in meaning, not just in title), "
+            "record that judgement in a file field during the work so that the script reads that "
+            "field; otherwise name the metric after what the script really counts."),
         ("3. Call propose_goal once with the whole draft. If it returns an error, fix the draft and "
             "call it again. Do not create the goal any other way (no workspace_action, no engine goal "
             "tools)."),
