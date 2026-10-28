@@ -288,6 +288,23 @@ def test_goal_guidance_names_the_required_valid_field() -> None:
     assert '"valid"' in command
 
 
+@pytest.mark.req("CMP-19")
+def test_goal_guidance_makes_the_evaluator_count_what_the_metric_says() -> None:
+    """#969 — a metric named "deduplicated ideas with feedback" was scored
+    by a script that only caught identical titles: 30 by the score, 24 by
+    the lead's own judgement in decisions.json, which the script never read."""
+    from anygarden.mcp.draft_tools import DRAFT_TOOL_SCHEMAS
+    from anygarden.workspace.drafts import _goal_brief
+
+    brief = _goal_brief("p1", "ideas")
+    assert "exactly what the metric name says" in brief
+    assert "reads that field" in brief
+    goal = next(t for t in DRAFT_TOOL_SCHEMAS if t["name"] == "propose_goal")
+    schema = goal.get("inputSchema") or goal.get("input_schema") or goal["parameters"]
+    name = schema["properties"]["metric"]["properties"]["name"]["description"]
+    assert "what the evaluator counts" in name
+
+
 @pytest.mark.req("CMP-01")
 def test_goal_drafts_leave_the_token_budget_out_by_default() -> None:
     """#963 — the token budget is optional; a draft only sets one when the

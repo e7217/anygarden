@@ -188,6 +188,14 @@ def _directives(campaign: Campaign, cycles: Sequence[CampaignAttempt], now: date
     return "\n".join(items) if items else "None."
 
 
+# #969 — completion messages read like internal logs without this.
+_READABLE_REPLY = (
+    "People in the room read your final reply: write it in complete sentences in the"
+    " room's language, and leave out tool names and flags (`follow_up`, `valid=true`)."
+    " Say what you did and what changed, without defending the rules."
+)
+
+
 def _rules(campaign: Campaign) -> str:
     pins = (campaign.evaluator or {}).get("pin_paths") or []
     pin_text = ", ".join(f"`{p}`" for p in pins[:20]) if pins else "none"
@@ -220,6 +228,7 @@ def _rules(campaign: Campaign) -> str:
             "7. Save what this cycle produced for people (a list, table, document, chart) as files"
             f" in `memory/outbox/{campaign.room_id}/`; they are attached to the goal's reports."
         ),
+        f"8. {_READABLE_REPLY}",
     ])
 
 
@@ -325,6 +334,7 @@ def _retro_rules() -> str:
             "5. Do not call `record_campaign_attempt` or run the evaluator. Finish with"
             " `seal_project_plan` (`required_task_ids=[]`), then `complete_project_execution`."
         ),
+        f"6. {_READABLE_REPLY}",
     ])
 
 
