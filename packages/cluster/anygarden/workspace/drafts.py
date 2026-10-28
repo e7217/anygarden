@@ -121,9 +121,10 @@ def _goal_brief(pid: str, description: str) -> str:
         ("1. Choose one measurable metric, its direction, and a target (mode=target) or a deadline "
             "(mode=optimize), and a token budget."),
         ("2. evaluator.command is a shell command run in your workspace on your machine; the last "
-            "line of its stdout must be JSON holding the score under evaluator.score_key. It is never "
-            "prose. If no script measures the metric yet, write one in your workspace first and point "
-            "the command at it."),
+            "line of its stdout must be one JSON object with the score under evaluator.score_key and "
+            'a boolean "valid", e.g. {"score": 22, "valid": true} ("valid": false when the '
+            "measurement itself could not be trusted). It is never prose. If no script measures the "
+            "metric yet, write one in your workspace first, run it once and point the command at it."),
         ("3. Call propose_goal once with the whole draft. If it returns an error, fix the draft and "
             "call it again. Do not create the goal any other way (no workspace_action, no engine goal "
             "tools)."),

@@ -59,6 +59,7 @@ from anygarden.machine.safefs import safe_write_text, secure_chmod
 from anygarden.machine.spawner import Spawner, SpawnManifest
 from anygarden.machine.sysinfo import collect_system_info
 from anygarden.machine.updater import run_update
+from anygarden.machine.workspace_import import work_dir_name
 from anygarden.machine.workspace_registry import WorkspaceRegistry
 from anygarden.machine.workspace_signing import WorkspaceReceiptSigner
 
@@ -567,9 +568,11 @@ class MachineDaemon:
             request_id=frame.request_id, agent_id=frame.agent_id, **outcome,
         ).model_dump())
 
-    async def _handle_campaign_eval_request(self, frame: CampaignEvalRequestFrame) -> None:
-        """#930 — acknowledge at once; the job reports its result later."""
-        job = EvalJob(
+    def _eval_job(self, frame: CampaignEvalRequestFrame) -> EvalJob:
+        # #956 — the evaluator runs where the agent works (codex-cli:
+        # ``workspace/``), which only this machine's manifest knows.
+        manifest = self._manifest_store.load(frame.agent_id)
+        return EvalJob(
             job_id=frame.job_id,
             agent_id=frame.agent_id,
             command=frame.command,
@@ -578,7 +581,12 @@ class MachineDaemon:
             pin_paths=tuple(frame.pin_paths),
             expected_pins=frame.expected_pins,
             score_key=frame.score_key,
+            work_dir=work_dir_name(manifest.engine) if manifest is not None else ".",
         )
+
+    async def _handle_campaign_eval_request(self, frame: CampaignEvalRequestFrame) -> None:
+        """#930 — acknowledge at once; the job reports its result later."""
+        job = self._eval_job(frame)
         accepted, reason = await self._campaign_evals.submit(job, self._send)
         await self._send(CampaignEvalAckFrame(
             request_id=frame.request_id, job_id=frame.job_id,

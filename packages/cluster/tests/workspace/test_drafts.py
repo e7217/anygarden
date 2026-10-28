@@ -273,3 +273,16 @@ async def test_routine_draft_respects_the_active_routine_limit(ws, monkeypatch) 
     async with ws["factory"]() as db:
         assert await db.scalar(select(func.count()).select_from(DraftRequest).where(
             DraftRequest.status == "pending")) == 1
+
+
+def test_goal_guidance_names_the_required_valid_field() -> None:
+    """#956 — the evaluator's last line needs ``valid`` too; a draft that
+    followed the guidance alone failed every cycle with ``valid_missing``."""
+    from anygarden.mcp.draft_tools import DRAFT_TOOL_SCHEMAS
+    from anygarden.workspace.drafts import _goal_brief
+
+    assert '"valid": true' in _goal_brief("p1", "ideas")
+    goal = next(t for t in DRAFT_TOOL_SCHEMAS if t["name"] == "propose_goal")
+    schema = goal.get("inputSchema") or goal.get("input_schema") or goal["parameters"]
+    command = schema["properties"]["evaluator"]["properties"]["command"]["description"]
+    assert '"valid"' in command

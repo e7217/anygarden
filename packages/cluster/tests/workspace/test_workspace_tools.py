@@ -467,3 +467,14 @@ async def test_a_row_stuck_executing_is_closed_as_unknown(ws) -> None:
         await db.commit()
     seen = await ws["client"].get(f"/api/v1/workspace-actions/{request_id}", headers=ws["owner_headers"])
     assert seen.json()["status"] == "failed" and "unknown" in seen.json()["error"]
+
+
+def test_a_goal_result_keeps_its_id_and_status() -> None:
+    """#956 — the campaign routes answer with a dict (``campaign_view``);
+    reading it with ``getattr`` turned every field into null."""
+    from anygarden.workspace.actions import _goal_brief
+
+    view = {"id": "c1", "room_id": "r1", "title": "Ideas", "status": "running",
+            "mode": "target", "tokens_used": 5}
+    assert _goal_brief(view) == {"id": "c1", "room_id": "r1", "title": "Ideas",
+                                 "status": "running", "mode": "target"}

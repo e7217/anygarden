@@ -44,7 +44,8 @@ DRAFT_TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "command": {**_string, "description": "Shell command run in your workspace. The "
-                                "last stdout line is JSON holding the score under score_key"},
+                                "last stdout line is one JSON object with the score under score_key "
+                                'and a boolean "valid", e.g. {"score": 22, "valid": true}'},
                     "cwd": _string,
                     "timeout_sec": {"type": "integer", "minimum": 1},
                     "pin_paths": {"type": "array", "items": _string},

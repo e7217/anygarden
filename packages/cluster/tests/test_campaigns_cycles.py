@@ -977,3 +977,33 @@ async def test_a_result_of_an_edited_evaluator_does_not_pin_the_new_one(env):
     assert await env.result(cycle, score=0.5, now=T0 + timedelta(minutes=12),
                             pins={"old.py": "a" * 64}) == "judged"
     assert (await env.campaign(cid)).evaluator_pins is None
+
+
+async def test_usage_measured_after_the_cycle_closed_still_counts(env):
+    """#956 — the engine's usage settles after the run ended and after the
+    evaluation closed the cycle; the goal must still count it, once, and
+    stop on the budget it spent."""
+    from anygarden.campaigns.lifecycle import on_usage_settled
+
+    cid = await env.create(max_total_tokens=100_000)
+    task_id = await env.run_cycle(T0, score=0.1, tokens=0)
+    attempt = await env.attempt(task_id)
+    assert attempt.closed_at is not None
+    assert (await env.campaign(cid)).tokens_used == 0
+
+    env.tokens[attempt.execution_id] = 211_718
+    for _ in range(2):  # a replayed settlement adds nothing
+        async with env.factory() as db:
+            await on_usage_settled(db, attempt.execution_id, clock=lambda: T0 + timedelta(hours=1))
+            await db.commit()
+    assert (await env.campaign(cid)).tokens_used == 211_718
+    assert (await env.attempt(task_id)).tokens == 211_718
+    assert await env.tick(T0 + timedelta(hours=2)) == []
+    assert (await env.campaign(cid)).status == "budget_exhausted"
+
+
+async def test_usage_of_a_run_outside_any_goal_is_ignored(env):
+    from anygarden.campaigns.lifecycle import on_usage_settled
+
+    async with env.factory() as db:
+        await on_usage_settled(db, "no-such-execution")
