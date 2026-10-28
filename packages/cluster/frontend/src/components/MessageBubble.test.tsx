@@ -631,3 +631,57 @@ describe('[ENG-11] MessageBubble — work trace', () => {
     expect(screen.queryByTestId('execution-trace')).toBeNull()
   })
 })
+
+describe('MessageBubble — goal report request (#964)', () => {
+  const reportMeta = {
+    goal_status: {
+      campaign_id: 'c1', title: 'Explore 30 ideas', status: 'awaiting_confirmation',
+      previous: 'active', detail: null,
+    },
+    system_origin: 'goal_report',
+    goal_report: { campaign_id: 'c1', reason: 'confirmation', lead_participant_id: 'agent-rep' },
+    mentions: [{ type: 'user', id: 'agent-rep' }],
+    references: [{
+      type: 'artifact', id: 'art-1', room_id: 'room-b', name: 'ideas.md',
+      mime: 'text/markdown', size_bytes: 120, sha256: 'x',
+    }],
+  }
+
+  it('shows the status card, who reports, and the files, not the brief [CMP-17]', () => {
+    localStorage.setItem('anygarden_locale', 'en')
+    render(
+      <LocaleProvider>
+        <MessageBubble
+          message={baseMsg({
+            participant_id: null,
+            content: '<@user:agent-rep> Goal report request — REQUIRED brief text',
+            metadata: reportMeta,
+          })}
+          participants={participants}
+          isMine={false}
+        />
+      </LocaleProvider>,
+    )
+    const card = screen.getByTestId('goal-status-card')
+    expect(card).toHaveTextContent('Explore 30 ideas')
+    expect(screen.getByTestId('goal-report-request')).toHaveTextContent('Rep')
+    expect(screen.getByTestId('message-attachment-file')).toHaveTextContent('ideas.md')
+    expect(screen.queryByText(/REQUIRED brief text/)).toBeNull()
+  })
+
+  it("maps the lead's outbox link to the attached file [CMP-18]", () => {
+    render(
+      <MessageBubble
+        message={baseMsg({
+          content: 'Top ideas are in [ideas.md](memory/outbox/room-b/ideas.md).',
+          metadata: { references: reportMeta.references },
+        })}
+        participants={participants}
+        isMine={false}
+      />,
+    )
+    expect(screen.getByRole('link', { name: 'ideas.md' })).toHaveAttribute(
+      'href', '/api/v1/rooms/room-b/artifacts/art-1',
+    )
+  })
+})

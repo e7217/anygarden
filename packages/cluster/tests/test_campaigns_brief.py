@@ -151,6 +151,14 @@ def test_rules_name_the_tools():
     assert "next cycle" in rules and "not a way to wait" in rules
 
 
+@pytest.mark.req("CMP-18")
+def test_rules_ask_for_deliverables_as_outbox_files():
+    """#964 — the goal's reports attach the files the cycle left in the outbox."""
+    brief = render_brief(_campaign(), [], cycle_no=1, now=NOW)
+    rules = brief[brief.index(SECTION_TITLES[6]):]
+    assert "memory/outbox/room-1/" in rules
+
+
 def test_brief_is_capped_and_keeps_the_rules():
     huge = "x" * 50_000
     attempts = [_attempt(n, hypothesis=huge, change_summary=huge, lessons=huge) for n in range(1, 30)]

@@ -266,10 +266,15 @@ async def apply_transition(
         clock=clock,
     )
     if new_status != previous and new_status in NOTICE_STATUSES:
-        await _post_status_notice(
-            db, campaign, previous=previous,
-            detail=values.get("status_detail") or (details or {}).get("reason"),
-        )
+        from anygarden.campaigns.report import report_reason, request_report
+
+        detail = values.get("status_detail") or (details or {}).get("reason")
+        reason = report_reason(new_status, event=event)
+        if reason is not None:
+            # #964 — the notice is the lead's report request (one message).
+            await request_report(db, campaign, reason=reason, previous=previous, detail=detail)
+        else:
+            await _post_status_notice(db, campaign, previous=previous, detail=detail)
     return True
 
 

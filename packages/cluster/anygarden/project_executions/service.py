@@ -1980,6 +1980,22 @@ async def seal_plan(
     return execution
 
 
+async def _campaign_cycle_references(
+    db: AsyncSession, campaign_id: str, execution_id: str
+) -> list[dict[str, Any]]:
+    """#964 — the goal cycle's deliverables, attached to its completion message."""
+    from anygarden.campaigns.report import artifact_reference, cycle_artifacts
+    from anygarden.db.models import Campaign, CampaignAttempt
+
+    campaign = await db.get(Campaign, campaign_id)
+    attempt = await db.scalar(
+        select(CampaignAttempt).where(CampaignAttempt.execution_id == execution_id).limit(1)
+    )
+    if campaign is None or attempt is None:
+        return []
+    return [artifact_reference(row) for row in await cycle_artifacts(db, campaign, attempt)]
+
+
 async def finish_execution(
     db: AsyncSession,
     *,
@@ -2088,18 +2104,23 @@ async def finish_execution(
         db, task=root, target_status="done", participant_id=turn.target_participant_id
     )
     source = await db.get(Message, execution.source_message_id)
+    completion_metadata: dict[str, Any] = {
+        "execution_id": execution.id,
+        "execution_completed": True,
+        "source_message_id": source.id,
+        "root_task_id": root.id,
+        "required_result_ids": [result.id for result in accepted.values()],
+    }
+    if root.campaign_id:
+        references = await _campaign_cycle_references(db, root.campaign_id, execution.id)
+        if references:
+            completion_metadata["references"] = references
     message = await append_message(
         db,
         execution.operating_room_id,
         turn.target_participant_id,
         summary,
-        {
-            "execution_id": execution.id,
-            "execution_completed": True,
-            "source_message_id": source.id,
-            "root_task_id": root.id,
-            "required_result_ids": [result.id for result in accepted.values()],
-        },
+        completion_metadata,
         thread_root_id=source.root_message_id or source.id,
     )
     _queue_message(db, message)

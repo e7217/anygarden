@@ -405,6 +405,14 @@ async def _after_close(
                  "tokens": attempt.tokens},
         actor=actor, clock=clock,
     )
+    if (
+        not retrospective and campaign.status == "active" and campaign.cycles_run > 0
+        and campaign.cycles_run % RETRO_EVERY_CYCLES == 0
+    ):
+        # #964 — a progress report every block of cycles; the loop goes on.
+        from anygarden.campaigns.report import request_report
+
+        await request_report(db, campaign, reason="progress", previous="active")
     if strategy_change:
         await record_event(
             db, campaign.id,

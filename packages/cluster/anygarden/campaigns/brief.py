@@ -214,6 +214,10 @@ def _rules(campaign: Campaign) -> str:
             "6. If you cannot make progress without a person, call `report_campaign_blocked`"
             " with what would unblock you; older attempts are in `read_campaign_attempts`."
         ),
+        (
+            "7. Save what this cycle produced for people (a list, table, document, chart) as files"
+            f" in `memory/outbox/{campaign.room_id}/`; they are attached to the goal's reports."
+        ),
     ])
 
 

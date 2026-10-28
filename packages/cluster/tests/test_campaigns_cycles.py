@@ -1018,7 +1018,8 @@ async def _goal_notices(env) -> list[Message]:
 
 @pytest.mark.req("CMP-16")
 async def test_a_goal_that_ends_or_needs_a_person_says_so_in_the_room(env):
-    """#957 — the room's chat shows a goal ending or blocking, once each."""
+    """#957 — the room's chat shows a goal ending or blocking, once each
+    (#964: report statuses mention the lead; see test_campaigns_report)."""
     from anygarden.campaigns import notify
     from anygarden.campaigns.actions import pause_campaign, resume_campaign
     from anygarden.campaigns.service import apply_transition
@@ -1037,7 +1038,10 @@ async def test_a_goal_that_ends_or_needs_a_person_says_so_in_the_room(env):
         "campaign_id": cid, "title": "Win the contest", "status": "blocked",
         "previous": "active", "detail": "Fix the evaluator.",
     }
-    assert "Win the contest" in blocked.content and "<@" not in blocked.content
+    # #964 — a goal that needs a person asks its lead to report (CMP-17);
+    # the same single message still renders as the status card.
+    assert "Win the contest" in blocked.content
+    assert blocked.extra_metadata["mentions"] == [{"type": "user", "id": env.ids["agent_p"]}]
 
     async with env.factory() as db:
         campaign = await db.get(Campaign, cid)
