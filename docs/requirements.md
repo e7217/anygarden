@@ -160,6 +160,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | CMP-12 | 방을 보관하면 같은 트랜잭션에서 캠페인이 stopped(room_archived)가 되고 열린 사이클이 닫힌다. 열린 사이클 Task의 상태는 일반 Task API(수정·삭제·재요청)로도, 에이전트의 Task 상태 도구로도 바꿀 수 없다(409). 닫힌 뒤에는 Task를 지워도 시도 기록이 남는다 | pytest |
 | CMP-13 | 에이전트의 시도 보고(`record_campaign_attempt`)는 사이클당 한 번, 현재 사이클의 평가 시작 전에만 받는다. 응답에는 사이클 시작 뒤 들어온 사람의 후속 지시(캠페인 수정 포함)가 담긴다 | pytest |
 | CMP-14 | 회고의 지침 변경은 승인 없이 적용되고, source=campaign 리비전·이벤트·방 메시지로 기록되며 리비전 복원으로 되돌릴 수 있다. AGENTS.md는 `## Campaign learnings` 섹션 밖을 수정할 수 없고, 회고당 3건·16KB를 넘을 수 없다 | pytest |
+| CMP-15 | 사이클 브리프의 실패 패턴에는 최근 사이클 목록에서 빠진 사이클 중 평가기가 효과 없음(no_gain·regressed·guardrail_violation·invalid)으로 판정한 가설이 최신순·상한 30줄로 남는다. 평가·기록 실패 사이클은 넣지 않고, 넘치면 `read_campaign_attempts`로 안내한다 | pytest |
 
 ## 인박스·알림 (INB)
 

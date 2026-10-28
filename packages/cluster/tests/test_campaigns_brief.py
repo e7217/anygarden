@@ -167,3 +167,45 @@ def test_retrospective_attempts_are_not_counted_as_cycles():
     brief = render_brief(_campaign(), attempts, cycle_no=3, now=NOW)
     recent = brief[brief.index(SECTION_TITLES[3]):brief.index(SECTION_TITLES[4])]
     assert "retro" not in recent
+
+
+def _patterns_section(brief: str) -> str:
+    return brief[brief.index(SECTION_TITLES[4]):brief.index(SECTION_TITLES[5])]
+
+
+@pytest.mark.req("CMP-15")
+def test_older_cycles_without_gain_stay_visible():
+    # Cycles 1–3 fell out of "Recent attempts" but their hypotheses must not be lost.
+    attempts = [_attempt(1, outcome="regressed", hypothesis="cache the parser"),
+                _attempt(2, outcome="improved", hypothesis="vectorise the loop"),
+                _attempt(3, outcome="no_gain", hypothesis="raise the batch size"),
+                *(_attempt(n) for n in range(4, 9))]
+    patterns = _patterns_section(render_brief(_campaign(), attempts, cycle_no=9, now=NOW))
+    assert "cache the parser" in patterns and "regressed" in patterns
+    assert "raise the batch size" in patterns
+    # An improvement is not a failed idea, and recent cycles are already listed above.
+    assert "vectorise the loop" not in patterns
+    assert "hypothesis 4" not in patterns
+    # Newest first.
+    assert patterns.index("raise the batch size") < patterns.index("cache the parser")
+
+
+@pytest.mark.req("CMP-15")
+def test_evaluation_failures_are_not_listed_as_failed_ideas():
+    attempts = [_attempt(1, outcome="eval_failed", hypothesis="idea with a broken eval"),
+                _attempt(2, outcome="no_record", hypothesis="idea never recorded"),
+                *(_attempt(n, outcome="improved") for n in range(3, 8))]
+    patterns = _patterns_section(render_brief(_campaign(), attempts, cycle_no=8, now=NOW))
+    assert "idea with a broken eval" not in patterns
+    assert "idea never recorded" not in patterns
+    assert "Tried earlier without gain" not in patterns
+
+
+@pytest.mark.req("CMP-15")
+def test_older_failed_ideas_are_capped():
+    attempts = [_attempt(n, hypothesis=f"idea number {n}") for n in range(1, 60)]
+    patterns = _patterns_section(render_brief(_campaign(), attempts, cycle_no=60, now=NOW))
+    assert "idea number 54" in patterns  # newest older cycle (55–59 are recent)
+    assert "idea number 25" in patterns
+    assert "idea number 24" not in patterns  # 30-line cap
+    assert "older" in patterns  # the cut is announced, with where to read the rest
