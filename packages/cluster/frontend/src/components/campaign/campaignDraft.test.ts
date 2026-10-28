@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildCampaignInput, campaignFormFields, emptyCampaignDraft, firstInvalidField, type CampaignDraft } from './campaignDraft'
+import { buildCampaignInput, campaignFormFields, draftFromCampaignInput, emptyCampaignDraft, firstInvalidField, type CampaignDraft } from './campaignDraft'
 
 const NOW = new Date('2026-10-26T00:00:00Z')
 
@@ -49,9 +49,22 @@ describe('buildCampaignInput', () => {
       mode: 'target',
       metric: { name: 'accuracy', direction: 'maximize', target: 1 },
       evaluator: { command: 'python eval.py', cwd: '.', timeout_sec: 600, pin_paths: ['eval.py', 'data/'], score_key: 'score' },
-      budget: { max_total_tokens: 500000 },
+      budget: {},
       trusted_eval: 'none',
     })
+  })
+
+  it('[CMP-01] sends no token budget by default and one only when entered', () => {
+    expect(emptyCampaignDraft().budgetTokens).toBe('')
+    expect(buildCampaignInput(draft({ target: '1', budgetTokens: '  ' }), NOW).input?.budget).toEqual({})
+    expect(buildCampaignInput(draft({ target: '1', budgetTokens: '250000' }), NOW).input?.budget)
+      .toEqual({ max_total_tokens: 250000 })
+  })
+
+  it('[CMP-01] keeps an agent-drafted budget and leaves it empty without one', () => {
+    expect(draftFromCampaignInput({ budget: { max_total_tokens: 15000 } }).budgetTokens).toBe('15000')
+    expect(draftFromCampaignInput({ budget: {} }).budgetTokens).toBe('')
+    expect(draftFromCampaignInput({}).budgetTokens).toBe('')
   })
 
   it('[CMP-01] reports required fields, a bad budget and a bad timeout', () => {

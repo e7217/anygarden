@@ -87,7 +87,9 @@ function GoalSummary({ spec }: { spec: Record<string, unknown> }) {
       {deadline && <Row label={t('campaigns.form.deadline')}>{new Date(deadline).toLocaleString()}</Row>}
       <Row label={t('campaigns.form.command')}><code className={mono}>{text(evaluator.command)}</code></Row>
       <Row label={t('campaigns.form.scoreKey')}><code className={mono}>{text(evaluator.score_key || 'score')}</code></Row>
-      <Row label={t('campaigns.form.budget')}>{Number(budget.max_total_tokens).toLocaleString()}</Row>
+      {budget.max_total_tokens != null && (
+        <Row label={t('campaigns.form.budget')}>{Number(budget.max_total_tokens).toLocaleString()}</Row>
+      )}
     </dl>
   )
 }

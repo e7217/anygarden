@@ -106,7 +106,10 @@ class EvaluatorIn(_Strict):
 
 
 class BudgetIn(_Strict):
-    max_total_tokens: int
+    """The token budget is optional (#963): leave ``max_total_tokens`` out
+    and the goal never ends on tokens."""
+
+    max_total_tokens: int | None = None
     retro_reserve_ratio: float = 0.05
 
 
@@ -116,7 +119,7 @@ class CampaignCreate(_Strict):
     mode: Literal["target", "optimize"]
     metric: MetricIn
     evaluator: EvaluatorIn
-    budget: BudgetIn
+    budget: BudgetIn = Field(default_factory=BudgetIn)
     deadline_at: AwareDatetime | None = None
     trusted_eval: Literal["none", "external"] = "none"
 
@@ -129,6 +132,9 @@ class MetricPatch(_Strict):
 
 
 class BudgetPatch(_Strict):
+    """Only the keys sent change. ``max_total_tokens: null`` removes the
+    token budget (#963); leaving the key out keeps it."""
+
     max_total_tokens: int | None = None
     retro_reserve_ratio: float | None = None
 
@@ -194,8 +200,9 @@ class CampaignOut(BaseModel):
     evaluator: dict[str, Any]
     trusted_eval: str
     budget: dict[str, Any]
-    usable_tokens: int
-    """Tokens cycles may spend (the retrospective reserve excluded)."""
+    usable_tokens: int | None
+    """Tokens cycles may spend (the retrospective reserve excluded);
+    ``None`` without a token budget."""
     deadline_at: str | None
     status: str
     stop_reason: str | None
@@ -476,6 +483,8 @@ async def update_campaign(
         changes["metric"] = body.metric.model_dump(exclude_unset=True)
     if body.budget is not None:
         changes["budget"] = body.budget.model_dump(exclude_none=True)
+        if "max_total_tokens" in body.budget.model_fields_set and body.budget.max_total_tokens is None:
+            changes["budget"]["max_total_tokens"] = None  # removes the budget
     if body.evaluator is not None:
         if not await _can_set_evaluator(db, identity, campaign.agent_id):
             raise _evaluator_forbidden()

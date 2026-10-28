@@ -21,7 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.campaigns.judge import reaches_target
 from anygarden.campaigns.notify import mark
-from anygarden.campaigns.policy import CampaignPolicyError, validate_campaign_spec
+from anygarden.campaigns.policy import (
+    CampaignPolicyError,
+    has_token_budget,
+    validate_campaign_spec,
+)
 from anygarden.campaigns.service import (
     RETRO_STATUSES,
     Clock,
@@ -29,6 +33,7 @@ from anygarden.campaigns.service import (
     apply_transition,
     cas_update,
     record_event,
+    reopen_values,
     transition,
     utcnow,
 )
@@ -112,8 +117,14 @@ async def edit_campaign(
     name and direction are fixed: changing them would make earlier scores
     incomparable. Applies from the next cycle; an open cycle gets it as a
     follow-up directive. Returns ``{field: {from, to}}`` (empty: no-op).
+
+    ``budget.max_total_tokens: None`` removes the token budget (#963). On a
+    ``budget_exhausted`` campaign that is the one edit allowed: it reopens
+    the loop in the same write, like an extension.
     """
-    transition(campaign.status, "edit")  # open statuses only
+    reopen = campaign.status == "budget_exhausted" and _removes_token_budget(campaign, changes)
+    if not reopen:
+        transition(campaign.status, "edit")  # open statuses only
     now = clock()
     metric = dict(campaign.metric)
     for key, value in (changes.get("metric") or {}).items():
@@ -151,9 +162,10 @@ async def edit_campaign(
             values[field] = new[field]
     for field in ("metric", "budget"):
         old = getattr(campaign, field) or {}
-        for key, value in new[field].items():
-            if old.get(key) != value:
-                diff[f"{field}.{key}"] = {"from": old.get(key), "to": value}
+        # Keys on either side: removing the token budget drops its key.
+        for key in dict.fromkeys([*new[field], *old]):
+            if old.get(key) != new[field].get(key):
+                diff[f"{field}.{key}"] = {"from": old.get(key), "to": new[field].get(key)}
         if new[field] != old:
             values[field] = new[field]
     if new["evaluator"] != campaign.evaluator:
@@ -168,7 +180,19 @@ async def edit_campaign(
     if not diff:
         return diff
     cycle_no = await open_cycle_no(db, campaign)
-    if not await cas_update(db, campaign, clock=clock, **values):
+    if reopen:
+        if new["deadline_at"] is not None and new["deadline_at"] <= now:
+            raise CampaignPolicyError(
+                "EXTEND_DOES_NOT_REOPEN",
+                "The deadline has passed too; extend the deadline to reopen the goal",
+            )
+        if not await apply_transition(
+            db, campaign, "extend", actor=actor, clock=clock,
+            details={"reason": "token_budget_removed"},
+            **values, **reopen_values(campaign, now),
+        ):
+            raise _lost()
+    elif not await cas_update(db, campaign, clock=clock, **values):
         raise _lost()
     await record_event(
         db, campaign.id,
@@ -178,6 +202,14 @@ async def edit_campaign(
         actor=actor, clock=clock,
     )
     return diff
+
+
+def _removes_token_budget(campaign: Campaign, changes: dict[str, Any]) -> bool:
+    budget = changes.get("budget") or {}
+    return (
+        has_token_budget(campaign.budget)
+        and "max_total_tokens" in budget and budget["max_total_tokens"] is None
+    )
 
 
 # ── Status actions ──────────────────────────────────────────────────

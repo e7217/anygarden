@@ -14,6 +14,7 @@ from anygarden.campaigns.policy import (
     PLATEAU_WINDOW,
     RETRO_EVERY_CYCLES,
     CampaignPolicyError,
+    has_token_budget,
     usable_tokens,
     validate_campaign_spec,
 )
@@ -67,12 +68,32 @@ def test_valid_target_spec_is_normalised_with_defaults():
     assert spec.deadline_at is None
 
 
-@pytest.mark.parametrize("budget", [None, {}, {"max_total_tokens": 0},
-                                    {"max_total_tokens": -5}, {"max_total_tokens": True},
-                                    {"max_total_tokens": "100"}])
+@pytest.mark.parametrize("budget", [None, {}, {"retro_reserve_ratio": 0.1},
+                                    {"max_total_tokens": None}])
 @pytest.mark.req("CMP-01")
-def test_budget_max_total_tokens_is_required_and_positive(budget):
-    assert _code(budget=budget) == "BUDGET_REQUIRED"
+def test_token_budget_is_optional(budget):
+    # #963: no token budget is the default; the goal ends by target,
+    # plateau, eval failures, deadline or a person instead.
+    spec = _spec(budget=budget)
+    assert "max_total_tokens" not in spec.budget
+    assert spec.budget["retro_reserve_ratio"] == (
+        0.1 if budget and budget.get("retro_reserve_ratio") else 0.05
+    )
+    assert usable_tokens(spec.budget) is None
+    assert has_token_budget(spec.budget) is False
+
+
+@pytest.mark.parametrize("budget", [{"max_total_tokens": 0},
+                                    {"max_total_tokens": -5}, {"max_total_tokens": True},
+                                    {"max_total_tokens": "100"}, "x", 5])
+@pytest.mark.req("CMP-01")
+def test_a_given_token_budget_must_be_a_positive_integer(budget):
+    assert _code(budget=budget) == "INVALID_BUDGET"
+
+
+@pytest.mark.parametrize("ratio", [-0.1, 0.6, "x"])
+def test_retro_reserve_ratio_is_checked_without_a_token_budget(ratio):
+    assert _code(budget={"retro_reserve_ratio": ratio}) == "INVALID_BUDGET"
 
 
 @pytest.mark.parametrize("ratio", [-0.1, 0.6, "x"])
@@ -177,3 +198,6 @@ def test_usable_tokens_keeps_the_retro_reserve():
     assert usable_tokens({"max_total_tokens": 1000, "retro_reserve_ratio": 0.05}) == 950
     assert usable_tokens({"max_total_tokens": 1000}) == 950
     assert usable_tokens({"max_total_tokens": 1000, "retro_reserve_ratio": 0}) == 1000
+    assert has_token_budget({"max_total_tokens": 1000}) is True
+    assert has_token_budget({"retro_reserve_ratio": 0.05}) is False
+    assert has_token_budget(None) is False

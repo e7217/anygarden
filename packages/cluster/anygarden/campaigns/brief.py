@@ -83,7 +83,6 @@ def _time_left(campaign: Campaign, now: datetime) -> tuple[str, float | None]:
 def _criteria(campaign: Campaign, cycle_no: int, now: datetime) -> str:
     metric = campaign.metric or {}
     usable = usable_tokens(campaign.budget)
-    left = max(0, usable - int(campaign.tokens_used or 0))
     time_text, _ = _time_left(campaign, now)
     target = metric.get("target")
     lines = [
@@ -91,9 +90,12 @@ def _criteria(campaign: Campaign, cycle_no: int, now: datetime) -> str:
         f"- Metric `{metric.get('name')}` ({metric.get('direction')})"
         + (f", target {_score(target)}" if target is not None else ", no target — best result by the deadline")
         + (f", minimum improvement {_score(metric.get('min_delta'))}" if metric.get("min_delta") else ""),
-        f"- Budget: {left} of {usable} cycle tokens left ({_pct(left, usable)})",
         f"- Time: {time_text}",
     ]
+    if usable is not None:
+        # A goal without a token budget (#963) shows no budget line.
+        left = max(0, usable - int(campaign.tokens_used or 0))
+        lines.insert(-1, f"- Budget: {left} of {usable} cycle tokens left ({_pct(left, usable)})")
     return "\n".join(lines)
 
 
@@ -346,7 +348,8 @@ def render_retro_brief(
     stats = [
         f"- Cycles run: {campaign.cycles_run}; status `{campaign.status}`",
         "- Outcomes: " + (", ".join(f"{k}: {v}" for k, v in sorted(tally.items())) or "none"),
-        f"- Tokens used: {int(campaign.tokens_used or 0)} of {usable} cycle tokens",
+        f"- Tokens used: {int(campaign.tokens_used or 0)}"
+        + (f" of {usable} cycle tokens" if usable is not None else ""),
         _criteria(campaign, cycle_no, now),
         "Best attempt:",
         _best(campaign, attempts),

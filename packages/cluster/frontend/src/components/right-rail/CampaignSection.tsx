@@ -60,7 +60,7 @@ function useCampaignFormat() {
     return t('campaigns.time.left', { time })
   }
   const date = (iso: string) => formatDate(new Date(iso), { dateStyle: 'medium', timeStyle: 'short' })
-  return { t, score, timeLeft, date }
+  return { t, score, timeLeft, date, formatNumber }
 }
 
 function AttemptRow({ attempt }: { attempt: CampaignAttempt }) {
@@ -110,6 +110,7 @@ export function validateExtend(
   if (budget.trim() !== initialBudget) {
     const tokens = Number(budget.trim())
     if (!Number.isInteger(tokens) || tokens <= 0) return { error: 'campaigns.form.positiveInteger' }
+    if (campaign.budget.max_total_tokens == null) return { error: 'campaigns.extend.nothing' }
     if (tokens <= campaign.budget.max_total_tokens) return { error: 'campaigns.error.invalidBudget' }
     input.max_total_tokens = tokens
   }
@@ -136,14 +137,16 @@ function ExtendForm({ campaign, onExtend, onCancel }: {
 }) {
   const { t, formatNumber } = useLocale()
   const initialDeadline = toLocalInput(campaign.deadline_at)
-  const initialBudget = String(campaign.budget.max_total_tokens)
+  // #963 — a goal without a token budget extends by its deadline only.
+  const hasBudget = campaign.budget.max_total_tokens != null
+  const initialBudget = hasBudget ? String(campaign.budget.max_total_tokens) : ''
   const [deadline, setDeadline] = useState(initialDeadline)
   const [budget, setBudget] = useState(initialBudget)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const base = `campaign-extend-${campaign.id}`
 
-  const currentBudget = formatNumber(campaign.budget.max_total_tokens)
+  const currentBudget = hasBudget ? formatNumber(campaign.budget.max_total_tokens!) : ''
 
   const submit = async () => {
     const result = validateExtend(campaign, deadline, budget, initialDeadline, initialBudget)
@@ -164,15 +167,17 @@ function ExtendForm({ campaign, onExtend, onCancel }: {
       onSubmit={event => { event.preventDefault(); void submit() }}
       noValidate
     >
-      <p className="text-caption text-[var(--color-foreground-muted)]">{t('campaigns.extend.hint')}</p>
+      <p className="text-caption text-[var(--color-foreground-muted)]">{t(hasBudget ? 'campaigns.extend.hint' : 'campaigns.extend.hintNoBudget')}</p>
       <div className="flex flex-col gap-1">
         <label htmlFor={`${base}-deadline`} className="text-caption font-medium">{t('campaigns.extend.deadline')}</label>
         <Input id={`${base}-deadline`} type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} />
       </div>
-      <div className="flex flex-col gap-1">
-        <label htmlFor={`${base}-budget`} className="text-caption font-medium">{t('campaigns.extend.budget')}</label>
-        <Input id={`${base}-budget`} inputMode="numeric" value={budget} onChange={e => setBudget(e.target.value)} />
-      </div>
+      {hasBudget && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor={`${base}-budget`} className="text-caption font-medium">{t('campaigns.extend.budget')}</label>
+          <Input id={`${base}-budget`} inputMode="numeric" value={budget} onChange={e => setBudget(e.target.value)} />
+        </div>
+      )}
       {error && <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" size="sm" variant="outline" onClick={onCancel} disabled={busy}>{t('common.cancel')}</Button>
@@ -190,16 +195,18 @@ function CampaignCard({ campaign, attempts, canManage, now, onAction, onExtend }
   onAction: (action: CampaignAction) => Promise<void>
   onExtend: (input: CampaignExtendInput) => Promise<void>
 }) {
-  const { t, score, timeLeft, date } = useCampaignFormat()
+  const { t, score, timeLeft, date, formatNumber } = useCampaignFormat()
   const { confirm } = useFeedback()
   const [busy, setBusy] = useState(false)
   const [extending, setExtending] = useState(false)
   const allowed = campaignActions(campaign.status)
   const best = campaign.final ?? campaign.best
   const bestValue = best ? best.trusted_score ?? best.dev_score : null
-  const percent = campaign.usable_tokens > 0
-    ? Math.min(100, Math.round((campaign.tokens_used / campaign.usable_tokens) * 100))
-    : 0
+  const percent = campaign.usable_tokens == null
+    ? null  // #963 — no token budget: show the tokens used only
+    : campaign.usable_tokens > 0
+      ? Math.min(100, Math.round((campaign.tokens_used / campaign.usable_tokens) * 100))
+      : 0
   const ended = !allowed.stop
 
   const run = async (action: CampaignAction) => {
@@ -241,7 +248,9 @@ function CampaignCard({ campaign, attempts, canManage, now, onAction, onExtend }
         {criterion && <> · {criterion}</>}
       </p>
       <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="campaign-budget">
-        {t('campaigns.budget.used', { percent })}
+        {percent == null
+          ? t('campaigns.budget.tokensUsed', { count: formatNumber(campaign.tokens_used) })
+          : t('campaigns.budget.used', { percent })}
         {campaign.deadline_at && !ended && <> · {timeLeft(campaign.deadline_at, now)}</>}
       </p>
       {campaign.status_detail && (

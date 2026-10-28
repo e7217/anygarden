@@ -304,6 +304,26 @@ async def test_extend_reopens_a_deadline_reached_campaign_only_with_a_later_dead
     assert campaign.status == "active" and campaign.deadline_at == later
 
 
+@pytest.mark.req("CMP-01")
+async def test_extend_without_a_token_budget(db):
+    # #963: there is no budget to raise; a deadline still reopens the goal.
+    owner, _, room = await _project_room(db)
+    campaign = await create_campaign(
+        db, **{**_create_args(owner, room), "budget": {},
+               "deadline_at": NOW + timedelta(hours=1)}
+    )
+    campaign.status = "deadline_reached"
+    campaign.tokens_used = 9_000_000
+    await db.flush()
+    with pytest.raises(CampaignPolicyError) as exc:
+        await extend_campaign(db, campaign, actor="user:x", max_total_tokens=200_000,
+                              clock=lambda: NOW + timedelta(hours=2))
+    assert exc.value.code == "NO_TOKEN_BUDGET"
+    assert await extend_campaign(db, campaign, actor="user:x", deadline_at=NOW + timedelta(days=1),
+                                 clock=lambda: NOW + timedelta(hours=2))
+    assert campaign.status == "active" and "max_total_tokens" not in campaign.budget
+
+
 @pytest.mark.parametrize("status", ["achieved", "stopped"])
 async def test_extend_refuses_final_statuses(db, status):
     owner, _, room = await _project_room(db)

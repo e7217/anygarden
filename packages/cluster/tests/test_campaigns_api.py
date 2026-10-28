@@ -106,6 +106,23 @@ async def test_create_binds_the_room_lead_and_broadcasts(env):  # noqa: F811
 
 
 @pytest.mark.req("CMP-01")
+async def test_create_without_a_token_budget(env):  # noqa: F811
+    # #963: the budget is optional and off by default.
+    body = _body()
+    del body["budget"]
+    resp = await env.client.post(f"/api/v1/rooms/{env.ids['room']}/campaigns",
+                                 json=body, headers=env.auth)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["usable_tokens"] is None
+    assert "max_total_tokens" not in resp.json()["budget"]
+    empty = await _create(env, budget={})
+    assert empty["usable_tokens"] is None
+    bad = await env.client.post(f"/api/v1/rooms/{env.ids['room']}/campaigns",
+                                json=_body(budget={"max_total_tokens": 0}), headers=env.auth)
+    assert bad.status_code == 422 and bad.json()["reason"] == "INVALID_BUDGET"
+
+
+@pytest.mark.req("CMP-01")
 async def test_create_validation_uses_the_error_envelope(env):  # noqa: F811
     resp = await env.client.post(
         f"/api/v1/rooms/{env.ids['room']}/campaigns",
@@ -327,6 +344,48 @@ async def test_edit_records_the_changes_and_applies_from_the_next_cycle(env):  #
         from anygarden.db.models import Task
 
         assert "Reach 0.95." in (await db.get(Task, opened[0])).spec
+
+
+@pytest.mark.req("CMP-01")
+async def test_edit_removes_the_token_budget_only_with_an_explicit_null(env):  # noqa: F811
+    cid = await env.create(max_total_tokens=100_000)
+    keep = await env.client.patch(f"/api/v1/campaigns/{cid}", headers=env.auth,
+                                  json={"budget": {"retro_reserve_ratio": 0.1}})
+    assert keep.status_code == 200, keep.text
+    assert keep.json()["budget"]["max_total_tokens"] == 100_000
+    removed = await env.client.patch(f"/api/v1/campaigns/{cid}", headers=env.auth,
+                                     json={"budget": {"max_total_tokens": None}})
+    assert removed.status_code == 200, removed.text
+    assert "max_total_tokens" not in removed.json()["budget"]
+    assert removed.json()["usable_tokens"] is None
+    async with env.factory() as db:
+        edits = list(await db.scalars(select(CampaignEvent).where(
+            CampaignEvent.campaign_id == cid, CampaignEvent.type == "edited")
+            .order_by(CampaignEvent.created_at)))
+    assert edits[-1].details["changes"]["budget.max_total_tokens"] == {"from": 100_000, "to": None}
+    # Setting a budget again works through the same edit.
+    again = await env.client.patch(f"/api/v1/campaigns/{cid}", headers=env.auth,
+                                   json={"budget": {"max_total_tokens": 300_000}})
+    assert again.json()["budget"]["max_total_tokens"] == 300_000
+
+
+@pytest.mark.req("CMP-10")
+async def test_removing_the_budget_reopens_a_budget_exhausted_goal(env):  # noqa: F811
+    cid = await env.create(max_total_tokens=100_000)
+    await env.run_cycle(T0, score=0.1, tokens=200_000)
+    assert (await env.campaign(cid)).status == "budget_exhausted"
+    other = await env.client.patch(f"/api/v1/campaigns/{cid}", headers=env.auth,
+                                   json={"title": "new"})
+    assert other.status_code == 409
+    resp = await env.client.patch(f"/api/v1/campaigns/{cid}", headers=env.auth,
+                                  json={"budget": {"max_total_tokens": None}})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert (body["status"], body["stop_reason"], body["retro_due"]) == ("active", None, None)
+    assert body["usable_tokens"] is None
+    types = [e.type for e in await env.events(cid)]
+    assert "edited" in types
+    assert len(await env.tick(T0 + timedelta(hours=1))) == 1
 
 
 async def test_edit_rules(env):  # noqa: F811

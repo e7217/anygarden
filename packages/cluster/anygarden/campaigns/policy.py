@@ -189,20 +189,27 @@ def _evaluator(raw: Any) -> dict[str, Any]:
 
 
 def _budget(raw: Any) -> dict[str, Any]:
+    """Normalise a budget. The token cap is optional (#963): without
+    ``max_total_tokens`` the goal never ends on tokens."""
+    if raw is None:
+        raw = {}
     if not isinstance(raw, dict):
-        raise CampaignPolicyError("BUDGET_REQUIRED", "budget.max_total_tokens is required")
-    cap = raw.get("max_total_tokens")
-    if not _is_int(cap) or cap <= 0:
-        raise CampaignPolicyError(
-            "BUDGET_REQUIRED", "budget.max_total_tokens must be a positive integer"
-        )
+        raise CampaignPolicyError("INVALID_BUDGET", "budget must be an object")
     ratio = raw.get("retro_reserve_ratio", DEFAULT_RETRO_RESERVE_RATIO)
     if not _is_number(ratio) or not 0 <= ratio <= MAX_RETRO_RESERVE_RATIO:
         raise CampaignPolicyError(
             "INVALID_BUDGET",
             f"budget.retro_reserve_ratio must be 0..{MAX_RETRO_RESERVE_RATIO}",
         )
-    return {"max_total_tokens": cap, "retro_reserve_ratio": float(ratio)}
+    out: dict[str, Any] = {"retro_reserve_ratio": float(ratio)}
+    cap = raw.get("max_total_tokens")
+    if cap is not None:
+        if not _is_int(cap) or cap <= 0:
+            raise CampaignPolicyError(
+                "INVALID_BUDGET", "budget.max_total_tokens must be a positive integer"
+            )
+        out = {"max_total_tokens": cap, **out}
+    return out
 
 
 def validate_campaign_spec(
@@ -219,7 +226,8 @@ def validate_campaign_spec(
 ) -> CampaignSpec:
     """Check a campaign request and return its normalised criteria (CMP-01).
 
-    - ``budget.max_total_tokens`` is required and positive.
+    - ``budget.max_total_tokens`` is optional (#963); when given it is a
+      positive integer. Without it the goal never ends on tokens.
     - A target mode campaign needs ``metric.target``; an optimize campaign
       needs ``deadline_at`` and has no target. Either way the loop has an
       end: a target or a deadline.
@@ -276,11 +284,28 @@ def evaluator_digest(evaluator: dict[str, Any] | None) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def usable_tokens(budget: dict[str, Any]) -> int:
-    """Tokens cycles may spend; the rest is reserved for the retrospective."""
+def has_token_budget(budget: dict[str, Any] | None) -> bool:
+    """Whether the goal has a token budget (#963: it is optional)."""
+    return bool(budget) and budget.get("max_total_tokens") is not None
+
+
+def usable_tokens(budget: dict[str, Any] | None) -> int | None:
+    """Tokens cycles may spend; the rest is reserved for the retrospective.
+
+    ``None`` when the goal has no token budget: tokens never end it.
+    """
+    if not has_token_budget(budget):
+        return None
+    assert budget is not None
     cap = int(budget["max_total_tokens"])
     ratio = float(budget.get("retro_reserve_ratio", DEFAULT_RETRO_RESERVE_RATIO))
     return int(cap * (1 - ratio))
+
+
+def cycle_tokens_spent(budget: dict[str, Any] | None, tokens_used: int) -> bool:
+    """Whether the cycles used up their tokens; never without a budget."""
+    usable = usable_tokens(budget)
+    return usable is not None and usable - int(tokens_used or 0) <= 0
 
 
 __all__ = [
@@ -309,7 +334,9 @@ __all__ = [
     "TRUSTED_EVAL_MODES",
     "CampaignPolicyError",
     "CampaignSpec",
+    "cycle_tokens_spent",
     "evaluator_digest",
+    "has_token_budget",
     "usable_tokens",
     "validate_campaign_spec",
 ]

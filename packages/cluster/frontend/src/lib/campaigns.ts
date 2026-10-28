@@ -41,8 +41,9 @@ export interface CampaignEvaluator {
   score_key: string
 }
 
+/** The token budget is optional (#963): no ``max_total_tokens``, no limit. */
 export interface CampaignBudget {
-  max_total_tokens: number
+  max_total_tokens?: number | null
   retro_reserve_ratio?: number
 }
 
@@ -74,7 +75,8 @@ export interface Campaign {
   evaluator: CampaignEvaluator
   trusted_eval: CampaignTrustedEval
   budget: CampaignBudget
-  usable_tokens: number
+  /** Tokens cycles may spend; ``null`` without a token budget. */
+  usable_tokens: number | null
   deadline_at: string | null
   status: CampaignStatus
   stop_reason: string | null
@@ -120,7 +122,8 @@ export interface CampaignCreateInput {
   mode: CampaignMode
   metric: { name: string; direction: CampaignDirection; target?: number }
   evaluator: CampaignEvaluator
-  budget: { max_total_tokens: number }
+  /** ``{}`` for no token budget (the default). */
+  budget: { max_total_tokens?: number }
   deadline_at?: string
   trusted_eval?: CampaignTrustedEval
 }

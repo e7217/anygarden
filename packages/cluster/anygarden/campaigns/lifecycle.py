@@ -52,8 +52,8 @@ from anygarden.campaigns.policy import (
     PLATEAU_WINDOW,
     RETRO_EVERY_CYCLES,
     TERMINAL_STATUSES,
+    cycle_tokens_spent,
     evaluator_digest,
-    usable_tokens,
 )
 from anygarden.campaigns.service import (
     Clock,
@@ -367,7 +367,7 @@ async def _after_close(
                 details["awaiting"] = (
                     "trusted_score" if c.trusted_eval == "external" else "confirmation"
                 )
-            elif usable_tokens(c.budget) - tokens_used <= 0:
+            elif cycle_tokens_spent(c.budget, tokens_used):
                 event = "budget_exhausted"
             elif since >= PLATEAU_WINDOW and c.mode == "target":
                 event = "plateau"
@@ -378,7 +378,7 @@ async def _after_close(
                 strategy_change = True
                 values["wake_reason"] = STRATEGY_CHANGE
             values["cycles_since_improvement"] = since
-        elif usable_tokens(c.budget) - tokens_used <= 0:
+        elif cycle_tokens_spent(c.budget, tokens_used):
             event = "budget_exhausted"
         if attempt.block_reason and event in {None, "plateau"}:
             event = "block"
