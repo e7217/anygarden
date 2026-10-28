@@ -55,13 +55,16 @@ DRAFT_TOOL_SCHEMAS = [
             },
             "budget": {
                 "type": "object",
+                "description": "Optional token limit. Leave it out unless the person asked for a "
+                               "token limit: without it the goal runs until its target, a plateau, "
+                               "its deadline or a person stops it",
                 "properties": {"max_total_tokens": {"type": "integer", "minimum": 1}},
                 "required": ["max_total_tokens"],
             },
             "deadline_at": {"type": "string", "format": "date-time",
                             "description": "ISO timestamp with timezone; required for mode=optimize"},
         },
-        ["title", "purpose", "mode", "metric", "evaluator", "budget"],
+        ["title", "purpose", "mode", "metric", "evaluator"],
     ),
     _tool(
         "propose_routine",

@@ -119,7 +119,7 @@ def _goal_brief(pid: str, description: str) -> str:
         ("Draft a goal (a metric goal for this project room, run by you as the room's lead) from "
             "this request, the conversation and your workspace. REQUIRED ACTIONS:"),
         ("1. Choose one measurable metric, its direction, and a target (mode=target) or a deadline "
-            "(mode=optimize), and a token budget."),
+            "(mode=optimize). Leave out the token budget unless the person asked for a token limit."),
         ("2. evaluator.command is a shell command run in your workspace on your machine; the last "
             "line of its stdout must be one JSON object with the score under evaluator.score_key and "
             'a boolean "valid", e.g. {"score": 22, "valid": true} ("valid": false when the '

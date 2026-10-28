@@ -220,6 +220,20 @@ async def test_exhausted_budget_ends_the_campaign_without_a_cycle(sessions):
     assert await _counts(sessions, ids["campaign"]) == (0, 0)
 
 
+@pytest.mark.req("CMP-01")
+async def test_no_token_budget_never_ends_the_campaign_on_tokens(sessions):
+    # #963: without a token budget, any amount of tokens used opens the
+    # next cycle instead of ending the goal.
+    ids = await _seed(sessions, budget={"retro_reserve_ratio": 0.05},
+                      tokens_used=5_000_000, next_cycle_at=NOW - timedelta(minutes=5))
+    outcomes = await _scheduler(sessions)._tick()
+    assert "budget_exhausted" not in [o.action for o in outcomes]
+    async with sessions() as db:
+        campaign = await db.get(Campaign, ids["campaign"])
+        assert campaign.status == "active"
+    assert await _counts(sessions, ids["campaign"]) == (1, 1)
+
+
 async def test_passed_deadline_ends_the_campaign_without_a_cycle(sessions):
     ids = await _seed(sessions)
     async with sessions() as db:

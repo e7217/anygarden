@@ -523,6 +523,20 @@ async def test_s9a_budget_exhausted(env):
     assert await env.tick(now) == []
 
 
+@pytest.mark.req("CMP-01")
+async def test_without_a_token_budget_tokens_never_end_the_goal(env):
+    # #963: the budget is optional; heavy cycles keep the loop going.
+    cid = await env.create(max_total_tokens=None)
+    now = T0
+    for score in (0.1, 0.2, 0.3):
+        await env.run_cycle(now, score=score, tokens=400_000)
+        now += timedelta(hours=1)
+    campaign = await env.campaign(cid)
+    assert campaign.status == "active" and campaign.stop_reason is None
+    assert campaign.tokens_used == 1_200_000
+    assert len(await env.tick(now)) == 1
+
+
 @pytest.mark.req("CMP-09")
 async def test_s9b_deadline_reached(env):
     cid = await env.create(mode="optimize", target=None, deadline_at=T0 + timedelta(hours=2))

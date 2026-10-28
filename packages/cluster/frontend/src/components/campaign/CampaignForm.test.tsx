@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import CampaignForm from './CampaignForm'
+import { draftFromCampaignInput } from './campaignDraft'
 import { CampaignApiError } from '@/lib/campaigns'
 import { campaignFixture } from '@/lib/campaignFixtures'
 
@@ -38,6 +39,32 @@ describe('CampaignForm', () => {
     expect(advanced).not.toHaveAttribute('open')
     expect(screen.getByLabelText(/Working folder/)).toHaveValue('.')
     expect(screen.getByLabelText(/time limit/)).toHaveValue('600')
+  })
+
+  it('[CMP-01] folds the optional token budget under "Advanced", empty by default', async () => {
+    const { onSubmit, onOpenChange } = renderForm()
+    expect(screen.getByTestId('campaign-form-advanced')).not.toHaveAttribute('open')
+    expect(screen.getByLabelText(/Token budget/)).toHaveValue('')
+    fill(/^Title$/, 'T'); fill(/Purpose/, 'P'); fill(/Metric name/, 'm'); fill(/Target score/, '1'); fill(/Evaluator command/, 'c')
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ budget: {} }))
+  })
+
+  it('unfolds "Advanced" for an invalid token budget', () => {
+    renderForm()
+    fill(/^Title$/, 'T'); fill(/Purpose/, 'P'); fill(/Metric name/, 'm'); fill(/Target score/, '1'); fill(/Evaluator command/, 'c')
+    fill(/Token budget/, '0')
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }))
+    expect(screen.getByTestId('campaign-form-advanced')).toHaveAttribute('open')
+    expect(screen.getByLabelText(/Token budget/)).toHaveFocus()
+  })
+
+  it('opens "Advanced" when an agent draft set a token budget', () => {
+    render(<CampaignForm open onOpenChange={vi.fn()} onSubmit={vi.fn()}
+      initialDraft={draftFromCampaignInput({ title: 'T', budget: { max_total_tokens: 15000 } })} />)
+    expect(screen.getByTestId('campaign-form-advanced')).toHaveAttribute('open')
+    expect(screen.getByLabelText(/Token budget/)).toHaveValue('15000')
   })
 
   it('[CMP-01] shows field errors instead of submitting an incomplete campaign', async () => {

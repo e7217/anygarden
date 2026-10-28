@@ -34,6 +34,7 @@ from anygarden.campaigns.policy import (
     OPEN_STATUSES,
     TERMINAL_STATUSES,
     CampaignPolicyError,
+    has_token_budget,
     usable_tokens,
     validate_campaign_spec,
 )
@@ -445,6 +446,18 @@ async def find_agent_participant(
 # ── Extension ───────────────────────────────────────────────────────
 
 
+def reopen_values(campaign: Campaign, now: datetime) -> dict[str, Any]:
+    """Columns that put an ended (deadline/budget) campaign back in the loop."""
+    current_next = campaign.next_cycle_at
+    return {
+        "stop_reason": None,
+        "final_attempt_id": None,
+        # The loop goes on; its next retrospective comes with the next end.
+        "retro_due": None,
+        "next_cycle_at": now if current_next is None or _aware(current_next) < now else current_next,
+    }
+
+
 async def extend_campaign(
     db: AsyncSession,
     campaign: Campaign,
@@ -488,6 +501,11 @@ async def extend_campaign(
         deadline = deadline_at
     budget = dict(campaign.budget)
     if max_total_tokens is not None:
+        if not has_token_budget(budget):
+            # #963: nothing to raise; a person sets a budget by editing.
+            raise CampaignPolicyError(
+                "NO_TOKEN_BUDGET", "This goal has no token budget; set one by editing it"
+            )
         if (
             not isinstance(max_total_tokens, int) or isinstance(max_total_tokens, bool)
             or max_total_tokens <= int(budget["max_total_tokens"])
@@ -500,20 +518,14 @@ async def extend_campaign(
         values["budget"] = budget
     if campaign.status in {"deadline_reached", "budget_exhausted"}:
         deadline_clear = deadline is None or deadline > now
-        budget_clear = usable_tokens(budget) > int(campaign.tokens_used or 0)
+        usable = usable_tokens(budget)
+        budget_clear = usable is None or usable > int(campaign.tokens_used or 0)
         if not (deadline_clear and budget_clear):
             raise CampaignPolicyError(
                 "EXTEND_DOES_NOT_REOPEN",
                 "The extension does not clear both the deadline and the budget",
             )
-        values["stop_reason"] = None
-        values["final_attempt_id"] = None
-        # The loop goes on; its next retrospective comes with the next end.
-        values["retro_due"] = None
-        current_next = campaign.next_cycle_at
-        values["next_cycle_at"] = (
-            now if current_next is None or _aware(current_next) < now else current_next
-        )
+        values.update(reopen_values(campaign, now))
     return await apply_transition(
         db, campaign, "extend", actor=actor, clock=clock, details=details, **values,
     )
@@ -522,9 +534,15 @@ async def extend_campaign(
 # ── Budget ──────────────────────────────────────────────────────────
 
 
-def remaining_cycle_tokens(campaign: Campaign) -> int:
-    """Tokens cycles may still spend (the retrospective reserve excluded)."""
-    return max(0, usable_tokens(campaign.budget) - int(campaign.tokens_used or 0))
+def remaining_cycle_tokens(campaign: Campaign) -> int | None:
+    """Tokens cycles may still spend (the retrospective reserve excluded).
+
+    ``None`` when the campaign has no token budget (#963).
+    """
+    usable = usable_tokens(campaign.budget)
+    if usable is None:
+        return None
+    return max(0, usable - int(campaign.tokens_used or 0))
 
 
 # ── Cycle executions (begin_execution) ──────────────────────────────
@@ -585,24 +603,32 @@ async def cycle_execution_limits(
         # reserve (``retro_reserve_ratio``): ``budget - tokens_used``. Once
         # the usable budget is spent that is only what is left of the
         # reserve. It runs after the deadline too.
-        remaining = max(0, int(campaign.budget["max_total_tokens"]) - int(campaign.tokens_used or 0))
-        if remaining <= 0:
-            raise _limit_error("CAMPAIGN_BUDGET_EXHAUSTED", "The campaign budget is used up")
+        # Without a token budget (#963) only ``RETRO_MAX_SECONDS`` bounds it.
         clamped = dict(limits)
-        requested = clamped.get("max_total_tokens")
-        clamped["max_total_tokens"] = (
-            remaining if requested is None else min(int(requested), remaining)
-        )
+        if has_token_budget(campaign.budget):
+            remaining = max(
+                0, int(campaign.budget["max_total_tokens"]) - int(campaign.tokens_used or 0)
+            )
+            if remaining <= 0:
+                raise _limit_error("CAMPAIGN_BUDGET_EXHAUSTED", "The campaign budget is used up")
+            requested = clamped.get("max_total_tokens")
+            clamped["max_total_tokens"] = (
+                remaining if requested is None else min(int(requested), remaining)
+            )
         retro_deadline = now + timedelta(seconds=RETRO_MAX_SECONDS)
         deadline = deadline_at if deadline_at is not None and deadline_at < retro_deadline else retro_deadline
         clamped["deadline_at"] = deadline.isoformat()
         return campaign, clamped, deadline
     remaining = remaining_cycle_tokens(campaign)
-    if remaining <= 0:
+    if remaining is not None and remaining <= 0:
         raise _limit_error("CAMPAIGN_BUDGET_EXHAUSTED", "The campaign budget is used up")
     clamped = dict(limits)
-    requested = clamped.get("max_total_tokens")
-    clamped["max_total_tokens"] = remaining if requested is None else min(int(requested), remaining)
+    if remaining is not None:
+        # No token budget (#963): the requested limit, if any, stays as is.
+        requested = clamped.get("max_total_tokens")
+        clamped["max_total_tokens"] = (
+            remaining if requested is None else min(int(requested), remaining)
+        )
     deadline = deadline_at
     if campaign.deadline_at is not None:
         campaign_deadline = _aware(campaign.deadline_at)
@@ -646,6 +672,7 @@ __all__ = [
     "open_attempt_for_task",
     "record_event",
     "remaining_cycle_tokens",
+    "reopen_values",
     "transition",
     "utcnow",
 ]

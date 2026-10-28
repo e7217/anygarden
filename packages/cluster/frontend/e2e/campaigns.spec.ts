@@ -17,7 +17,7 @@ async function fulfillJson(route: Route, status: number, body: unknown) {
 type Body = Record<string, unknown> & {
   metric: Record<string, unknown>
   evaluator: Record<string, unknown>
-  budget: { max_total_tokens: number }
+  budget: { max_total_tokens?: number }
 }
 
 function campaignFrom(body: Body, status = 'active', revision = 1) {
@@ -27,7 +27,7 @@ function campaignFrom(body: Body, status = 'active', revision = 1) {
     metric: { min_delta: 0, ...body.metric }, evaluator: body.evaluator,
     trusted_eval: body.trusted_eval ?? 'none',
     budget: { retro_reserve_ratio: 0.05, ...body.budget },
-    usable_tokens: Math.floor(body.budget.max_total_tokens * 0.95),
+    usable_tokens: body.budget.max_total_tokens != null ? Math.floor(body.budget.max_total_tokens * 0.95) : null,
     deadline_at: body.deadline_at ?? null, status, stop_reason: null, status_detail: null,
     cycles_run: 0, tokens_used: 0, next_cycle_at: null, cycles_since_improvement: 0,
     consecutive_eval_failures: 0, retro_due: null, state_revision: revision,
@@ -117,7 +117,7 @@ test.beforeEach(async ({ page }) => {
   await stubWebSocket(page)
 })
 
-test('[CMP-01] start a campaign, see it in the rail and pause it', async ({ page }) => {
+test('[CMP-01] start a campaign without a token budget, see it in the rail and pause it', async ({ page }) => {
   const state = await stubApi(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/login')
@@ -144,6 +144,8 @@ test('[CMP-01] start a campaign, see it in the rail and pause it', async ({ page
   await form.getByLabel('Metric name', { exact: true }).fill('accuracy')
   await form.getByLabel('Target score', { exact: true }).fill('0.9')
   await form.getByLabel('Evaluator command', { exact: true }).fill('python eval.py')
+  // #963 — the token budget is optional, folded under "Advanced" and empty.
+  await expect(form.getByTestId('campaign-form-advanced')).not.toHaveAttribute('open', '')
   await form.getByRole('button', { name: 'Start goal' }).click()
   await expect(form).toBeHidden()
 
@@ -152,16 +154,17 @@ test('[CMP-01] start a campaign, see it in the rail and pause it', async ({ page
     mode: 'target',
     metric: { name: 'accuracy', direction: 'maximize', target: 0.9 },
     evaluator: { command: 'python eval.py', cwd: '.', timeout_sec: 600, pin_paths: [], score_key: 'score' },
-    budget: { max_total_tokens: 500000 },
+    budget: {},
     trusted_eval: 'none',
   })
+  expect(state.requests[0].budget).toEqual({})
   expect(state.requests[0]).not.toHaveProperty('deadline_at')
 
   const card = section.getByTestId('campaign-card-camp-1')
   await expect(card).toBeVisible()
   await expect(card.getByTestId('campaign-status')).toHaveText('Running')
   await expect(card.getByTestId('campaign-score')).toHaveText('accuracy · No score yet · target 0.9 or higher')
-  await expect(card.getByTestId('campaign-budget')).toHaveText('0% of budget used')
+  await expect(card.getByTestId('campaign-budget')).toHaveText('0 tokens used')
 
   await card.getByRole('button', { name: 'Pause' }).click()
   await expect(card.getByTestId('campaign-status')).toHaveText('Paused')

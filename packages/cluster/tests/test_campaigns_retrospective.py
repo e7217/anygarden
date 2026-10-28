@@ -227,7 +227,7 @@ async def test_a_retrospective_whose_agent_left_is_skipped(env):  # noqa: F811
 
 
 async def _open_retrospective(h: Harness, *, status: str = "deadline_reached",
-                              tokens_used: int = 95_000) -> dict:
+                              tokens_used: int = 95_000, budget: dict | None = None) -> dict:
     async with h.sessions() as db:
         room = await db.get(Room, h.ids["lead_room"])
         campaign = await create_campaign(
@@ -235,7 +235,7 @@ async def _open_retrospective(h: Harness, *, status: str = "deadline_reached",
             purpose="Win the contest.", mode="optimize",
             metric={"name": "acc", "direction": "maximize"},
             evaluator={"command": "python bench.py"},
-            budget={"max_total_tokens": 100_000},
+            budget={"max_total_tokens": 100_000} if budget is None else budget,
             deadline_at=datetime.now(UTC) + timedelta(hours=1),
         )
         campaign.status, campaign.retro_due, campaign.tokens_used = status, status, tokens_used
@@ -284,6 +284,18 @@ async def test_a_retrospective_runs_on_the_reserve_after_the_deadline(flow_harne
         execution = await db.get(ProjectExecution, retro["execution_id"])
         # Cycles had 95k of 100k; the retrospective gets the 5k reserve.
         assert execution.limits["max_total_tokens"] == 5_000
+        assert execution.deadline_at <= datetime.now(UTC) + timedelta(hours=2)
+
+
+@pytest.mark.req("CMP-01")
+async def test_without_a_token_budget_a_retrospective_has_only_a_time_limit(flow_harness):
+    # #963: a goal without a budget is never refused its retrospective.
+    h = flow_harness
+    retro = await _open_retrospective(h, status="deadline_reached", tokens_used=5_000_000,
+                                      budget={})
+    async with h.sessions() as db:
+        execution = await db.get(ProjectExecution, retro["execution_id"])
+        assert "max_total_tokens" not in execution.limits
         assert execution.deadline_at <= datetime.now(UTC) + timedelta(hours=2)
 
 

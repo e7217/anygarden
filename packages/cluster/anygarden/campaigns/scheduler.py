@@ -279,7 +279,8 @@ class CampaignScheduler:
             )
             return TickOutcome(campaign_id, "deadline_reached" if changed else "skipped")
 
-        if remaining_cycle_tokens(campaign) <= 0:
+        remaining = remaining_cycle_tokens(campaign)
+        if remaining is not None and remaining <= 0:
             changed = await apply_transition(
                 db, campaign, "budget_exhausted", actor=SYSTEM_ACTOR, clock=clock,
                 details={"tokens_used": campaign.tokens_used}, stop_reason="budget",

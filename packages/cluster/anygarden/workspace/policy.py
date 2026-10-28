@@ -144,7 +144,8 @@ ACTIONS: dict[str, ActionSpec] = {
         ActionSpec("create_goal", "ask", CreateGoalParams,
                    "Start a goal in a project room with a lead: cycles that improve a measured score. spec is "
                    "{title, purpose, mode: target|optimize, metric: {name, direction: maximize|minimize, "
-                   "target}, evaluator: {command}, budget: {max_total_tokens}, deadline_at}."),
+                   "target}, evaluator: {command}, deadline_at}; budget: {max_total_tokens} only when the "
+                   "person asked for a token limit."),
         ActionSpec("archive_room", "ask", ArchiveRoomParams, "Archive a room and its sub-rooms."),
         ActionSpec("hire_agent", "ask", HireAgentParams,
                    "Propose a new agent. Needs can_create_agents; an admin approves.", admin_only=True),

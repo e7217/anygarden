@@ -103,6 +103,20 @@ describe('CampaignSection', () => {
     await waitFor(() => expect(mocks.act).toHaveBeenCalledWith('camp-1', 'stop'))
   })
 
+  it('[CMP-01] shows only the tokens used for a goal without a token budget', () => {
+    mocks.campaigns = [campaignFixture({
+      budget: { retro_reserve_ratio: 0.05 }, usable_tokens: null, tokens_used: 1234567,
+      status: 'deadline_reached', deadline_at: '2026-10-01T00:00:00Z',
+    })]
+    renderSection()
+    const card = screen.getByTestId('campaign-card-camp-1')
+    expect(within(card).getByTestId('campaign-budget')).toHaveTextContent('1,234,567 tokens used')
+    expect(within(card).getByTestId('campaign-budget')).not.toHaveTextContent('%')
+    fireEvent.click(within(card).getByRole('button', { name: 'Extend' }))
+    expect(screen.getByLabelText('New deadline')).toBeInTheDocument()
+    expect(screen.queryByLabelText('New token budget')).toBeNull()
+  })
+
   it('[CMP-10] offers extend only once the deadline or budget ended it', () => {
     mocks.campaigns = [campaignFixture({ status: 'budget_exhausted' })]
     renderSection()
@@ -189,6 +203,13 @@ describe('validateExtend', () => {
     expect(validateExtend(base, initial, '200000', initial, '100000', now)).toEqual({ error: 'campaigns.extend.needDeadline' })
     expect(validateExtend(base, local('2026-10-26T11:00:00Z'), '100000', initial, '100000', now)).toEqual({ error: 'campaigns.error.invalidDeadline' })
     expect(validateExtend(base, local('2026-10-27T11:00:00Z'), '100000', initial, '100000', now))
+      .toEqual({ input: { deadline_at: '2026-10-27T11:00:00.000Z' } })
+  })
+
+  it('[CMP-01] extends a goal without a token budget by its deadline only', () => {
+    const plain = campaignFixture({ ...base, budget: { retro_reserve_ratio: 0.05 }, usable_tokens: null })
+    expect(validateExtend(plain, initial, '', initial, '', now)).toEqual({ error: 'campaigns.extend.needDeadline' })
+    expect(validateExtend(plain, local('2026-10-27T11:00:00Z'), '', initial, '', now))
       .toEqual({ input: { deadline_at: '2026-10-27T11:00:00.000Z' } })
   })
 

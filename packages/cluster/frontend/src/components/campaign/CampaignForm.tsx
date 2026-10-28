@@ -37,8 +37,9 @@ const legendClass = 'mb-2 text-body font-semibold text-[var(--color-foreground)]
 /**
  * Create-campaign dialog (#930 §3.9). The mode is chosen first because
  * it decides how the campaign ends and so which inputs show (see
- * ``campaignDraft.ts``); rarely changed evaluator settings and trusted
- * evaluation stay folded under "Advanced" with the server defaults.
+ * ``campaignDraft.ts``); rarely changed evaluator settings, trusted
+ * evaluation and the optional token budget (#963) stay folded under
+ * "Advanced" with the server defaults.
  */
 export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, initialTitle = '', initialDraft = null }: CampaignFormProps) {
   const { t } = useLocale()
@@ -56,7 +57,8 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, 
     setDraft(initialDraft ?? { ...emptyCampaignDraft(), title: initialTitle })
     setErrors({})
     setSubmitError(null)
-    setAdvancedOpen(false)
+    // An agent's draft with a token budget shows it rather than hiding it.
+    setAdvancedOpen(Boolean(initialDraft?.budgetTokens.trim()))
   }, [open, initialTitle, initialDraft])
 
   useEffect(() => {
@@ -179,9 +181,6 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, 
             <div className="grid gap-4 sm:grid-cols-2">
               {field('scoreKey', t('campaigns.form.scoreKey'),
                 <Input {...inputProps('scoreKey')} className="font-mono" value={draft.scoreKey} onChange={e => set('scoreKey', e.target.value)} spellCheck={false} />)}
-              {field('budgetTokens', t('campaigns.form.budget'),
-                <Input {...inputProps('budgetTokens', true)} inputMode="numeric" value={draft.budgetTokens} onChange={e => set('budgetTokens', e.target.value)} />,
-                t('campaigns.form.budgetHint'))}
             </div>
           </fieldset>
 
@@ -193,6 +192,9 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, 
           >
             <summary className="min-h-11 cursor-pointer content-center px-3 text-caption font-medium">{t('campaigns.form.advanced')}</summary>
             <div className="flex flex-col gap-4 border-t border-[var(--color-border)] p-3">
+              {field('budgetTokens', `${t('campaigns.form.budget')} ${t('campaigns.form.optional')}`,
+                <Input {...inputProps('budgetTokens', true)} inputMode="numeric" value={draft.budgetTokens} onChange={e => set('budgetTokens', e.target.value)} />,
+                t('campaigns.form.budgetHint'))}
               <div className="grid gap-4 sm:grid-cols-2">
                 {field('cwd', t('campaigns.form.cwd'),
                   <Input {...inputProps('cwd')} className="font-mono" value={draft.cwd} onChange={e => set('cwd', e.target.value)} spellCheck={false} />)}

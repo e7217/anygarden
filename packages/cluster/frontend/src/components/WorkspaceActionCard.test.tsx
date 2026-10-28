@@ -112,5 +112,20 @@ describe('WorkspaceActionCard drafts (#947, #948)', () => {
     expect(summary).toHaveTextContent('python3 bench.py')
     expect(summary).toHaveTextContent('p95_ms')
     expect(summary).toHaveTextContent('1000')
+    expect(summary).toHaveTextContent('200,000')
+  })
+
+  it('[CMP-01] shows no budget row for a goal draft without a token budget', async () => {
+    const spec = {
+      title: 'Faster search', purpose: 'p95 under a second', mode: 'target',
+      metric: { name: 'p95_ms', direction: 'minimize', target: 1000 },
+      evaluator: { command: 'python3 bench.py', score_key: 'p95_ms' }, budget: { retro_reserve_ratio: 0.05 },
+    }
+    api.getWorkspaceAction.mockResolvedValue(request({ action: 'create_goal', params: { room_id: 'room-1', spec } }))
+    render(<WorkspaceActionCard meta={{ request_id: 'req-1', action: 'create_goal' }} fallbackText="x" />)
+
+    const summary = await screen.findByTestId('draft-summary-goal')
+    expect(summary).not.toHaveTextContent('Token budget')
+    expect(summary).not.toHaveTextContent('NaN')
   })
 })

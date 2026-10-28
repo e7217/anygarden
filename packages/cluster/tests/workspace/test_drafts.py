@@ -286,3 +286,30 @@ def test_goal_guidance_names_the_required_valid_field() -> None:
     schema = goal.get("inputSchema") or goal.get("input_schema") or goal["parameters"]
     command = schema["properties"]["evaluator"]["properties"]["command"]["description"]
     assert '"valid"' in command
+
+
+@pytest.mark.req("CMP-01")
+def test_goal_drafts_leave_the_token_budget_out_by_default() -> None:
+    """#963 — the token budget is optional; a draft only sets one when the
+    person asked for a token limit."""
+    from anygarden.mcp.draft_tools import DRAFT_TOOL_SCHEMAS
+    from anygarden.workspace.drafts import _goal_brief
+
+    goal = next(t for t in DRAFT_TOOL_SCHEMAS if t["name"] == "propose_goal")
+    schema = goal.get("inputSchema") or goal.get("input_schema") or goal["parameters"]
+    assert "budget" not in schema["required"]
+    assert "asked for a token limit" in schema["properties"]["budget"]["description"]
+    assert "asked for a token limit" in _goal_brief("p1", "ideas")
+
+
+@pytest.mark.req("CMP-01")
+@pytest.mark.asyncio
+async def test_a_goal_draft_without_a_budget_is_proposed(ws) -> None:  # noqa: F811
+    await _set_lead(ws)
+    _, headers = await _draft_turn(ws, "goal")
+    spec = {k: v for k, v in GOAL.items() if k != "budget"}
+    ok = await _rpc(ws, "propose_goal", spec, headers=headers)
+    assert not ok["isError"], ok
+    async with ws["factory"]() as db:
+        row = await db.get(WorkspaceActionRequest, ok["structuredContent"]["request_id"])
+        assert "max_total_tokens" not in row.params["spec"].get("budget", {})

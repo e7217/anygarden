@@ -8,8 +8,9 @@
  * | target   | required | optional | the target is reached           |
  * | optimize | hidden   | required | the deadline passes (best kept) |
  *
- * Trusted evaluation, the evaluator's working folder, time limit and
- * pinned files sit under "Advanced" with the server's defaults.
+ * Trusted evaluation, the evaluator's working folder, time limit, pinned
+ * files and the optional token budget (#963: empty = no limit) sit under
+ * "Advanced" with the server's defaults.
  */
 import type { CampaignCreateInput, CampaignDirection, CampaignMode } from '@/lib/campaigns'
 import type { MessageKey } from '@/i18n/messages'
@@ -33,6 +34,7 @@ export interface CampaignDraft {
   deadline: string
   command: string
   scoreKey: string
+  /** Empty: no token budget (#963). */
   budgetTokens: string
   cwd: string
   timeoutSec: string
@@ -40,8 +42,6 @@ export interface CampaignDraft {
   pinPaths: string
   trustedExternal: boolean
 }
-
-export const DEFAULT_BUDGET_TOKENS = 500_000
 
 export function emptyCampaignDraft(): CampaignDraft {
   return {
@@ -54,7 +54,7 @@ export function emptyCampaignDraft(): CampaignDraft {
     deadline: '',
     command: '',
     scoreKey: 'score',
-    budgetTokens: String(DEFAULT_BUDGET_TOKENS),
+    budgetTokens: '',
     cwd: '.',
     timeoutSec: '600',
     pinPaths: '',
@@ -75,7 +75,7 @@ export const DRAFT_FIELD_ORDER: readonly DraftField[] = [
 ]
 
 /** Fields folded under "Advanced"; an error there must unfold it. */
-export const ADVANCED_FIELDS: readonly DraftField[] = ['cwd', 'timeoutSec']
+export const ADVANCED_FIELDS: readonly DraftField[] = ['budgetTokens', 'cwd', 'timeoutSec']
 
 export function firstInvalidField(errors: DraftErrors): DraftField | null {
   return DRAFT_FIELD_ORDER.find(field => errors[field]) ?? null
@@ -123,8 +123,11 @@ export function buildCampaignInput(
     }
   }
 
-  const budget = Number(draft.budgetTokens)
-  if (!Number.isInteger(budget) || budget <= 0) errors.budgetTokens = 'campaigns.form.positiveInteger'
+  let budget: number | undefined
+  if (draft.budgetTokens.trim()) {
+    budget = Number(draft.budgetTokens.trim())
+    if (!Number.isInteger(budget) || budget <= 0) errors.budgetTokens = 'campaigns.form.positiveInteger'
+  }
 
   const timeout = Number(draft.timeoutSec)
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > MAX_TIMEOUT_SEC) {
@@ -149,7 +152,7 @@ export function buildCampaignInput(
       pin_paths: draft.pinPaths.split('\n').map(p => p.trim()).filter(Boolean),
       score_key: draft.scoreKey.trim(),
     },
-    budget: { max_total_tokens: budget },
+    budget: budget !== undefined ? { max_total_tokens: budget } : {},
     ...(deadline ? { deadline_at: deadline } : {}),
     trusted_eval: draft.trustedExternal ? 'external' : 'none',
   }

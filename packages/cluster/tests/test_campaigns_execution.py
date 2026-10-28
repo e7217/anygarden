@@ -24,7 +24,11 @@ from .test_project_execution_flow import Harness
 flow_harness = _flow.harness
 
 
-async def _open_cycle(h: Harness, *, deadline: datetime | None, tokens_used: int = 20_000) -> dict:
+_BUDGET = {"max_total_tokens": 100_000, "retro_reserve_ratio": 0.05}
+
+
+async def _open_cycle(h: Harness, *, deadline: datetime | None, tokens_used: int = 20_000,
+                      budget: dict | None = None) -> dict:
     async with h.sessions() as db:
         room = await db.get(Room, h.ids["lead_room"])
         campaign = await create_campaign(
@@ -36,7 +40,7 @@ async def _open_cycle(h: Harness, *, deadline: datetime | None, tokens_used: int
             mode="target",
             metric={"name": "acc", "direction": "maximize", "target": 0.9},
             evaluator={"command": "python bench.py"},
-            budget={"max_total_tokens": 100_000, "retro_reserve_ratio": 0.05},
+            budget=_BUDGET if budget is None else budget,
             deadline_at=deadline,
         )
         campaign.tokens_used = tokens_used
@@ -119,6 +123,28 @@ async def test_cycle_cannot_begin_once_the_budget_is_spent(flow_harness):
         await db.commit()
     error = await flow_harness.tool_error(cycle["turn"], "begin_project_execution", objective="Improve")
     assert "budget is used up" in error
+
+
+@pytest.mark.req("CMP-01")
+async def test_without_a_token_budget_a_cycle_gets_no_token_limit(flow_harness):
+    # #963: no budget, no token cap on the cycle however much was used.
+    cycle = await _open_cycle(flow_harness, deadline=None, tokens_used=5_000_000,
+                              budget={})
+    result = await flow_harness.tool(cycle["turn"], "begin_project_execution", objective="Improve")
+    async with flow_harness.sessions() as db:
+        execution = await db.get(ProjectExecution, result["execution_id"])
+        assert "max_total_tokens" not in execution.limits
+
+
+async def test_without_a_token_budget_a_requested_token_limit_is_kept(flow_harness):
+    cycle = await _open_cycle(flow_harness, deadline=None, budget={})
+    result = await flow_harness.tool(
+        cycle["turn"], "begin_project_execution", objective="Improve",
+        limits={"max_total_tokens": 1234},
+    )
+    async with flow_harness.sessions() as db:
+        execution = await db.get(ProjectExecution, result["execution_id"])
+        assert execution.limits["max_total_tokens"] == 1234
 
 
 async def test_cycle_of_a_stopped_campaign_cannot_begin(flow_harness):

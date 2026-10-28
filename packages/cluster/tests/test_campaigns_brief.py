@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from anygarden.campaigns.brief import SECTION_TITLES, render_brief
+from anygarden.campaigns.brief import SECTION_TITLES, render_brief, render_retro_brief
 from anygarden.campaigns.policy import BRIEF_MAX_CHARS, PLATEAU_WINDOW
 from anygarden.db.models import Campaign, CampaignAttempt
 
@@ -74,6 +74,25 @@ def test_criteria_show_metric_target_and_remaining_budget():
     brief = render_brief(_campaign(), [], cycle_no=1, now=NOW)
     assert "accuracy" in brief and "maximize" in brief and "0.9" in brief
     assert "75%" in brief  # 750 of 1000 usable tokens left
+
+
+@pytest.mark.req("CMP-01")
+def test_criteria_show_no_budget_line_without_a_token_budget():
+    # #963: the token budget is optional.
+    brief = render_brief(_campaign(budget={"retro_reserve_ratio": 0.05}, tokens_used=900_000),
+                         [], cycle_no=1, now=NOW)
+    assert "Budget:" not in brief and "cycle tokens" not in brief
+    assert "- Time:" in brief
+
+
+def test_retrospective_stats_show_tokens_used_with_and_without_a_budget():
+    def stats(campaign):
+        return render_retro_brief(campaign, [], reason="plateau", cycle_no=2, now=NOW,
+                                  agents_md="", skills=[])
+
+    assert "- Tokens used: 250 of 1000 cycle tokens" in stats(_campaign())
+    plain = stats(_campaign(budget={"retro_reserve_ratio": 0.05}))
+    assert "- Tokens used: 250\n" in plain and "Budget:" not in plain
 
 
 def test_remaining_time_is_shown_with_a_deadline():
