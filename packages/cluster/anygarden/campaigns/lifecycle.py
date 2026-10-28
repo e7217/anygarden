@@ -731,7 +731,12 @@ async def stop_campaign(
     def plan(c: Campaign):
         if not _legal(c.status, "stop"):
             return None, {}, {}
-        return "stop", {"stop_reason": stop_reason}, {"reason": reason or stop_reason}
+        # #969 — ``stop_reason`` is a code; only a written ``reason`` is the
+        # status notice's detail, so the chat never ends in "… was stopped. user".
+        details = {"stop_reason": stop_reason}
+        if reason:
+            details["reason"] = reason
+        return "stop", {"stop_reason": stop_reason}, details
 
     await _write(db, campaign, plan, actor=actor, clock=clock)
     if campaign.status != "stopped":

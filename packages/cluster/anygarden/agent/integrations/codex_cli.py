@@ -212,9 +212,14 @@ def general_task_rule(metadata: dict[str, Any] | None) -> str:
     """Return the #806 task-claim rule for a turn outside project work.
 
     An operating lead delegates with project executions, and a project
-    execution task already has its own workflow, so neither gets the rule.
+    execution task already has its own workflow, so neither gets the rule;
+    nor does a peer question, which can never become a task.
     """
     if metadata is None or metadata.get("operating_lead"):
+        return ""
+    if metadata.get("kind") == "peer_query":
+        # #969 — a peer question is an agent's message in a thread; the
+        # server never claims it (CLAIM_SOURCE_INVALID).
         return ""
     assignment = metadata.get("task_assignment") or {}
     if assignment.get("execution_id"):

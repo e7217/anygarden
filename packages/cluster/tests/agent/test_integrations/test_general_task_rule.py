@@ -33,6 +33,15 @@ def test_rule_is_not_added_for_project_work(metadata):
     assert general_task_rule(metadata) == ""
 
 
+def test_rule_is_not_added_for_a_peer_question():
+    """#969 — a peer question is an agent's message in a thread, which the
+    server never turns into a task (CLAIM_SOURCE_INVALID), so the rule only
+    made peers call the tool, fail and report the failure in their answer."""
+    metadata = {"kind": "peer_query", "peer_ask": {"via": "tool"}, "turn_lease": "lease"}
+    assert general_task_rule(metadata) == ""
+    assert "claim_current_request" not in turn_workflow(metadata)
+
+
 def test_operating_lead_gets_only_the_operating_workflow():
     workflow = turn_workflow({"operating_lead": True})
     assert "[프로젝트 운영실 작업]" in workflow
