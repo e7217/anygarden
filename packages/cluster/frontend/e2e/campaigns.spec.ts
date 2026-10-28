@@ -194,3 +194,38 @@ test('[CMP-16] a goal that is blocked shows up in the room chat', async ({ page 
   await expect(card).toContainText('Blocked')
   await expect(card).toContainText('check the evaluator')
 })
+
+test('[CMP-17] [CMP-18] a goal waiting for confirmation asks its lead to report, with the files', async ({ page }) => {
+  await stubApi(page, [{
+    type: 'message', id: 'msg-goal-report', room_id: ROOM_ID, participant_id: null, seq: 1,
+    created_at: '2026-10-28T02:46:49Z',
+    content: '<@user:part-agent> Goal report request — Goal “Explore 20 ideas” reached its target. REQUIRED brief',
+    metadata: {
+      goal_status: {
+        campaign_id: 'camp-1', title: 'Explore 20 ideas', status: 'awaiting_confirmation',
+        previous: 'active', detail: null,
+      },
+      system_origin: 'goal_report',
+      goal_report: { campaign_id: 'camp-1', reason: 'confirmation', lead_participant_id: 'part-agent' },
+      mentions: [{ type: 'user', id: 'part-agent' }],
+      references: [{
+        type: 'artifact', id: 'art-1', room_id: ROOM_ID, name: 'ideas.md',
+        mime: 'text/markdown', size_bytes: 2048, sha256: 'a'.repeat(64),
+      }],
+    },
+  }])
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/login')
+  await page.locator('#login-email').fill(user.email)
+  await page.locator('#login-password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign In' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await page.goto(`/rooms/${ROOM_ID}`)
+
+  const card = page.getByTestId('goal-status-card')
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('Needs your confirmation')
+  await expect(card.getByTestId('goal-report-request')).toContainText('Asked Lead to report the result')
+  await expect(card.getByTestId('message-attachment-file')).toContainText('ideas.md')
+  await expect(page.getByText('REQUIRED brief')).toHaveCount(0)
+})

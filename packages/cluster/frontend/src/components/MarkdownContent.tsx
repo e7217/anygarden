@@ -8,6 +8,7 @@ import {
   resolveFileReferenceToken,
   type FileReferenceCandidate,
 } from '@/lib/fileReferences'
+import { resolveOutboxHref, type ArtifactReference } from '@/lib/messageAttachments'
 
 const plugins: PluggableList = [remarkGfm]
 
@@ -91,6 +92,10 @@ interface MarkdownContentProps {
   resolveUser?: (id: string) => string | undefined
   resolveRoom?: (id: string) => { name: string; id: string } | undefined
   fileReferenceCandidates?: FileReferenceCandidate[]
+  /** #964 — the message's attached files. A link to an agent's
+   * ``memory/outbox/<room>/<name>`` opens the attached file of that name;
+   * without one it is shown as text instead of a broken link. */
+  references?: readonly ArtifactReference[]
 }
 
 function renderInlineTokens(
@@ -189,6 +194,7 @@ function createComponents(
   resolveUser?: (id: string) => string | undefined,
   resolveRoom?: (id: string) => { name: string; id: string } | undefined,
   fileReferenceCandidates: readonly FileReferenceCandidate[] = [],
+  references: readonly ArtifactReference[] = [],
 ): Components {
   const inline = (children: ReactNode, keyPrefix: string) =>
     renderInlineChildren(
@@ -201,6 +207,24 @@ function createComponents(
 
   return {
     ...defaultComponents,
+    a: ({ children, href, node: _node, ...props }) => {
+      const outbox = resolveOutboxHref(href, references)
+      if (outbox === null) {
+        return (
+          <AuthenticatedArtifactLink href={href} {...props}>
+            {children}
+          </AuthenticatedArtifactLink>
+        )
+      }
+      if (outbox.href === null) {
+        return <span data-outbox-unresolved="" title={href}>{children}</span>
+      }
+      return (
+        <AuthenticatedArtifactLink {...props} href={outbox.href}>
+          {children}
+        </AuthenticatedArtifactLink>
+      )
+    },
     p: ({ children, ...props }) => <p {...props}>{inline(children, 'p')}</p>,
     li: ({ children, ...props }) => <li {...props}>{inline(children, 'li')}</li>,
     h1: ({ children, ...props }) => <h1 {...props}>{inline(children, 'h1')}</h1>,
@@ -221,12 +245,13 @@ export default memo(function MarkdownContent({
   resolveUser,
   resolveRoom,
   fileReferenceCandidates = [],
+  references = [],
 }: MarkdownContentProps) {
   return (
     <div className="markdown-prose">
       <ReactMarkdown
         remarkPlugins={plugins}
-        components={createComponents(resolveUser, resolveRoom, fileReferenceCandidates)}
+        components={createComponents(resolveUser, resolveRoom, fileReferenceCandidates, references)}
       >
         {content}
       </ReactMarkdown>

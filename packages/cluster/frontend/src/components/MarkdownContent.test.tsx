@@ -164,3 +164,41 @@ describe('MarkdownContent — file reference rendering', () => {
     expect(container.querySelectorAll('code')).toHaveLength(2)
   })
 })
+
+describe('MarkdownContent — outbox links (#964)', () => {
+  const refs = [
+    { id: 'art-1', roomId: 'room-1', name: 'ideas.md', mime: 'text/markdown', sizeBytes: 10 },
+    { id: 'art-2', roomId: 'room-2', name: 'ideas.md', mime: 'text/markdown', sizeBytes: 10 },
+  ]
+
+  it('opens the attached file a memory/outbox link names [CMP-18]', () => {
+    render(
+      <MarkdownContent
+        content="See [ideas](memory/outbox/room-2/ideas.md) and [top](./memory/outbox/room-1/ideas.md)."
+        references={refs}
+      />,
+    )
+    expect(screen.getByRole('link', { name: 'ideas' })).toHaveAttribute(
+      'href', '/api/v1/rooms/room-2/artifacts/art-2',
+    )
+    expect(screen.getByRole('link', { name: 'top' })).toHaveAttribute(
+      'href', '/api/v1/rooms/room-1/artifacts/art-1',
+    )
+  })
+
+  it('shows an outbox link without an attached file as text [CMP-18]', () => {
+    const { container } = render(
+      <MarkdownContent content="See [notes](memory/outbox/room-1/notes.md)." references={refs} />,
+    )
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.getByText('notes')).toBeInTheDocument()
+    expect(container.querySelector('[data-outbox-unresolved]')).not.toBeNull()
+  })
+
+  it('leaves other links alone', () => {
+    render(<MarkdownContent content="[site](https://example.com/memory/outbox/a.md)" references={refs} />)
+    expect(screen.getByRole('link', { name: 'site' })).toHaveAttribute(
+      'href', 'https://example.com/memory/outbox/a.md',
+    )
+  })
+})

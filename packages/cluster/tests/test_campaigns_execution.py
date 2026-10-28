@@ -241,3 +241,37 @@ async def test_machine_bus_eval_request_waits_only_for_the_ack():
     assert bus.resolve_campaign_eval_ack(
         "m-1", {"request_id": frame["request_id"], "job_id": "job-1", "accepted": True})
     assert (await request)["accepted"] is True
+
+
+@pytest.mark.req("CMP-18")
+async def test_cycle_completion_message_attaches_the_cycle_files(flow_harness):
+    """#964 — the files the lead produced in the goal room during the cycle
+    ride on the cycle's completion message as ``artifact`` references."""
+    import hashlib
+
+    from anygarden.db.models import Message, RoomArtifact
+
+    h = flow_harness
+    cycle = await _open_cycle(h, deadline=None, tokens_used=0)
+    turn = cycle["turn"]
+    execution = await h.tool(turn, "begin_project_execution", objective="List ideas")
+    execution_id = execution["execution_id"]
+    async with h.sessions() as db:
+        artifact = RoomArtifact(
+            room_id=h.ids["lead_room"], produced_by_agent_id=h.ids["lead"],
+            filename="ideas.md", storage_path="x/ideas.md",
+            sha256=hashlib.sha256(b"ideas").hexdigest(), size_bytes=5, mime="text/markdown",
+        )
+        db.add(artifact)
+        await db.commit()
+        artifact_id = artifact.id
+    await h.tool(turn, "record_campaign_attempt", outcome="attempted",
+                 hypothesis="More ideas", change_summary="Wrote ideas.md")
+    await h.tool(turn, "seal_project_plan", execution_id=execution_id, required_task_ids=[])
+    await h.tool(turn, "complete_project_execution", execution_id=execution_id,
+                 summary="Cycle 1 listed 30 ideas.")
+    async with h.sessions() as db:
+        row = await db.get(ProjectExecution, execution_id)
+        message = await db.get(Message, row.final_report_message_id)
+    refs = message.extra_metadata["references"]
+    assert [(r["type"], r["id"], r["name"]) for r in refs] == [("artifact", artifact_id, "ideas.md")]

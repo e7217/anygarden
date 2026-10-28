@@ -75,3 +75,36 @@ export function extractUndeliveredAttachments(
   }
   return out
 }
+
+const OUTBOX_PATH = /(?:^|\/)memory\/outbox\/(?:([^/]+)\/)?([^/?#]+)$/
+
+function decode(value: string): string {
+  try { return decodeURIComponent(value) } catch { return value }
+}
+
+/** #964 — an agent's reply may link a file by its outbox path
+ * (``memory/outbox/<room_id>/<name>``), which is no address in the app.
+ *
+ * Returns ``null`` for any other link. For an outbox link it returns the
+ * attached artifact's download address when the message carries a file of
+ * that name (preferring the same room), else ``{ href: null }`` so the
+ * link is shown as text. */
+export function resolveOutboxHref(
+  href: string | undefined,
+  references: readonly ArtifactReference[],
+): { href: string | null } | null {
+  if (!href) return null
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase()
+  if (scheme && scheme !== 'file') return null
+  const path = href.split(/[?#]/)[0]
+  const match = OUTBOX_PATH.exec(path)
+  if (!match) return null
+  const roomId = match[1] ? decode(match[1]) : null
+  const name = decode(match[2])
+  const named = references.filter(ref => ref.name === name)
+  const ref = named.find(r => roomId !== null && r.roomId === roomId) ?? named[0]
+  if (!ref) return { href: null }
+  return {
+    href: `/api/v1/rooms/${encodeURIComponent(ref.roomId)}/artifacts/${encodeURIComponent(ref.id)}`,
+  }
+}

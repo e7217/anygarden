@@ -33,6 +33,7 @@ import {
 import type { RoomSharedFile } from '@/lib/roomFiles'
 import { extractUndeliveredCalls } from '@/lib/undeliveredCalls'
 import MessageAttachments from '@/components/MessageAttachments'
+import { extractArtifactReferences } from '@/lib/messageAttachments'
 import ExecutionTrace from '@/components/ExecutionTrace'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -195,6 +196,7 @@ export default memo(function MessageBubble({
   )
   // #957 — a goal that needs a person or has ended.
   const goalStatusMeta = useMemo(() => parseGoalStatus(message.metadata), [message])
+  const artifactReferences = useMemo(() => extractArtifactReferences(message.metadata), [message])
   // #938 — an agent's workspace change waiting for approval, and the
   // server's report of how it ended.
   const workspaceRequestMeta = useMemo(() => parseWorkspaceActionRequest(message.metadata), [message])
@@ -447,7 +449,13 @@ export default memo(function MessageBubble({
   if (goalStatusMeta) {
     return (
       <div className="group flex flex-col items-start">
-        <GoalStatusCard meta={goalStatusMeta} />
+        <GoalStatusCard
+          meta={goalStatusMeta}
+          metadata={message.metadata}
+          leadName={goalStatusMeta.report?.leadParticipantId
+            ? participants[goalStatusMeta.report.leadParticipantId]?.display_name
+            : undefined}
+        />
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
@@ -573,6 +581,7 @@ export default memo(function MessageBubble({
             resolveUser={resolveUser}
             resolveRoom={resolveRoom}
             fileReferenceCandidates={fileReferenceCandidates}
+            references={artifactReferences}
           />
         </div>
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
@@ -607,6 +616,7 @@ export default memo(function MessageBubble({
                 resolveUser={resolveUser}
                 resolveRoom={resolveRoom}
                 fileReferenceCandidates={fileReferenceCandidates}
+                references={artifactReferences}
               />
               <MessageReferences metadata={message.metadata} align="end" />
               <MessageAttachments metadata={message.metadata} align="end" />
@@ -657,6 +667,7 @@ export default memo(function MessageBubble({
               resolveUser={resolveUser}
               resolveRoom={resolveRoom}
               fileReferenceCandidates={fileReferenceCandidates}
+              references={artifactReferences}
             />
             <MessageReferences metadata={message.metadata} />
             <MessageAttachments metadata={message.metadata} />
