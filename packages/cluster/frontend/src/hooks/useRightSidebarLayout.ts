@@ -21,8 +21,10 @@ const LG_BREAKPOINT_QUERY = '(min-width: 1024px)'
 
 // Desktop width of the right-hand slot (#760), shared by the context
 // rail and the thread panel so swapping one for the other never moves
-// the chat column. The default matches the pre-#760 ``lg:w-80``.
-export const RIGHT_RAIL_WIDTH = { default: 320, min: 280, max: 560, step: 16 } as const
+// the chat column. The default matches the pre-#760 ``lg:w-80``. #967 —
+// ``max`` only bounds the stored value; on screen the rail shrinks so
+// the chat column keeps ``--chat-min-w``.
+export const RIGHT_RAIL_WIDTH = { default: 320, min: 280, max: 960, step: 16 } as const
 
 export function clampRailWidth(px: number): number {
   return Math.round(Math.min(RIGHT_RAIL_WIDTH.max, Math.max(RIGHT_RAIL_WIDTH.min, px)))

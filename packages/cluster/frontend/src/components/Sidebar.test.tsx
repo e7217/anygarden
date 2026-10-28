@@ -137,12 +137,15 @@ vi.mock('@/hooks/useActiveTurns', async (importOriginal) => ({
 // test controls the returned collapsed/toggleCollapsed via the
 // ``mockReturnValue`` below.
 const toggleCollapsedSpy = vi.fn()
+const layoutWidth = { width: 256, setWidth: vi.fn(), resetWidth: vi.fn() }
 const mockSidebarLayout = vi.fn(() => ({
   collapsed: false,
   toggleCollapsed: toggleCollapsedSpy,
   setCollapsed: vi.fn(),
+  ...layoutWidth,
 }))
 vi.mock('@/hooks/useSidebarLayout', () => ({
+  SIDEBAR_WIDTH: { default: 256, min: 208, max: 480, step: 16 },
   useSidebarLayout: () => mockSidebarLayout(),
 }))
 
@@ -198,6 +201,7 @@ beforeEach(() => {
     collapsed: false,
     toggleCollapsed: toggleCollapsedSpy,
     setCollapsed: vi.fn(),
+    ...layoutWidth,
   })
 })
 
@@ -353,7 +357,7 @@ describe('Sidebar — projects/agents split (#928)', () => {
 
     fireEvent.click(agentsToggle)
     expect(agentsToggle).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('separator')).toBeNull()
+    expect(screen.queryByRole('separator', { name: 'Resize projects and agents' })).toBeNull()
     expect(screen.queryByTestId('sidebar-dm-dm1')).toBeNull()
     expect(screen.getByTestId('sidebar-projects-section')).toHaveClass('flex-1')
     expect(localStorage.getItem('anygarden_sidebar_agents_collapsed')).toBe('true')
@@ -362,18 +366,18 @@ describe('Sidebar — projects/agents split (#928)', () => {
     const projectsToggle = screen.getByTestId('sidebar-projects-toggle')
     fireEvent.click(projectsToggle)
     expect(projectsToggle).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('separator')).toBeNull()
+    expect(screen.queryByRole('separator', { name: 'Resize projects and agents' })).toBeNull()
     expect(screen.getByTestId('sidebar-agents-section')).toHaveClass('flex-1')
     expect(screen.getByTestId('sidebar-dm-dm1')).toBeInTheDocument()
 
     fireEvent.click(projectsToggle)
-    expect(screen.getByRole('separator')).toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Resize projects and agents' })).toBeInTheDocument()
   })
 
   it('keeps the projects section whole when there is no agents section', () => {
     renderSidebar()
     expect(screen.queryByTestId('sidebar-agents-section')).toBeNull()
-    expect(screen.queryByRole('separator')).toBeNull()
+    expect(screen.queryByRole('separator', { name: 'Resize projects and agents' })).toBeNull()
     expect(screen.getByTestId('sidebar-projects-section')).toHaveClass('flex-1')
   })
 })
@@ -667,11 +671,35 @@ describe('Sidebar — collapse/expand (#106, hook-backed #115)', () => {
   it('renders the expanded desktop layout when not collapsed', () => {
     renderSidebar()
     const aside = screen.getByTestId('sidebar-root')
-    // Default: static, w-64, not translated off at desktop.
-    expect(aside.className).toMatch(/md:w-64/)
-    expect(aside.className).toMatch(/md:static/)
+    // Default: in flow at the user's width (#967), not translated off.
+    expect(aside.className).toMatch(/md:w-\[var\(--sidebar-w\)\]/)
+    expect(aside.style.getPropertyValue('--sidebar-w')).toBe('256px')
+    expect(aside.className).toMatch(/md:relative/)
     expect(aside.className).not.toMatch(/md:w-0/)
     expect(aside).not.toHaveAttribute('aria-hidden')
+  })
+
+  it('[ROOM-13] offers a width handle on the expanded desktop sidebar only', () => {
+    renderSidebar()
+    const handle = screen.getByRole('separator', { name: 'Resize sidebar' })
+    expect(handle).toHaveAttribute('aria-controls', 'workspace-sidebar')
+    expect(handle).toHaveAttribute('aria-valuenow', '256')
+    cleanup()
+
+    mockSidebarLayout.mockReturnValue({
+      collapsed: true,
+      toggleCollapsed: toggleCollapsedSpy,
+      setCollapsed: vi.fn(),
+      ...layoutWidth,
+    })
+    renderSidebar()
+    expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).toBeNull()
+  })
+
+  it('has no width handle in the mobile drawer', () => {
+    vi.stubGlobal('innerWidth', 375)
+    renderSidebar()
+    expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).toBeNull()
   })
 
   it('applies the collapsed desktop classes when hook reports collapsed=true', () => {
@@ -679,6 +707,7 @@ describe('Sidebar — collapse/expand (#106, hook-backed #115)', () => {
       collapsed: true,
       toggleCollapsed: toggleCollapsedSpy,
       setCollapsed: vi.fn(),
+      ...layoutWidth,
     })
     renderSidebar()
     const aside = screen.getByTestId('sidebar-root')
@@ -698,6 +727,7 @@ describe('Sidebar — collapse/expand (#106, hook-backed #115)', () => {
       collapsed: true,
       toggleCollapsed: toggleCollapsedSpy,
       setCollapsed: vi.fn(),
+      ...layoutWidth,
     })
     const onClose = vi.fn()
     renderSidebar('/', onClose)

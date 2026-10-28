@@ -41,7 +41,7 @@ export default function PageShell({ title, children, scroll = true }: PageShellP
     <div className="flex h-dvh overflow-hidden bg-[var(--color-background)]">
       <Sidebar selectedRoom={null} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <SidebarExpandButton />
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background)]">
+      <main className="flex min-w-0 flex-1 flex-col md:min-w-[var(--chat-min-w)] overflow-hidden bg-[var(--color-background)]">
         {/* Mobile top bar — hidden on desktop where the rail is pinned. */}
         <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 md:hidden">
           <Button

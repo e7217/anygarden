@@ -254,3 +254,101 @@ test.describe('right slot geometry', () => {
     await expect(handle(page)).toBeHidden()
   })
 })
+
+/**
+ * Sidebar width and the chat column floor (#967). The sidebar resizes
+ * like the right slot; neither has a fixed cap any more, and instead
+ * both give way so the chat column keeps ``--chat-min-w`` (28rem).
+ */
+test.describe('panel widths', () => {
+  const CHAT_MIN = 448
+  const sidebar = (page: Page) => page.getByTestId('sidebar-root')
+  const sidebarHandle = (page: Page) =>
+    page.getByRole('separator', { name: 'Resize sidebar' })
+  const chat = (page: Page) => page.locator('main').first()
+
+  async function dragBy(locator: Locator, page: Page, dx: number) {
+    const box = await locator.boundingBox()
+    expect(box).not.toBeNull()
+    const x = box!.x + box!.width / 2
+    const y = box!.y + box!.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + dx / 2, y, { steps: 3 })
+    await page.mouse.move(x + dx, y, { steps: 3 })
+    await page.mouse.up()
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('anygarden_locale', 'en')
+      if (localStorage.getItem('anygarden_right_sidebar_collapsed') === null) {
+        localStorage.setItem('anygarden_right_sidebar_collapsed', 'false')
+      }
+    })
+    await stubWebSocket(page)
+    await stubApi(page)
+  })
+
+  test('the default layout at 1024px is unchanged', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 800 })
+    await openRoom(page)
+    expect(await width(sidebar(page))).toBe(256)
+    expect(await width(rail(page))).toBe(320)
+  })
+
+  test('[ROOM-13] dragging the sidebar edge resizes it and the width survives a reload', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 800 })
+    await openRoom(page)
+    expect(await width(sidebar(page))).toBe(256)
+    await dragBy(sidebarHandle(page), page, 120)
+    expect(await width(sidebar(page))).toBe(376)
+
+    await page.reload()
+    await expect(page.getByText('root message')).toBeVisible()
+    expect(await width(sidebar(page))).toBe(376)
+    await sidebarHandle(page).dblclick()
+    await expect.poll(() => width(sidebar(page))).toBe(256)
+  })
+
+  test('[ROOM-13] a wide screen lets the rail grow past the old 560px cap', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 900 })
+    await openRoom(page)
+    await dragBy(handle(page), page, -400)
+    expect(await width(rail(page))).toBe(720)
+  })
+
+  test('[ROOM-13] wide saved widths give way to the chat column floor', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.addInitScript(() => {
+      localStorage.setItem('anygarden_sidebar_width', '480')
+      localStorage.setItem('anygarden_right_sidebar_width', '960')
+    })
+    await openRoom(page)
+    expect(await width(chat(page))).toBeGreaterThanOrEqual(CHAT_MIN)
+    const overflow = await page.evaluate(() =>
+      document.documentElement.scrollWidth - document.documentElement.clientWidth)
+    expect(overflow).toBe(0)
+    const headerBox = await roomHeader(page).boundingBox()
+    expect(headerBox!.height).toBeLessThanOrEqual(60)
+
+    // Narrowing the squeezed rail answers at once and stores what is on
+    // screen, not the 960 that never fit.
+    const before = await width(rail(page))
+    await dragBy(handle(page), page, 40)
+    const after = await width(rail(page))
+    expect(after).toBeLessThan(before)
+    expect(Number(await page.evaluate(() => localStorage.getItem('anygarden_right_sidebar_width'))))
+      .toBeLessThan(960)
+  })
+
+  test('the mobile drawer keeps its width and has no handle', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 })
+    await page.addInitScript(() => localStorage.setItem('anygarden_sidebar_width', '480'))
+    await openRoom(page)
+    await page.getByRole('button', { name: 'Open sidebar' }).first().click()
+    await expect(sidebar(page)).not.toHaveClass(/-translate-x-full/)
+    expect(await width(sidebar(page))).toBe(256)
+    await expect(sidebarHandle(page)).toHaveCount(0)
+  })
+})
