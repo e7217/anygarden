@@ -25,6 +25,7 @@
     "request_project_approval",
     "request_project_input",
     "resume_project_task",
+    "save_project_artifact",
     "seal_project_plan"
   ]
 }

@@ -9,6 +9,7 @@ API. Scenario IDs refer to docs/e2e/2026-09-30-project-room-autonomy-qa.md.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -780,6 +781,120 @@ async def test_oversized_artifact_content_is_refused_with_its_limit(harness):
         filename="part-1.json", content="x" * 1000,
     )
     assert small["artifacts"]
+
+
+class _FakeAgentFiles:
+    """#975 — stands in for the machine transfer behind the artifact tools."""
+
+    def __init__(self, files: dict[str, bytes] | None = None, error: str | None = None):
+        self.files = files or {}
+        self.error = error
+        self.sent: list[tuple[str, str, bytes]] = []
+
+    async def fetch(self, app, *, agent_id, path, max_bytes):
+        from anygarden.workspaces.agent_files import AgentFileError
+
+        if self.error:
+            raise AgentFileError(self.error)
+        if path not in self.files:
+            raise AgentFileError("not_found")
+        return self.files[path]
+
+    async def send(self, app, *, agent_id, path, data):
+        from anygarden.workspaces.agent_files import AgentFileError
+
+        if self.error:
+            raise AgentFileError(self.error)
+        self.sent.append((agent_id, path, data))
+
+
+def _use_agent_files(monkeypatch, fake: _FakeAgentFiles) -> None:
+    from anygarden.workspaces import agent_files
+
+    monkeypatch.setattr(agent_files, "fetch_agent_file", fake.fetch)
+    monkeypatch.setattr(agent_files, "send_agent_file", fake.send)
+
+
+@pytest.mark.req("EXE-24")
+async def test_large_artifact_published_by_path_and_saved_by_id(harness, monkeypatch):
+    """#975 — a file over the content limit travels by path, not tool argument."""
+    big = ('{"row": "' + "가" * 400_000 + '"}\n').encode()  # ~1.2 MB of UTF-8
+    fake = _FakeAgentFiles({"out/assessments.json": big})
+    _use_agent_files(monkeypatch, fake)
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+
+    published = await harness.tool(
+        worker_turn, "publish_project_artifact", task_id=task_id,
+        path="out/assessments.json", mime="application/json",
+    )
+    [reference, *_] = published["artifacts"]
+    assert reference["filename"] == "assessments.json"
+    assert reference["sha256"] == hashlib.sha256(big).hexdigest()
+
+    read = await harness.tool(
+        worker_turn, "read_project_artifact", task_id=task_id,
+        artifact_id=reference["artifact_id"], offset=400_000, limit=100,
+    )
+    assert read["total_characters"] == len(big.decode())
+    assert read["size_bytes"] == len(big)
+
+    saved = await harness.tool(
+        worker_turn, "save_project_artifact", task_id=task_id,
+        artifact_id=reference["artifact_id"], path="copies/assessments.json",
+    )
+    assert saved["path"] == "copies/assessments.json"
+    assert saved["sha256"] == reference["sha256"]
+    assert fake.sent == [(harness.ids["worker"], "copies/assessments.json", big)]
+
+
+@pytest.mark.req("EXE-24")
+@pytest.mark.parametrize(
+    ("arguments", "fake", "code"),
+    [
+        ({"path": "a.md", "content": "x"}, _FakeAgentFiles({"a.md": b"x"}), "ARTIFACT_SOURCE_INVALID"),
+        ({}, _FakeAgentFiles(), "ARTIFACT_SOURCE_INVALID"),
+        ({"path": "missing.md"}, _FakeAgentFiles(), "ARTIFACT_PATH_INVALID"),
+        ({"path": "a.md"}, _FakeAgentFiles(error="offline"), "ARTIFACT_SOURCE_UNAVAILABLE"),
+        ({"path": "a.md"}, _FakeAgentFiles(error="too_large"), "ARTIFACT_TOO_LARGE"),
+        ({"path": "a.bin"}, _FakeAgentFiles({"a.bin": b"\xff\xfe"}), "ARTIFACT_NOT_TEXT"),
+    ],
+)
+async def test_publish_by_path_refusals_are_coded(harness, monkeypatch, arguments, fake, code):
+    _use_agent_files(monkeypatch, fake)
+    flow = await harness.begin_and_delegate()
+    worker_turn = await harness.deliver("worker")
+    result = await harness.tool_error_or_ok(
+        worker_turn, "publish_project_artifact",
+        task_id=flow["delegated"]["task_id"], filename="a.md", **arguments,
+    )
+    assert result["isError"], result["content"]
+    assert result["structuredContent"]["code"] == code
+
+
+@pytest.mark.req("EXE-24")
+async def test_save_refuses_unreadable_and_existing_targets(harness, monkeypatch):
+    fake = _FakeAgentFiles({"a.md": b"# A"})
+    _use_agent_files(monkeypatch, fake)
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+    denied = await harness.tool_error_or_ok(
+        worker_turn, "save_project_artifact", task_id=task_id,
+        artifact_id="not-an-artifact", path="a.md",
+    )
+    assert denied["structuredContent"]["code"] == "ARTIFACT_READ_NOT_AUTHORIZED"
+    published = await harness.tool(
+        worker_turn, "publish_project_artifact", task_id=task_id, path="a.md",
+    )
+    fake.error = "conflict"
+    exists = await harness.tool_error_or_ok(
+        worker_turn, "save_project_artifact", task_id=task_id,
+        artifact_id=published["artifacts"][0]["artifact_id"], path="a.md",
+    )
+    assert exists["structuredContent"]["code"] == "ARTIFACT_PATH_EXISTS"
+    assert fake.sent == []
 
 
 @pytest.mark.req("INB-03")

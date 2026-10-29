@@ -28,7 +28,7 @@ from anygarden.machine.managed_workspace import (
 )
 from anygarden.machine.workspace_transfer import CAPABILITY as TRANSFER_CAPABILITY
 from anygarden.scheduler.machine_bus import MachineRequestError
-from anygarden.workspaces import transfers
+from anygarden.workspaces import agent_files, transfers
 
 router = APIRouter()
 
@@ -346,17 +346,11 @@ async def rename_managed_entry(
 
 # ── #914 large transfers over HTTP ─────────────────────────────────
 
-# Seconds allowed per MiB on top of a fixed allowance; capped.
-_TRANSFER_BASE_SECONDS = 30.0
-_TRANSFER_SECONDS_PER_MIB = 10.0
-_TRANSFER_MAX_SECONDS = 600.0
+_PLACEMENT_CODES = {"invalid_path": 422, "no_agent": 404}
 
 
 def _transfer_timeout(size: int) -> float:
-    return min(
-        _TRANSFER_MAX_SECONDS,
-        _TRANSFER_BASE_SECONDS + _TRANSFER_SECONDS_PER_MIB * size / (1024 * 1024),
-    )
+    return agent_files.transfer_timeout(size)
 
 
 async def _transfer_placement(
@@ -364,22 +358,12 @@ async def _transfer_placement(
 ) -> tuple[str, int]:
     """Return ``(machine_id, generation)`` for a transfer, or raise."""
     try:
-        parts = path_parts(path)
-    except ValueError as exc:
-        raise HTTPException(422, "Invalid workspace path") from exc
-    if not parts and not allow_root:
-        raise HTTPException(422, "Invalid workspace path")
-    agent = await db.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(404, "Agent not found")
-    if agent.placed_on_machine_id is None:
-        raise HTTPException(409, "The agent has no execution machine")
-    machine = await db.get(Machine, agent.placed_on_machine_id)
-    if machine is None or not request.app.state.machine_bus.is_connected(machine.id):
-        raise HTTPException(409, "The agent's machine is offline")
-    if TRANSFER_CAPABILITY not in (machine.control_capabilities or []):
-        raise HTTPException(409, "Update this machine to transfer large files")
-    return machine.id, int(agent.generation or 0)
+        machine, generation = await agent_files.placement(
+            db, request.app.state.machine_bus, agent_id, path, allow_root=allow_root,
+        )
+    except agent_files.AgentFileError as exc:
+        raise HTTPException(_PLACEMENT_CODES.get(exc.status, 409), exc.detail) from None
+    return machine.id, generation
 
 
 async def _run_transfer(
@@ -387,20 +371,11 @@ async def _run_transfer(
     frame: dict, timeout: float,
 ) -> dict:
     try:
-        return await request.app.state.machine_bus.request_transfer(
-            machine_id,
-            {
-                "type": "workspace_transfer_request",
-                "agent_id": agent_id,
-                "ticket_id": ticket.id,
-                "ticket_token": ticket.token,
-                **frame,
-            },
-            timeout=timeout,
+        return await agent_files.run_transfer(
+            request.app.state.machine_bus, machine_id, agent_id, ticket, frame, timeout,
         )
-    except MachineRequestError as exc:
-        raise HTTPException(504 if exc.reason == "timeout" else 409,
-                            f"The machine did not finish the transfer ({exc.reason})") from None
+    except agent_files.AgentFileError as exc:
+        raise HTTPException(504 if exc.status == "timeout" else 409, exc.detail) from None
 
 
 def _raise_for(status: str) -> None:

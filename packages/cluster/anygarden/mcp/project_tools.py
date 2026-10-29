@@ -8,7 +8,11 @@ from pathlib import Path
 from fastapi import HTTPException, Request
 from sqlalchemy import select
 
-from anygarden.project_executions.artifacts import MAX_CONTENT_BYTES, MAX_CONTENT_CHARS
+from anygarden.project_executions.artifacts import (
+    MAX_ARTIFACT_BYTES,
+    MAX_CONTENT_BYTES,
+    MAX_CONTENT_CHARS,
+)
 from anygarden.project_executions.policy import SUPPORTED_ACTIONS, SUPPORTED_LIMITS
 
 
@@ -178,16 +182,33 @@ PROJECT_TOOL_SCHEMAS = [
         "If choosing specific files, use their artifact_id; canonical metadata is "
         "supplied by the server and any metadata you declare must match exactly. "
         "Use the returned URLs for document links instead of reconstructing IDs. "
-        "Publish the full document here; local file paths are not server downloads. "
-        f"Content is limited to {MAX_CONTENT_CHARS:,} characters and "
-        f"{MAX_CONTENT_BYTES // 1024} KiB of UTF-8; split a larger document into "
-        "several artifacts. "
-        "Review published bodies with read_project_artifact. Never invent file links.",
+        "Give exactly one source. content: the document text, up to "
+        f"{MAX_CONTENT_CHARS:,} characters and {MAX_CONTENT_BYTES // 1024} KiB of UTF-8. "
+        "path: a UTF-8 text file you wrote, relative to your working directory, up to "
+        f"{MAX_ARTIFACT_BYTES // (1024 * 1024)} MiB; the server copies it from your "
+        "machine, so never read a large file into content. filename defaults to the "
+        "path's last name. Pass the returned artifact_id to other agents instead of "
+        "the body. Review published bodies with read_project_artifact. Never invent "
+        "file links.",
         {
             "task_id": _string, "filename": _string,
             "content": {**_string, "maxLength": MAX_CONTENT_CHARS},
+            "path": {**_string, "maxLength": 1024},
             "mime": {"type": "string", "default": "text/markdown"},
-        }, ["task_id", "filename", "content"],
+        }, ["task_id"],
+    ),
+    _tool(
+        "save_project_artifact",
+        "Save a published text artifact as a new file in your working directory, "
+        "for files too large to read in chunks or that you need to process with "
+        "tools. Accepts the same artifact IDs as read_project_artifact and applies "
+        "the same access rules and SHA-256 check. path is relative to your working "
+        "directory; its folder must already exist and an existing file is never "
+        f"replaced. Up to {MAX_ARTIFACT_BYTES // (1024 * 1024)} MiB.",
+        {
+            "task_id": _string, "artifact_id": _string,
+            "path": {**_string, "maxLength": 1024},
+        }, ["task_id", "artifact_id", "path"],
     ),
     _tool(
         "read_project_artifact",
@@ -444,12 +465,70 @@ def action_target_payload(config) -> list[dict]:
             for alias, target in config.project_action_targets.items()]
 
 
+# #975 — machine transfer outcomes as tool error codes.
+_AGENT_FILE_CODES = {
+    "too_large": "ARTIFACT_TOO_LARGE",
+    "invalid_path": "ARTIFACT_PATH_INVALID",
+    "not_found": "ARTIFACT_PATH_INVALID",
+    "blocked": "ARTIFACT_PATH_INVALID",
+    "conflict": "ARTIFACT_PATH_EXISTS",
+}
+
+
+def _agent_file_conflict(exc):
+    from anygarden.project_executions.service import ExecutionConflict
+
+    code = _AGENT_FILE_CODES.get(exc.status, "ARTIFACT_SOURCE_UNAVAILABLE")
+    hint = {
+        "ARTIFACT_PATH_INVALID": "Use a path to a file or existing folder relative to your working directory.",
+        "ARTIFACT_PATH_EXISTS": "Choose a path that does not exist yet.",
+        "ARTIFACT_SOURCE_UNAVAILABLE": "Your machine cannot transfer files now; publish smaller parts with content.",
+        "ARTIFACT_TOO_LARGE": f"The limit is {MAX_ARTIFACT_BYTES:,} bytes; split the file.",
+    }[code]
+    return ExecutionConflict(code, f"{exc.detail}. {hint}")
+
+
+async def _with_published_file(request: Request, *, agent_id: str, proof, arguments: dict) -> dict:
+    """Replace ``path`` with the file's bytes, fetched from the agent's machine.
+
+    Runs before the tool transaction: a transfer can take seconds and the
+    ticket is committed in its own session.
+    """
+    from anygarden.project_executions.service import ExecutionConflict, authorize_turn
+    from anygarden.workspaces import agent_files
+
+    if "path" not in arguments:
+        return arguments
+    arguments = dict(arguments)
+    path = arguments.pop("path")
+    if "content" in arguments:
+        raise ExecutionConflict("ARTIFACT_SOURCE_INVALID", "Give either content or path, not both")
+    if not isinstance(path, str) or not path:
+        raise ExecutionConflict("ARTIFACT_PATH_INVALID", "path must be a relative file path")
+    # Prove the turn before asking any machine for a file.
+    async with request.app.state.session_factory() as db:
+        await authorize_turn(db, agent_id=agent_id, proof=proof)
+    limit = min(MAX_ARTIFACT_BYTES, request.app.state.config.workspace_transfer_max_bytes)
+    try:
+        data = await agent_files.fetch_agent_file(
+            request.app, agent_id=agent_id, path=path, max_bytes=limit,
+        )
+    except agent_files.AgentFileError as exc:
+        raise _agent_file_conflict(exc) from None
+    arguments.setdefault("filename", path.rsplit("/", 1)[-1])
+    return {**arguments, "data": data}
+
+
 async def call_project_tool(request: Request, *, agent_id: str, name: str, arguments: dict) -> dict:
     from anygarden.project_executions import service
 
     db = None
     try:
         proof = turn_proof(request)
+        if name == "publish_project_artifact":
+            arguments = await _with_published_file(
+                request, agent_id=agent_id, proof=proof, arguments=arguments,
+            )
         if name == "execute_approved_project_action":
             from anygarden.project_executions.action_executor import (
                 execute_approved_action,
@@ -558,6 +637,27 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
                     artifact_files_dir=Path(request.app.state.config.artifact_files_dir),
                     **arguments,
                 )
+            elif name == "save_project_artifact":
+                from anygarden.project_executions.artifact_reader import (
+                    load_authorized_artifact,
+                )
+                from anygarden.workspaces import agent_files
+
+                text, metadata = await load_authorized_artifact(
+                    db, agent_id=agent_id, proof=proof, task_id=arguments["task_id"],
+                    artifact_id=arguments["artifact_id"],
+                    artifact_files_dir=Path(request.app.state.config.artifact_files_dir),
+                )
+                # Release the read transaction while the machine writes.
+                await db.rollback()
+                try:
+                    await agent_files.send_agent_file(
+                        request.app, agent_id=agent_id, path=arguments["path"],
+                        data=text.encode("utf-8"),
+                    )
+                except agent_files.AgentFileError as exc:
+                    raise _agent_file_conflict(exc) from None
+                payload = {**metadata, "path": arguments["path"]}
             elif name == "read_project_artifact":
                 from anygarden.project_executions.artifact_reader import (
                     read_project_artifact,
@@ -592,7 +692,7 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
                 task_ids.insert(0, payload["root_task_id"])
             for task_id in task_ids:
                 task = await db.get(Task, task_id) if task_id else None
-                if task is not None and name != "read_project_artifact":
+                if task is not None and name not in {"read_project_artifact", "save_project_artifact"}:
                     room = await db.get(Room, task.room_id)
                     await fanout_task_event(
                         db, manager=getattr(request.app.state, "connection_manager", None),
@@ -612,7 +712,7 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
                 denials=dict(db.info.pop("project_execution_usage_denials", {})))
         if name in {
             "read_project_artifact", "resume_project_task", "delegate_to_subroom",
-            "publish_project_artifact",
+            "publish_project_artifact", "save_project_artifact",
         } and isinstance(
                 exc, service.ExecutionConflict):
             return {"content": [{"type": "text", "text": f"{exc.code}: {exc.detail}"}],

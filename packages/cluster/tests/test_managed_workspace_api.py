@@ -628,3 +628,61 @@ async def test_large_transfer_limits(workspace_env, tmp_path):
     assert too_big.status_code == 413
     forbidden = await env["client"].get(base + "/archive", headers={"Authorization": f"Bearer {env['regular_token']}"})
     assert forbidden.status_code == 403
+
+
+# Machine frames and API calls run concurrent sessions; use a file database
+# rather than the shared in-memory connection (#726/#758).
+@pytest.mark.req("EXE-24")
+@pytest.mark.parametrize("workspace_env", ["file"], indirect=True)
+async def test_agent_files_fetch_and_send_through_the_daemon(workspace_env, tmp_path):
+    """#975 — the server reads and writes an agent's work files for its tools."""
+    from anygarden.machine.workspace_transfer import CAPABILITY as TRANSFER_CAPABILITY
+    from anygarden.workspaces.agent_files import (
+        AgentFileError,
+        fetch_agent_file,
+        send_agent_file,
+    )
+
+    env = workspace_env
+    app = env["app"]
+    app.state.config.transfer_spool_dir = tmp_path / "spool"
+    machine_id, root = await seed(env, tmp_path)
+    async with env["factory"]() as db:
+        machine = await db.get(Machine, machine_id)
+        machine.control_capabilities = [CAPABILITY, EDIT_CAPABILITY, TRANSFER_CAPABILITY]
+        await db.commit()
+    big = bytes(range(256)) * (2 * 4096)  # 2 MiB
+    (root / "folder" / "big.json").write_bytes(big)
+    bus = env["bus"]
+    await bus.unregister(machine_id)
+    owner = SimpleNamespace(identity={"machine_id": machine_id}, data_dir=tmp_path)
+    backend = LocalExecutionBackend(app, owner)
+    backend.daemon._transfer_client_factory = _AppTransport(env["client"], asyncio.get_running_loop()).factory
+    await bus.register_local(machine_id, backend)
+    receiver = asyncio.create_task(backend._consume())
+    try:
+        got = await fetch_agent_file(
+            app, agent_id="workspace-agent", path="folder/big.json", max_bytes=10 * 1024 * 1024,
+        )
+        assert got == big
+        with pytest.raises(AgentFileError) as too_large:
+            await fetch_agent_file(app, agent_id="workspace-agent", path="folder/big.json", max_bytes=1024)
+        assert too_large.value.status == "too_large"
+        for path, status in (("folder/none", "not_found"), (".env", "invalid_path")):
+            with pytest.raises(AgentFileError) as refused:
+                await fetch_agent_file(app, agent_id="workspace-agent", path=path, max_bytes=1024)
+            assert refused.value.status == status, path
+
+        await send_agent_file(app, agent_id="workspace-agent", path="folder/copy.json", data=big)
+        assert (root / "folder" / "copy.json").read_bytes() == big
+        with pytest.raises(AgentFileError) as exists:
+            await send_agent_file(app, agent_id="workspace-agent", path="folder/copy.json", data=b"x")
+        assert exists.value.status == "conflict"
+        with pytest.raises(AgentFileError) as no_folder:
+            await send_agent_file(app, agent_id="workspace-agent", path="missing/copy.json", data=b"x")
+        assert no_folder.value.status == "not_found"
+        assert list((tmp_path / "spool").iterdir()) == []
+    finally:
+        await backend.queue.put(None)
+        await receiver
+        await bus.unregister_local(machine_id, backend)
