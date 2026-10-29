@@ -16,6 +16,7 @@ from dataclasses import replace
 
 import psutil
 import pytest
+import structlog
 
 from anygarden.agent.runtime.execution import (
     Invocation,
@@ -156,6 +157,10 @@ if prompt == "mixed-failure":
 if prompt == "malformed":
     print("not json", flush=True)
     sys.exit(0)
+if prompt == "big-tool-call":
+    # #974 — a tool call with a large argument is one oversized event line.
+    event({"type": "tool_execution_start", "toolCallId": "t", "toolName": "write", "args": {"content": "DO-NOT-PUBLISH" * 400000}})
+    event({"type": "tool_execution_end", "toolCallId": "t", "toolName": "write", "result": "ok", "isError": False})
 if prompt in {"multi-step", "ends-on-tool"}:
     # Event shapes from pi-agent-core 0.85.1 (types.d.ts), raw values replaced.
     def assistant(content, stop):
@@ -227,6 +232,44 @@ async def test_success_extracts_text_usage_and_events(tmp_path, invocation, exec
         ]
     finally:
         await m.close()
+
+
+async def test_oversized_event_line_is_dropped_and_turn_succeeds(
+    tmp_path, invocation, executable
+):
+    """#974 — a >4 MiB event line is skipped instead of ending the turn."""
+    with structlog.testing.capture_logs() as logs:
+        m = manager(tmp_path, executable)
+        try:
+            await m.start(replace(invocation, prompt="big-tool-call"))
+            final, events = await done(m)
+        finally:
+            await m.close()
+    assert final.outcome == "succeeded" and final.text == "answer"
+    dropped = [e for e in logs if e["event"] == "engine_output.line_dropped"]
+    assert [e["event_type"] for e in dropped] == ["tool_execution_start"]
+    assert "DO-NOT-PUBLISH" not in str((final, events, logs))
+
+
+async def test_collect_failure_is_logged_with_its_class(
+    tmp_path, invocation, executable, monkeypatch
+):
+    """#974 — invalid_runtime_output names the exception in the agent log."""
+    async def broken(self, *args, **kwargs):
+        raise RuntimeError("boom DO-NOT-PUBLISH-" + "x" * 500)
+
+    monkeypatch.setattr(PiRuntime, "_collect", broken)
+    with structlog.testing.capture_logs() as logs:
+        m = manager(tmp_path, executable)
+        try:
+            await m.start(invocation)
+            final, _ = await done(m)
+        finally:
+            await m.close()
+    assert final.reason == "invalid_runtime_output"
+    [entry] = [e for e in logs if e["event"] == "engine_output.invalid"]
+    assert entry["engine"] == "pi-cli" and entry["error"] == "RuntimeError"
+    assert len(entry["detail"]) <= 200
 
 
 @pytest.mark.req("ENG-10")

@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import psutil
 import pytest
+import structlog
 
 from anygarden.agent.runtime.execution import (
     CodexRuntime,
@@ -155,8 +156,13 @@ if prompt == "malformed":
     print("not json", flush=True)
     sys.exit(0)
 if prompt == "huge":
-    print("X" * 1200000, flush=True)
+    print("X" * 5000000, flush=True)
     sys.exit(0)
+if prompt == "big-tool-call":
+    # #974 — Codex puts tool arguments on one event line, uncapped.
+    event({"type": "item.started", "item": {"type": "mcp_tool_call", "server": "anygarden", "tool": "publish_project_artifact", "arguments": {"content": "DO-NOT-PUBLISH" * 400000}}})
+    event({"type": "item.completed", "item": {"type": "mcp_tool_call", "server": "anygarden", "tool": "publish_project_artifact", "result": "ok"}})
+    finish()
 event({"type": "item.completed", "item": {"type": "agent_message", "text": "answer"}})
 event({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 1}})
 Path(sys.argv[sys.argv.index("-o") + 1]).write_text("answer")
@@ -249,6 +255,46 @@ async def test_multi_step_turn_emits_normalized_activity_and_narration(
     assert "DO-NOT-PUBLISH" not in str(events)
 
 
+async def test_oversized_tool_call_line_is_dropped_and_turn_succeeds(
+    tmp_path, executable, invocation
+):
+    """#974 — a >4 MiB event line no longer ends the turn as unknown."""
+    with structlog.testing.capture_logs() as logs:
+        m = manager(tmp_path, executable)
+        try:
+            await m.start(replace(invocation, prompt="big-tool-call"))
+            receipt, events = await done(m)
+        finally:
+            await m.close()
+    assert receipt.outcome == "succeeded" and receipt.text == "answer"
+    dropped = [e for e in logs if e["event"] == "engine_output.line_dropped"]
+    assert len(dropped) == 1
+    assert dropped[0]["event_type"] == "item.started"
+    assert dropped[0]["size"] > 4 * 1_048_576
+    assert "DO-NOT-PUBLISH" not in str((receipt, events, logs))
+
+
+async def test_collect_failure_is_logged_with_its_class(
+    tmp_path, executable, invocation, monkeypatch
+):
+    """#974 — invalid_runtime_output names the exception in the agent log."""
+    async def broken(self, *args, **kwargs):
+        raise ValueError("Separator is not found, and chunk exceed the limit")
+
+    monkeypatch.setattr(CodexRuntime, "_collect", broken)
+    with structlog.testing.capture_logs() as logs:
+        m = manager(tmp_path, executable)
+        try:
+            await m.start(invocation)
+            receipt, _ = await done(m)
+        finally:
+            await m.close()
+    assert receipt.reason == "invalid_runtime_output"
+    [entry] = [e for e in logs if e["event"] == "engine_output.invalid"]
+    assert entry["engine"] == "codex-cli" and entry["error"] == "ValueError"
+    assert entry["detail"].startswith("Separator is not found")
+
+
 async def test_partial_resume_failure_never_reexecutes(
     tmp_path, executable, invocation
 ):
@@ -285,7 +331,9 @@ async def test_partial_resume_failure_never_reexecutes(
         pytest.param("noeffect-error-only", "failed", "MODEL_TRANSIENT_FAILURE", marks=pytest.mark.req("EXE-10")),
         pytest.param("noeffect-400", "failed", "ENGINE_ERROR", marks=pytest.mark.req("EXE-10")),
         pytest.param("effect-500", "failed", "ENGINE_ERROR", marks=pytest.mark.req("EXE-10")),
-        ("huge", "unknown", "invalid_runtime_output"),
+        # #974 — an oversized line is dropped, not fatal; without a terminal
+        # event the turn is still unknown, but for the right reason.
+        ("huge", "unknown", "missing_terminal_event"),
     ],
 )
 async def test_terminal_failure_categories(

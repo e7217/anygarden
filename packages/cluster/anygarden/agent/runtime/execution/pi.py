@@ -36,6 +36,7 @@ from .contracts import (
 )
 from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
 from .failure_feedback import classify_failure
+from .lines import MAX_LINE, engine_lines, log_invalid_output
 from .pi_auth import INPUT_KEY as PI_INPUT_KEY
 from .pi_auth import materialize_native_auth
 from .pi_self_tools import ALLOWED_TOOL_NAMES as PI_SELF_TOOL_NAMES
@@ -108,7 +109,6 @@ def _may_have_side_effect(kind: object, event: dict) -> bool:
     )
 
 MAX_TEXT = 1_048_576
-MAX_LINE = 1_048_576
 ENGINE = "pi-cli"
 ENGINE_VERSION = "0.85.1"
 # Exact versions the adapter was verified against (event stream, isolation
@@ -421,7 +421,8 @@ class PiRuntime:
                     else "TIMEOUT_STOPPED"))
             except asyncio.CancelledError:
                 result = RuntimeResult("cancelled", "stopped", "cancelled")
-            except Exception:  # noqa: BLE001 — reap child before reporting unknown
+            except Exception as exc:  # noqa: BLE001 — reap child before reporting unknown
+                log_invalid_output(ENGINE, exc)
                 result = RuntimeResult("unknown", "unknown", "invalid_runtime_output")
             finally:
 
@@ -481,9 +482,12 @@ class PiRuntime:
         failure_code: str | None = None
         settled = False
         clock = _TURN_CLOCK.get()
-        while line := await proc.stdout.readline():
+        async for line in engine_lines(proc.stdout, engine=ENGINE):
             if clock is not None:
                 clock.touch()
+            if line is None:
+                effects["started"] = True
+                continue
             try:
                 event = json.loads(line)
             except (ValueError, UnicodeDecodeError):

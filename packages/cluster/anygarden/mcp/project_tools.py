@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import HTTPException, Request
 from sqlalchemy import select
 
+from anygarden.project_executions.artifacts import MAX_CONTENT_BYTES, MAX_CONTENT_CHARS
 from anygarden.project_executions.policy import SUPPORTED_ACTIONS, SUPPORTED_LIMITS
 
 
@@ -178,10 +179,13 @@ PROJECT_TOOL_SCHEMAS = [
         "supplied by the server and any metadata you declare must match exactly. "
         "Use the returned URLs for document links instead of reconstructing IDs. "
         "Publish the full document here; local file paths are not server downloads. "
+        f"Content is limited to {MAX_CONTENT_CHARS:,} characters and "
+        f"{MAX_CONTENT_BYTES // 1024} KiB of UTF-8; split a larger document into "
+        "several artifacts. "
         "Review published bodies with read_project_artifact. Never invent file links.",
         {
             "task_id": _string, "filename": _string,
-            "content": {**_string, "maxLength": 250000},
+            "content": {**_string, "maxLength": MAX_CONTENT_CHARS},
             "mime": {"type": "string", "default": "text/markdown"},
         }, ["task_id", "filename", "content"],
     ),
@@ -606,7 +610,10 @@ async def call_project_tool(request: Request, *, agent_id: str, name: str, argum
 
             await apply_queued_usage_denials(request.app,
                 denials=dict(db.info.pop("project_execution_usage_denials", {})))
-        if name in {"read_project_artifact", "resume_project_task", "delegate_to_subroom"} and isinstance(
+        if name in {
+            "read_project_artifact", "resume_project_task", "delegate_to_subroom",
+            "publish_project_artifact",
+        } and isinstance(
                 exc, service.ExecutionConflict):
             return {"content": [{"type": "text", "text": f"{exc.code}: {exc.detail}"}],
                     "structuredContent": {"code": exc.code, "detail": exc.detail,
