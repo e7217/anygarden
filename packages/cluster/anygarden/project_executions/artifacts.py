@@ -25,6 +25,11 @@ from anygarden.project_executions.service import (
 from anygarden.rooms.artifact_storage import save_bytes
 from anygarden.rooms.shared_files import sanitize_storage_name
 
+# One limit for the tool schema and the server (#974): the schema alone was
+# never enforced, and the storage cap surfaced as an unhandled error.
+MAX_CONTENT_CHARS = 250_000
+MAX_CONTENT_BYTES = 768 * 1024
+
 
 async def publish_artifact(
     db, *, agent_id: str, proof, task_id: str, filename: str, content: str,
@@ -63,6 +68,13 @@ async def publish_artifact(
         raise ValueError("Project text artifact MIME is not supported")
     name = sanitize_storage_name(filename)
     raw = content.encode("utf-8")
+    if len(content) > MAX_CONTENT_CHARS or len(raw) > MAX_CONTENT_BYTES:
+        raise ExecutionConflict(
+            "ARTIFACT_TOO_LARGE",
+            f"Artifact content is {len(content):,} characters / {len(raw):,} bytes; "
+            f"the limit is {MAX_CONTENT_CHARS:,} characters and {MAX_CONTENT_BYTES:,} "
+            "bytes. Split it into several smaller artifacts and publish each one.",
+        )
     digest = sha256(raw).hexdigest()
     references = []
     for room_id in dict.fromkeys([execution.operating_room_id, task.room_id]):
@@ -84,7 +96,7 @@ async def publish_artifact(
                     await db.flush()
                     stored = save_bytes(
                         artifact_files_dir=artifact_files_dir, room_id=room_id,
-                        file_id=artifact.id, data=raw, max_size_bytes=768 * 1024,
+                        file_id=artifact.id, data=raw, max_size_bytes=MAX_CONTENT_BYTES,
                     )
                     artifact.storage_path = stored.storage_path
                     await db.flush()

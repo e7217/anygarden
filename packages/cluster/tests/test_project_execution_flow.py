@@ -762,6 +762,26 @@ async def _finish_work(harness: Harness) -> dict:
     return {**flow, "worker_turn": worker_turn, "artifact": published["artifacts"][0]}
 
 
+async def test_oversized_artifact_content_is_refused_with_its_limit(harness):
+    """#974 — the schema limit is enforced and named, not a storage crash."""
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+    for content in ("x" * 250_001, "\U0001F600" * 200_000):  # chars / UTF-8 bytes
+        result = await harness.tool_error_or_ok(
+            worker_turn, "publish_project_artifact", task_id=task_id,
+            filename="big.json", content=content,
+        )
+        assert result["isError"], result["content"]
+        assert result["structuredContent"]["code"] == "ARTIFACT_TOO_LARGE"
+        assert "250,000 characters" in result["content"][0]["text"]
+    small = await harness.tool(
+        worker_turn, "publish_project_artifact", task_id=task_id,
+        filename="part-1.json", content="x" * 1000,
+    )
+    assert small["artifacts"]
+
+
 @pytest.mark.req("INB-03")
 async def test_execution_artifact_is_hidden_from_non_members(harness):
     done = await _finish_work(harness)
