@@ -18,6 +18,7 @@ from anygarden.db.models import (
     TaskResult,
 )
 from anygarden.project_executions.approvals import artifact_bytes
+from anygarden.project_executions.artifacts import MAX_ARTIFACT_BYTES
 from anygarden.project_executions.service import (
     ExecutionConflict,
     TurnProof,
@@ -26,7 +27,7 @@ from anygarden.project_executions.service import (
     authorize_turn,
     get_bound_task_execution_detail,
 )
-from anygarden.rooms.artifacts import ARTIFACT_MAX_BYTES, get_artifact
+from anygarden.rooms.artifacts import get_artifact
 
 MAX_CHUNK_CHARACTERS = 12000
 DEFAULT_CHUNK_CHARACTERS = 3000
@@ -93,6 +94,30 @@ async def read_project_artifact(
             "ARTIFACT_READ_RANGE_INVALID",
             f"offset must be a nonnegative integer and limit must be 1 to {MAX_CHUNK_CHARACTERS} characters",
         )
+    text, metadata = await load_authorized_artifact(
+        db, agent_id=agent_id, proof=proof, task_id=task_id,
+        artifact_id=artifact_id, artifact_files_dir=artifact_files_dir,
+    )
+    if offset > len(text):
+        raise ExecutionConflict("ARTIFACT_READ_OFFSET_INVALID", "offset exceeds the artifact's character count")
+    content = text[offset:offset + limit]
+    end = offset + len(content)
+    return {
+        **metadata,
+        "offset": offset, "limit": limit, "total_characters": len(text),
+        "next_offset": end if end < len(text) else None, "content": content,
+    }
+
+
+async def load_authorized_artifact(
+    db: AsyncSession, *, agent_id: str, proof: TurnProof, task_id: str,
+    artifact_id: str, artifact_files_dir: Path,
+) -> tuple[str, dict]:
+    """Return ``(text, metadata)`` for an artifact this turn may read (#975).
+
+    Shared by ``read_project_artifact`` and ``save_project_artifact`` so both
+    apply exactly the same publication scope and SHA-256 checks.
+    """
     if not isinstance(artifact_id, str) or not artifact_id:
         raise ExecutionConflict("ARTIFACT_READ_ID_INVALID", "Use a published artifact ID")
     turn = await authorize_turn(db, agent_id=agent_id, proof=proof)
@@ -190,7 +215,7 @@ async def read_project_artifact(
         raise ExecutionConflict("ARTIFACT_READ_PROVENANCE_INVALID", "A current publication is required")
     if artifact.mime not in TEXT_MIME_TYPES:
         raise ExecutionConflict("ARTIFACT_READ_MIME_UNSUPPORTED", "Only published UTF-8 text artifacts can be read")
-    if not 0 <= artifact.size_bytes <= ARTIFACT_MAX_BYTES:
+    if not 0 <= artifact.size_bytes <= MAX_ARTIFACT_BYTES:
         raise ExecutionConflict("ARTIFACT_READ_SIZE_INVALID", "Artifact size exceeds the server's publication limit")
     try:
         raw = await asyncio.to_thread(artifact_bytes, artifact_files_dir, artifact)
@@ -201,11 +226,7 @@ async def read_project_artifact(
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise ExecutionConflict("ARTIFACT_READ_UTF8_INVALID", "Published artifact bytes are not valid UTF-8 text") from None
-    if offset > len(text):
-        raise ExecutionConflict("ARTIFACT_READ_OFFSET_INVALID", "offset exceeds the artifact's character count")
-    content = text[offset:offset + limit]
-    end = offset + len(content)
-    return {
+    return text, {
         "artifact_id": artifact.id, "room_id": artifact.room_id,
         "filename": artifact.filename, "sha256": artifact.sha256,
         "mime": artifact.mime, "size_bytes": len(raw),
@@ -217,6 +238,4 @@ async def read_project_artifact(
         "result_version": result.version if result else None,
         "result_sha256": result.result_sha256 if result else None,
         "accepted": result is not None,
-        "offset": offset, "limit": limit, "total_characters": len(text),
-        "next_offset": end if end < len(text) else None, "content": content,
     }

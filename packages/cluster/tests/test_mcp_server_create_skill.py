@@ -190,7 +190,8 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     # (test_general_tasks.py). #866 added ``read_room_messages``
     # (test_mcp_read_room_messages.py). #901 added ``delegate_to_subroom``
     # (test_project_execution_flow.py). #930 added the campaign cycle tools
-    # (test_campaigns_tools.py).
+    # (test_campaigns_tools.py). #975 added ``save_project_artifact``
+    # (test_project_execution_flow.py).
     assert names == {
         "begin_project_execution",
         "delegate_to_subroom",
@@ -202,6 +203,7 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "request_project_input",
         "publish_project_artifact",
         "read_project_artifact",
+        "save_project_artifact",
         "request_project_approval",
         "execute_approved_project_action",
         "create_skill",

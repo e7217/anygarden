@@ -29,12 +29,20 @@ from anygarden.rooms.shared_files import sanitize_storage_name
 # never enforced, and the storage cap surfaced as an unhandled error.
 MAX_CONTENT_CHARS = 250_000
 MAX_CONTENT_BYTES = 768 * 1024
+# #975 — a file published by path never rides in a tool argument, so it may
+# be larger. Readers and approved actions accept the same ceiling.
+MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
 
 
 async def publish_artifact(
-    db, *, agent_id: str, proof, task_id: str, filename: str, content: str,
-    artifact_files_dir: Path, mime: str = "text/markdown",
+    db, *, agent_id: str, proof, task_id: str, filename: str,
+    artifact_files_dir: Path, content: str | None = None, data: bytes | None = None,
+    mime: str = "text/markdown",
 ) -> dict:
+    """Publish ``content`` (a tool argument) or ``data`` (a work file the
+    server already fetched from the agent's machine, #975)."""
+    if (content is None) == (data is None):
+        raise ExecutionConflict("ARTIFACT_SOURCE_INVALID", "Give either content or path, not both")
     turn = await authorize_turn(db, agent_id=agent_id, proof=proof)
     task = await db.get(Task, task_id)
     execution = await db.get(ProjectExecution, task.execution_id) if task and task.execution_id else None
@@ -67,14 +75,30 @@ async def publish_artifact(
     if mime not in {"text/plain", "text/markdown", "text/csv", "application/json", "text/html"}:
         raise ValueError("Project text artifact MIME is not supported")
     name = sanitize_storage_name(filename)
-    raw = content.encode("utf-8")
-    if len(content) > MAX_CONTENT_CHARS or len(raw) > MAX_CONTENT_BYTES:
-        raise ExecutionConflict(
-            "ARTIFACT_TOO_LARGE",
-            f"Artifact content is {len(content):,} characters / {len(raw):,} bytes; "
-            f"the limit is {MAX_CONTENT_CHARS:,} characters and {MAX_CONTENT_BYTES:,} "
-            "bytes. Split it into several smaller artifacts and publish each one.",
-        )
+    if data is not None:
+        raw = data
+        limit = MAX_ARTIFACT_BYTES
+        if len(raw) > limit:
+            raise ExecutionConflict(
+                "ARTIFACT_TOO_LARGE",
+                f"The file is {len(raw):,} bytes; the limit for a path is {limit:,} bytes. "
+                "Split it into several files and publish each one.",
+            )
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ExecutionConflict("ARTIFACT_NOT_TEXT", "Only UTF-8 text files can be published") from None
+    else:
+        raw = content.encode("utf-8")
+        limit = MAX_CONTENT_BYTES
+        if len(content) > MAX_CONTENT_CHARS or len(raw) > limit:
+            raise ExecutionConflict(
+                "ARTIFACT_TOO_LARGE",
+                f"Artifact content is {len(content):,} characters / {len(raw):,} bytes; "
+                f"the limit is {MAX_CONTENT_CHARS:,} characters and {MAX_CONTENT_BYTES:,} "
+                "bytes. Write it to a file in your working directory and publish it with "
+                "path instead.",
+            )
     digest = sha256(raw).hexdigest()
     references = []
     for room_id in dict.fromkeys([execution.operating_room_id, task.room_id]):
@@ -96,7 +120,7 @@ async def publish_artifact(
                     await db.flush()
                     stored = save_bytes(
                         artifact_files_dir=artifact_files_dir, room_id=room_id,
-                        file_id=artifact.id, data=raw, max_size_bytes=MAX_CONTENT_BYTES,
+                        file_id=artifact.id, data=raw, max_size_bytes=limit,
                     )
                     artifact.storage_path = stored.storage_path
                     await db.flush()

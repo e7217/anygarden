@@ -31,6 +31,7 @@ from anygarden.db.models import (
     TaskResult,
 )
 from anygarden.messages.service import append_message, inject_task_assignment_message
+from anygarden.project_executions.artifacts import MAX_ARTIFACT_BYTES
 from anygarden.project_executions.service import (
     ACTIVE_EXECUTION_STATES,
     ExecutionConflict,
@@ -97,14 +98,14 @@ def artifact_bytes(artifact_files_dir: Path, artifact: RoomArtifact) -> bytes:
                 with os.fdopen(file_fd, "rb") as stream:
                     if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                         raise ValueError
-                    raw = stream.read(768 * 1024 + 1)
+                    raw = stream.read(MAX_ARTIFACT_BYTES + 1)
             finally:
                 os.close(room_fd)
         finally:
             os.close(base_fd)
     except (OSError, ValueError):
         raise ExecutionConflict("APPROVAL_ARTIFACT_UNAVAILABLE", "Approved artifact bytes are unavailable or their storage path is unsafe") from None
-    if len(raw) > 768 * 1024 or len(raw) != artifact.size_bytes or _sha(raw) != artifact.sha256:
+    if len(raw) > MAX_ARTIFACT_BYTES or len(raw) != artifact.size_bytes or _sha(raw) != artifact.sha256:
         raise ExecutionConflict("APPROVAL_ARTIFACT_CHANGED", "Artifact bytes do not match the accepted size and SHA-256")
     return raw
 
