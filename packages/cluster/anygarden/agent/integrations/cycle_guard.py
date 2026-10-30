@@ -17,6 +17,7 @@ drops the message and breaks the cycle.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -29,6 +30,12 @@ _MIN_HASHABLE_LEN = 16
 # otherwise produce the same response body.
 _HASH_PREFIX_LEN = 64
 
+# Routing tokens the server or a person puts in front of the body
+# (#980). A ``<@user:UUID>`` token alone is 44 chars, so hashing it made
+# "이어서 진행" long enough to count and left only ~19 chars of the body
+# inside the 64-char prefix.
+_LEADING_MENTIONS = re.compile(r"^(?:\s*(?:<@user:[^>]*>|@everyone(?![\w-])))+\s*")
+
 # Hex digest truncation — 16 hex chars = 64 bits of entropy, plenty
 # for room-scoped cycle detection where the window is a handful of
 # messages.
@@ -38,9 +45,11 @@ _HASH_OUTPUT_LEN = 16
 def hash_content(content: str) -> str | None:
     """Stable 16-hex-char hash of the first 64 chars of ``content``.
 
-    Returns None when ``content`` is shorter than :data:`_MIN_HASHABLE_LEN`
-    so short legitimate repeats never feed the detector.
+    Leading mention tokens are dropped first. Returns None when the rest
+    is shorter than :data:`_MIN_HASHABLE_LEN` so short legitimate
+    repeats never feed the detector.
     """
+    content = _LEADING_MENTIONS.sub("", content)
     if len(content) < _MIN_HASHABLE_LEN:
         return None
     prefix = content[:_HASH_PREFIX_LEN].casefold()

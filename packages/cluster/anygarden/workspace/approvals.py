@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
@@ -31,6 +32,14 @@ from anygarden.workspace.requester import Requester
 log = logging.getLogger(__name__)
 
 EXECUTING_STALE = timedelta(minutes=15)
+
+# The outcome notice quotes the person's request and lists what still
+# waits (#980). Bounded so a chained or crowded room cannot grow it.
+ORIGIN_HOPS = 10
+ORIGIN_CHARS = 1500
+WAITING_SHOWN = 10
+# A quoted ``<@user:ID>`` or ``@name`` would address someone again.
+_ADDRESSES = re.compile(r"<@user:[^>]*>\s*|@(?=[\w가-힣])")
 
 
 def _now() -> datetime:
@@ -59,12 +68,9 @@ async def open_request(
 
     from anygarden.messages.service import append_message
 
-    # The same proposal again in this turn (a retried call) is the same card.
-    for existing in await db.scalars(select(WorkspaceActionRequest).where(
-        WorkspaceActionRequest.turn_request_id == requester.turn_request_id,
-        WorkspaceActionRequest.action == action,
-        WorkspaceActionRequest.status == "pending",
-    )):
+    # The same proposal while its card still waits is the same card, from
+    # this turn (a retried call) or a later one (a woken turn, "continue").
+    for existing in await _waiting(db, agent_id=agent_id, room_id=requester.room_id, action=action):
         if existing.params == params:
             return existing, None
     summary = describe(action, params)
@@ -92,6 +98,22 @@ async def open_request(
     row.request_message_id = message.id
     await db.flush()
     return row, message
+
+
+async def _waiting(
+    db: AsyncSession, *, agent_id: str, room_id: str, action: str | None = None,
+) -> list[WorkspaceActionRequest]:
+    """This agent's cards in the room that can still be approved, oldest first."""
+
+    query = select(WorkspaceActionRequest).where(
+        WorkspaceActionRequest.agent_id == agent_id,
+        WorkspaceActionRequest.room_id == room_id,
+        WorkspaceActionRequest.status == "pending",
+        WorkspaceActionRequest.expires_at > _now(),
+    )
+    if action is not None:
+        query = query.where(WorkspaceActionRequest.action == action)
+    return list(await db.scalars(query.order_by(WorkspaceActionRequest.created_at)))
 
 
 class DecisionRefused(ValueError):
@@ -303,7 +325,19 @@ async def _report(db: AsyncSession, row: WorkspaceActionRequest) -> Message | No
         lines.append(f"Result: {json.dumps(row.result, ensure_ascii=False, default=str)}")
     if row.error:
         lines.append(f"Error: {row.error}")
-    lines.append("Tell the person what happened. Do not repeat the request unless they ask again.")
+    origin = await _original_request(db, row)
+    if origin:
+        if len(origin) > ORIGIN_CHARS:
+            origin = origin[:ORIGIN_CHARS] + "…"
+        lines.append(f"Original request from the person: \"{origin}\"")
+    waiting = [r for r in await _waiting(db, agent_id=row.agent_id, room_id=row.room_id) if r.id != row.id]
+    if waiting:
+        lines.append("Still waiting for approval:")
+        lines.extend(f"- {r.summary} (request {r.id})" for r in waiting[:WAITING_SHOWN])
+    lines.append(
+        "If the original request still has steps left, continue them now. Do not propose again "
+        "anything still waiting or already decided. Then tell the person what happened."
+    )
     metadata: dict = {
         "mentions": [{"type": "user", "id": agent_pid}],
         "system_origin": "workspace_action_result",
@@ -317,6 +351,40 @@ async def _report(db: AsyncSession, row: WorkspaceActionRequest) -> Message | No
         trigger_message_id=message.id, thread_root_id=message.root_message_id,
     )
     return message
+
+
+async def _original_request(db: AsyncSession, row: WorkspaceActionRequest) -> str | None:
+    """The person's message that started the work *row* belongs to (#980).
+
+    A card proposed in a turn woken by another card's outcome belongs to
+    the same work, so follow outcomes back until a person's message.
+    Anything else (an agent, a draft notice) ends the search. Mentions
+    in the quote are neutralised so the notice addresses only the agent.
+    """
+
+    from anygarden.db.models import AgentTurn, Participant
+
+    current = row
+    for _ in range(ORIGIN_HOPS):
+        turn = await db.get(AgentTurn, current.turn_request_id) if current.turn_request_id else None
+        source = await db.get(Message, turn.trigger_message_id) if turn and turn.trigger_message_id else None
+        if source is None:
+            return None
+        if source.participant_id:
+            author = await db.get(Participant, source.participant_id)
+            if author is None or author.user_id is None or author.agent_id is not None:
+                return None
+            return _ADDRESSES.sub("", source.content or "").strip() or None
+        metadata = source.extra_metadata or {}
+        meta = metadata.get("workspace_action_result")
+        if metadata.get("system_origin") != "workspace_action_result" or not isinstance(meta, dict):
+            return None
+        previous = await db.get(WorkspaceActionRequest, meta.get("request_id")) if isinstance(
+            meta.get("request_id"), str) else None
+        if previous is None or previous.id == current.id:
+            return None
+        current = previous
+    return None
 
 
 async def _publish(db: AsyncSession, request: Request, message: Message | None) -> None:
