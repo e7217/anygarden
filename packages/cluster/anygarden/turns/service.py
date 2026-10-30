@@ -761,14 +761,21 @@ async def deliver_pending_outbox(
                 metadata["request_id"] = turn.request_id
                 turn.protocol_version = 0
             else:
+                operating_lead = await _is_operating_lead(db, turn)
                 metadata = _durable_metadata(
                     turn, attempt, metadata, input_snapshot=input_snapshot,
-                    operating_lead=await _is_operating_lead(db, turn),
+                    operating_lead=operating_lead,
                 )
                 # #866 — what the agent missed in this conversation since its
-                # last turn; only the server may say so.
+                # last turn; only the server may say so. #984 — the runtime
+                # starts these deliveries in a fresh engine session
+                # (``room_execution._project_session_scope``), so nothing
+                # from earlier turns is already there.
                 metadata.pop("conversation_context", None)
-                conversation = await build_conversation_context(db, turn, msg)
+                conversation = await build_conversation_context(
+                    db, turn, msg,
+                    fresh_session=operating_lead or attempt.attempt_number >= 2,
+                )
                 if conversation is not None:
                     metadata["conversation_context"] = conversation
             frame = message_to_frame(msg, metadata=metadata)

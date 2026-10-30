@@ -249,6 +249,61 @@ async def test_operating_lead_is_stamped_only_for_the_operating_rooms_representa
     assert metadata.get("operating_lead", False) is expected
 
 
+async def _say_then_complete_a_turn(env) -> None:
+    """The agent's previous turn in the main channel, and its reply."""
+    async with env["factory"]() as db:
+        asked = await append_message(
+            db, env["room"], env["user_participant"], "@agent group the columns?",
+        )
+        turn = await create_turn(
+            db, room_id=env["room"], participant_id=env["agent_participant"],
+            agent_id=env["agent"], trigger_message_id=asked.id,
+        )
+        turn.state = "completed"
+        await append_message(db, env["room"], env["agent_participant"], "yes, by year and month")
+        await db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("COL-12")
+@pytest.mark.parametrize(("subroom", "fresh"), [(True, True), (False, False)])
+async def test_operating_lead_delivery_carries_its_own_previous_reply(
+    turn_env, subroom, fresh
+) -> None:
+    """#984 — the lead's turn runs in a fresh engine session, so the server
+    attaches the recent conversation even after a completed turn. Other
+    rooms resume their session and keep getting only what they missed."""
+    await _make_operating_room(turn_env, representative=True, subroom=subroom)
+    await _say_then_complete_a_turn(turn_env)
+    _, _, manager = await _create_and_deliver(turn_env)
+    context = manager.frames[0].metadata.get("conversation_context")
+    if fresh:
+        assert [m["content"] for m in context["messages"]] == [
+            "@agent group the columns?", "yes, by year and month",
+        ]
+    else:
+        assert context is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("COL-12")
+async def test_retry_delivery_carries_the_recent_conversation(turn_env) -> None:
+    """#984 — a retry runs in a fresh engine session too."""
+    await _say_then_complete_a_turn(turn_env)
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    assert "conversation_context" not in manager.frames[0].metadata
+    now = datetime.now(timezone.utc)
+    await _expire_lease(turn_env, request_id, now)
+    assert (await recover_stalled_turns(turn_env["factory"], manager, now=now)).redispatched == 1
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 1
+
+    retry = manager.frames[-1].metadata
+    assert retry["turn_attempt"] == 2
+    assert [m["content"] for m in retry["conversation_context"]["messages"]] == [
+        "@agent group the columns?", "yes, by year and month",
+    ]
+
+
 def test_operating_lead_is_reserved_turn_proof() -> None:
     """A sender cannot forge ``operating_lead`` into a broadcast."""
     from anygarden.messages.metadata import strip_turn_proof
