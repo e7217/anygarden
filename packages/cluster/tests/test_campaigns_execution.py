@@ -301,3 +301,6 @@ async def test_cycle_completion_message_attaches_the_cycle_files(flow_harness):
         message = await db.get(Message, row.final_report_message_id)
     refs = message.extra_metadata["references"]
     assert [(r["type"], r["id"], r["name"]) for r in refs] == [("artifact", artifact_id, "ideas.md")]
+    # A cycle report stays in its thread; the goal report reaches the main
+    # chat instead (#978, #964).
+    assert message.root_message_id == row.source_message_id

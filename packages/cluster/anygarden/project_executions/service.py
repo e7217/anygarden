@@ -2121,7 +2121,11 @@ async def finish_execution(
         turn.target_participant_id,
         summary,
         completion_metadata,
-        thread_root_id=source.root_message_id or source.id,
+        # Answer where the request was made: its thread, or the main chat
+        # for a top-level request (#978). Campaign cycles stay in their
+        # thread because the goal report reaches the main chat (#964).
+        thread_root_id=source.root_message_id
+        or (source.id if root.campaign_id else None),
     )
     _queue_message(db, message)
     changed = await db.execute(
