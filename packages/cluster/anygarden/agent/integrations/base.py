@@ -704,6 +704,22 @@ class ShaTrackedInjector:
 _EVERYONE_IN_CONTENT = re.compile(r"(?<!\w)@everyone(?![\w-])")
 
 
+def _sender_is_human(msg: dict[str, Any], client: ChatClient) -> bool:
+    """A person, not an agent, sent ``msg`` (#980).
+
+    The cycle guard exists to break agent loops; a person saying
+    "continue" twice is an instruction. Only exempt the sender when both
+    signals agree: no agent ``_nonce`` and the room roster lists them as
+    something other than an agent. An unknown sender stays guarded.
+    """
+    if (msg.get("metadata") or {}).get("_nonce"):
+        return False
+    rosters = getattr(client, "_participants_by_room", None)
+    roster = rosters.get(msg.get("room_id")) if isinstance(rosters, dict) else None
+    brief = roster.get(msg.get("participant_id")) if isinstance(roster, dict) else None
+    return isinstance(brief, dict) and brief.get("kind") not in (None, "agent")
+
+
 def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     """Unified 3-state gate: how should the agent handle this message?
 
@@ -887,14 +903,15 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     # turn and still be repeating the same idea. Runs *before* the
     # mention rule so a determined @-chain can't force an agent to
     # restate the same reply forever. Short content has ``hash=None``
-    # and is skipped inside ``is_cycle_detected``.
+    # and is skipped inside ``is_cycle_detected``. A person repeating
+    # an instruction is never a loop (#980).
     room_id = msg.get("room_id")
     recent = (
         client._recent_msgs.get(room_id, ())
         if room_id and hasattr(client, "_recent_msgs")
         else ()
     )
-    if is_cycle_detected(msg, recent):
+    if not _sender_is_human(msg, client) and is_cycle_detected(msg, recent):
         logger.warning(
             "decide_policy.cycle_detected",
             room_id=room_id,

@@ -47,8 +47,10 @@ WORKSPACE_TOOL_SCHEMAS = [
         "workspace_action",
         "Change the workspace for the person who wrote to you, with their rights. Only do "
         "what they asked for. Actions that need approval post a card in the room and return "
-        "status=pending_approval: tell the person, end your turn and do not call again — you "
-        "are woken with the outcome. Refusals explain why; do not work around them.\n"
+        "status=pending_approval. When the request needs several approvals, propose each of "
+        "them now, then tell the person what is waiting and end your turn. Never propose again "
+        "what is already waiting — you are woken with each outcome. Refusals explain why; do "
+        "not work around them.\n"
         + _action_lines(),
         {
             "action": {"type": "string", "enum": [n for n, s in p.ACTIONS.items() if s.tier != "off"]},
@@ -134,12 +136,16 @@ async def call_workspace_tool(request: Request, *, agent_id: str, name: str, arg
             await db.commit()
             if message is not None:
                 await broadcast_project_messages(db, request=request, messages=[message])
-            return _ok({
+            payload = {
                 "status": "pending_approval",
                 "request_id": request_id,
                 "approver": "an admin" if spec.admin_only else "the person who asked, or an admin",
-                "next": "Tell the person it is waiting for approval and end your turn.",
-            })
+                "next": "Propose any other approval this request still needs, then tell the person "
+                        "what is waiting and end your turn.",
+            }
+            if message is None:
+                payload["already_waiting"] = True
+            return _ok(payload)
     except ActionFailed as exc:
         return _error(exc.code, exc.detail)
 

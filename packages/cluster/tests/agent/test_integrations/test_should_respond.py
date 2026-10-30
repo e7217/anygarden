@@ -18,6 +18,7 @@ def _make_client(
     agent_id: str | None = None,
     context_window_opt_out: bool = False,
     recent_msgs: dict | None = None,
+    roster: dict | None = None,
 ):
     client = MagicMock()
     client._agent_name = agent_name
@@ -32,6 +33,8 @@ def _make_client(
     # prior history). Tests that exercise the cycle rule pass a dict
     # with pre-populated deques.
     client._recent_msgs = recent_msgs if recent_msgs is not None else {}
+    if roster is not None:
+        client._participants_by_room = roster
     return client
 
 
@@ -621,6 +624,42 @@ class TestCycleDetectionInDecidePolicy:
                 "mentions": [{"type": "user", "id": "my-pid-123"}]
             },
         }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    @pytest.mark.req("COL-11")
+    def test_a_person_repeating_an_instruction_is_answered(self):
+        """#980 — a person saying "continue" twice is not a loop."""
+        content = "<@user:my-pid-123> please continue with the remaining agents"
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            recent_msgs=self._with_history("human-pid", content, 2),
+            roster={"room-a": {"human-pid": {"id": "human-pid", "kind": "user"}}},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": content,
+            "metadata": {"mentions": [{"type": "user", "id": "my-pid-123"}]},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    @pytest.mark.req("COL-11")
+    @pytest.mark.parametrize(
+        ("kind", "nonce", "listed"),
+        [("agent", None, True), ("user", "n1", True), (None, None, False)],
+    )
+    def test_an_agent_or_unknown_sender_repeating_is_still_a_cycle(self, kind, nonce, listed):
+        content = "<@user:my-pid-123> I have analysed the logs and the issue is X"
+        roster = {"room-a": {"peer": {"id": "peer", "kind": kind}}} if listed else {"room-a": {}}
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            recent_msgs=self._with_history("peer", content, 2),
+            roster=roster,
+        )
+        metadata: dict = {"mentions": [{"type": "user", "id": "my-pid-123"}]}
+        if nonce:
+            metadata["_nonce"] = nonce
+        msg = {"participant_id": "peer", "room_id": "room-a", "content": content, "metadata": metadata}
         assert decide_policy(msg, client) is MessagePolicy.SKIP
 
     def test_different_sender_same_content_no_cycle(self):

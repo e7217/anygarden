@@ -478,3 +478,86 @@ def test_a_goal_result_keeps_its_id_and_status() -> None:
             "mode": "target", "tokens_used": 5}
     assert _goal_brief(view) == {"id": "c1", "room_id": "r1", "title": "Ideas",
                                  "status": "running", "mode": "target"}
+
+
+# -- several approvals for one request (#980) ---------------------------------
+
+
+def _named_routine(env: dict, title: str) -> dict:
+    return {**_routine(env), "title": title}
+
+
+async def _approve(env: dict, request_id: str) -> Message:
+    approved = await env["client"].post(f"/api/v1/workspace-actions/{request_id}/approve",
+                                        headers=env["owner_headers"])
+    assert approved.status_code == 200, approved.text
+    async with env["factory"]() as db:
+        return await db.scalar(select(Message).where(Message.room_id == env["room"]).order_by(Message.seq.desc()))
+
+
+@pytest.mark.req("WSP-09")
+@pytest.mark.asyncio
+async def test_one_turn_can_ask_for_several_approvals(ws) -> None:
+    first = await _action(ws, "create_routine", _named_routine(ws, "ESWIN report"))
+    second = await _action(ws, "create_routine", _named_routine(ws, "AMKOR report"))
+    assert first["structuredContent"]["status"] == second["structuredContent"]["status"] == "pending_approval"
+    assert first["structuredContent"]["request_id"] != second["structuredContent"]["request_id"]
+    assert "any other approval" in first["structuredContent"]["next"]
+    assert await _count(ws, WorkspaceActionRequest, WorkspaceActionRequest.status == "pending") == 2
+
+
+@pytest.mark.req("WSP-09")
+@pytest.mark.asyncio
+async def test_a_waiting_proposal_made_again_in_a_later_turn_is_the_same_card(ws) -> None:
+    first = await _action(ws, "create_routine", _routine(ws))
+    later = await _turn_headers(ws, "continue")
+    again = await _action(ws, "create_routine", _routine(ws), headers=later)
+    assert again["structuredContent"]["request_id"] == first["structuredContent"]["request_id"]
+    assert again["structuredContent"]["already_waiting"] is True
+    assert "already_waiting" not in first["structuredContent"]
+    assert await _count(ws, WorkspaceActionRequest) == 1
+    assert await _count(ws, Message, Message.participant_id == ws["bot"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_expired_card_does_not_stand_in_for_a_new_proposal(ws) -> None:
+    first = await _action(ws, "create_routine", _routine(ws))
+    async with ws["factory"]() as db:
+        await db.execute(update(WorkspaceActionRequest).values(expires_at=datetime.now(UTC) - timedelta(minutes=1)))
+        await db.commit()
+    again = await _action(ws, "create_routine", _routine(ws), headers=await _turn_headers(ws, "continue"))
+    assert again["structuredContent"]["request_id"] != first["structuredContent"]["request_id"]
+
+
+@pytest.mark.req("WSP-10")
+@pytest.mark.asyncio
+async def test_the_outcome_carries_the_original_request_and_what_is_still_waiting(ws) -> None:
+    first = await _action(ws, "create_routine", _named_routine(ws, "ESWIN report"))
+    await _action(ws, "create_routine", _named_routine(ws, "AMKOR report"))
+    report = await _approve(ws, first["structuredContent"]["request_id"])
+    original, _, rest = report.content.partition("Still waiting for approval:")
+    assert "Please organise the workspace" in original
+    assert "AMKOR report" in rest and "ESWIN report" not in rest
+    assert "continue" in report.content and "Do not repeat the request" not in report.content
+
+
+@pytest.mark.req("WSP-10")
+@pytest.mark.asyncio
+async def test_a_chained_outcome_still_finds_the_person_who_asked(ws) -> None:
+    first = await _action(ws, "create_routine", _named_routine(ws, "ESWIN report"))
+    report = await _approve(ws, first["structuredContent"]["request_id"])
+    assert "Still waiting for approval" not in report.content
+    woken = await _lease_turn_on(ws, report.id)
+    second = await _action(ws, "create_routine", _named_routine(ws, "AMKOR report"), headers=woken)
+    assert not second["isError"], second
+    chained = await _approve(ws, second["structuredContent"]["request_id"])
+    assert "Please organise the workspace" in chained.content
+
+
+@pytest.mark.asyncio
+async def test_quoting_the_request_never_mentions_anyone_else(ws) -> None:
+    asked = await _turn_headers(ws, f"<@user:{ws['bot']}> make routines and ask @peer-bot to review")
+    first = await _action(ws, "create_routine", _routine(ws), headers=asked)
+    report = await _approve(ws, first["structuredContent"]["request_id"])
+    assert report.content.count(f"<@user:{ws['bot']}>") == 1  # only the notice's own address
+    assert "@peer-bot" not in report.content and "peer-bot" in report.content

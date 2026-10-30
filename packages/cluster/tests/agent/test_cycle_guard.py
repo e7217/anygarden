@@ -147,3 +147,27 @@ class TestIsCycleDetected:
         recent.append(self._entry("A", content))
         recent.append(self._entry("A", content))
         assert is_cycle_detected(msg, recent) is True
+
+
+class TestLeadingMentions:
+    """#980 — the server prefixes a routing token (``<@user:UUID>``, 44
+    chars) to addressed messages. Hashing it made every short reply
+    long enough to count, and left only ~19 chars of the body to tell
+    two instructions apart."""
+
+    _TOKEN = "<@user:2652a042-0000-4000-8000-000000000000>"
+
+    def test_a_short_body_after_a_mention_is_not_hashed(self) -> None:
+        assert hash_content(f"{self._TOKEN} 이어서 진행") is None
+
+    def test_mentions_and_everyone_are_stripped_before_hashing(self) -> None:
+        body = "please continue with the remaining agents now"
+        assert hash_content(f"{self._TOKEN} {body}") == hash_content(body)
+        assert hash_content(f"@everyone {body}") == hash_content(body)
+        assert hash_content(f"{self._TOKEN}\n<@user:other> {body}") == hash_content(body)
+
+    def test_the_body_is_compared_over_the_full_prefix(self) -> None:
+        stem = "Create the dedicated wiki agent for "
+        first = hash_content(f"{self._TOKEN} {stem}ESWIN and assign it to its subroom")
+        second = hash_content(f"{self._TOKEN} {stem}AMKOR and assign it to its subroom")
+        assert first != second
