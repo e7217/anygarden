@@ -11,8 +11,9 @@ from anygarden.workspace.policy import ACTIONS, CreateRoomParams, capped_permiss
 def test_every_action_has_a_tier_and_hire_is_admin_only() -> None:
     assert {spec.tier for spec in ACTIONS.values()} <= {"allowed", "ask", "off"}
     assert ACTIONS["hire_agent"].tier == "ask" and ACTIONS["hire_agent"].admin_only
-    for name in ("create_routine", "create_goal", "archive_room"):
+    for name in ("create_routine", "create_goal", "archive_room", "remove_room_member"):
         assert ACTIONS[name].tier == "ask"
+    assert not ACTIONS["remove_room_member"].admin_only
     for name in ("create_room", "create_task", "pause_goal"):
         assert ACTIONS[name].tier == "allowed"
 

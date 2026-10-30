@@ -127,7 +127,7 @@ async def call_workspace_tool(request: Request, *, agent_id: str, name: str, arg
                 result = await run_action(db, request, requester.identity, action, params, agent_id=agent_id)
                 return _ok({"status": "done", "action": action, "result": result})
 
-            await _check_proposal(db, agent_id, action, params)
+            await _check_proposal(db, request, requester.identity, agent_id, action, params)
             row, message = await approvals.open_request(
                 db, requester=requester, agent_id=agent_id, action=action,
                 params=params.model_dump(mode="json"),
@@ -150,7 +150,7 @@ async def call_workspace_tool(request: Request, *, agent_id: str, name: str, arg
         return _error(exc.code, exc.detail)
 
 
-async def _check_proposal(db, agent_id: str, action: str, params) -> None:
+async def _check_proposal(db, request: Request, identity, agent_id: str, action: str, params) -> None:
     """Refuse a proposal that could never be approved as asked."""
 
     from pydantic import ValidationError
@@ -173,6 +173,11 @@ async def _check_proposal(db, agent_id: str, action: str, params) -> None:
             validate_trigger_config(params.trigger_type, params.trigger_config)
         except InvalidTriggerConfig as exc:
             raise ActionFailed("INVALID_PARAMS", f"trigger_config: {exc}") from None
+        return
+    if action == "remove_room_member":
+        from anygarden.workspace.actions import removal_target
+
+        await removal_target(db, request, identity, params, agent_id)
         return
     if action != "hire_agent":
         return
