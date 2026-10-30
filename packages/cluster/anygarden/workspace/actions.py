@@ -106,6 +106,43 @@ async def _add_room_member(db, request, identity, params: p.AddRoomMemberParams,
     return _brief(out, "id", "display_name", "agent_id", "room_id")
 
 
+async def removal_target(db, request, identity, params: p.RemoveRoomMemberParams, proposer_id: str):
+    """The participant *params* would remove (#982). Raises :class:`ActionFailed`.
+
+    Checked when the card is proposed and again when it runs: the agent
+    never removes itself (its outcome would wake it in a room it left),
+    never leaves a DM, and only someone in the room can be removed.
+    """
+
+    from anygarden.db.models import Participant, Room
+
+    await require_visible_room(db, request, identity, params.room_id)
+    if params.agent_id == proposer_id:
+        raise ActionFailed("SELF_REMOVAL", "You cannot remove yourself from a room")
+    room = await db.get(Room, params.room_id)
+    if room is not None and room.is_dm:
+        raise ActionFailed("DM_ROOM", "An agent cannot be removed from a DM")
+    target = await db.scalar(select(Participant).where(
+        Participant.room_id == params.room_id, Participant.agent_id == params.agent_id,
+    ))
+    if target is None:
+        raise ActionFailed("NOT_A_MEMBER", f"Agent {params.agent_id} is not in room {params.room_id}")
+    return target
+
+
+async def _remove_room_member(db, request, identity, params: p.RemoveRoomMemberParams, ctx) -> dict:
+    from anygarden.rooms.router import remove_participant
+
+    target = await removal_target(db, request, identity, params, ctx["agent_id"])
+    background = BackgroundTasks()
+    await remove_participant(
+        room_id=params.room_id, participant_id=target.id,
+        request=request, background=background, identity=identity, db=db,
+    )
+    await background()
+    return {"room_id": params.room_id, "agent_id": params.agent_id, "removed": True}
+
+
 async def _create_task(db, request, identity, params: p.CreateTaskParams, ctx) -> dict:
     from anygarden.api.v1.tasks import TaskCreate, create_task
 
@@ -210,7 +247,18 @@ async def _hire_agent(db, request, identity, params: p.HireAgentParams, ctx) -> 
         ),
         request=request, identity=identity, db=db,
     )
-    return _brief(out, "id", "name", "engine", "permission_level", "desired_state")
+    from anygarden.db.models import Participant, Room
+
+    # #982 — the rooms it actually joined, so the agent reports them
+    # instead of guessing (the auto-created DM is not one of them).
+    joined = await db.execute(
+        select(Room.id, Room.name).join(Participant, Participant.room_id == Room.id)
+        .where(Participant.agent_id == out.id, Room.is_dm.is_(False)).order_by(Room.name)
+    )
+    return {
+        **_brief(out, "id", "name", "engine", "permission_level", "desired_state"),
+        "rooms": [{"id": room_id, "name": name} for room_id, name in joined],
+    }
 
 
 Runner = Callable[[AsyncSession, Request, Identity, Any, dict], Awaitable[dict]]
@@ -218,6 +266,7 @@ Runner = Callable[[AsyncSession, Request, Identity, Any, dict], Awaitable[dict]]
 RUNNERS: dict[str, Runner] = {
     "create_room": _create_room,
     "add_room_member": _add_room_member,
+    "remove_room_member": _remove_room_member,
     "create_task": _create_task,
     "reassign_task": _reassign_task,
     "pause_routine": _pause_routine,

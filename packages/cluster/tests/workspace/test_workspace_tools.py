@@ -58,7 +58,9 @@ async def ws(tmp_path):
     app = create_app(config)
     app.state.engine = engine
     app.state.session_factory = factory
-    app.state.agent_lifecycle = SimpleNamespace(request_start=AsyncMock(), bump_generation=AsyncMock())
+    app.state.agent_lifecycle = SimpleNamespace(
+        request_start=AsyncMock(), bump_generation=AsyncMock(), on_room_added=AsyncMock(),
+    )
     async with factory() as db:
         owner = User(email="owner@example.com", password_hash="x")
         admin = User(email="admin@example.com", password_hash="x", is_admin=True)
@@ -561,3 +563,84 @@ async def test_quoting_the_request_never_mentions_anyone_else(ws) -> None:
     report = await _approve(ws, first["structuredContent"]["request_id"])
     assert report.content.count(f"<@user:{ws['bot']}>") == 1  # only the notice's own address
     assert "@peer-bot" not in report.content and "peer-bot" in report.content
+
+
+# -- room membership (#982) ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adding_an_agent_puts_it_in_the_room(ws) -> None:
+    async with ws["factory"]() as db:
+        newcomer = Agent(name="newcomer", engine="codex", desired_state="running")
+        db.add(newcomer)
+        await db.commit()
+        newcomer_id = newcomer.id
+    added = await _action(ws, "add_room_member", {"room_id": ws["room"], "agent_id": newcomer_id})
+    assert not added["isError"], added
+    assert await _count(ws, Participant, Participant.room_id == ws["room"], Participant.agent_id == newcomer_id) == 1
+
+
+def _removal(env: dict, agent_id: str | None = None, room_id: str | None = None) -> dict:
+    return {"room_id": room_id or env["room"], "agent_id": agent_id or env["peer"]}
+
+
+@pytest.mark.req("WSP-11")
+@pytest.mark.asyncio
+async def test_removing_an_agent_waits_for_approval_and_releases_its_work(ws) -> None:
+    task = await _action(ws, "create_task", {"room_id": ws["room"], "title": "Index the wiki",
+                                              "assignee_participant_id": ws["peer_p"]})
+    task_id = task["structuredContent"]["result"]["id"]
+
+    asked = await _action(ws, "remove_room_member", _removal(ws))
+    assert asked["structuredContent"]["status"] == "pending_approval", asked
+    assert await _count(ws, Participant, Participant.id == ws["peer_p"]) == 1
+
+    await _approve(ws, asked["structuredContent"]["request_id"])
+    async with ws["factory"]() as db:
+        row = await db.get(WorkspaceActionRequest, asked["structuredContent"]["request_id"])
+        assert row.status == "executed", row.error
+        assert row.result == {"room_id": ws["room"], "agent_id": ws["peer"], "removed": True}
+        assert await db.get(Participant, ws["peer_p"]) is None
+        released = await db.get(Task, task_id)
+        assert released.assignee_participant_id is None and released.status == "todo"
+
+
+@pytest.mark.req("WSP-11")
+@pytest.mark.asyncio
+async def test_a_removal_that_could_never_run_is_refused_without_a_card(ws) -> None:
+    async with ws["factory"]() as db:
+        dm = Room(name="dm", is_dm=True)
+        db.add(dm)
+        await db.flush()
+        db.add_all([
+            Participant(room_id=dm.id, user_id=ws["owner"], role="owner"),
+            Participant(room_id=dm.id, agent_id=ws["peer"], role="member"),
+        ])
+        await db.commit()
+        dm_id = dm.id
+
+    cases = {
+        "SELF_REMOVAL": _removal(ws, agent_id=ws["agent"]),
+        "DM_ROOM": _removal(ws, room_id=dm_id),
+        "NOT_A_MEMBER": _removal(ws, agent_id=ws["admin"]),
+        "ROOM_NOT_FOUND": _removal(ws, room_id=ws["hidden"]),
+    }
+    for code, params in cases.items():
+        refused = await _action(ws, "remove_room_member", params)
+        assert refused["isError"] and refused["structuredContent"]["code"] == code, (code, refused)
+    assert await _count(ws, WorkspaceActionRequest) == 0
+
+
+@pytest.mark.req("WSP-12")
+@pytest.mark.asyncio
+async def test_a_hired_agent_reports_the_rooms_it_joined(ws) -> None:
+    async with ws["factory"]() as db:
+        await db.execute(update(Agent).where(Agent.id == ws["agent"]).values(can_create_agents=True))
+        await db.commit()
+    asked = await _action(ws, "hire_agent", {**HIRE, "room_ids": [ws["room"]]})
+    approved = await ws["client"].post(
+        f"/api/v1/workspace-actions/{asked['structuredContent']['request_id']}/approve",
+        headers=ws["admin_headers"],
+    )
+    assert approved.json()["status"] == "executed", approved.json()
+    assert approved.json()["result"]["rooms"] == [{"id": ws["room"], "name": "ops"}]

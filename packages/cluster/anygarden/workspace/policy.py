@@ -62,6 +62,11 @@ class AddRoomMemberParams(_Params):
     agent_id: str
 
 
+class RemoveRoomMemberParams(_Params):
+    room_id: str
+    agent_id: str
+
+
 class CreateTaskParams(_Params):
     room_id: str
     title: str = Field(min_length=1, max_length=500)
@@ -131,6 +136,9 @@ ACTIONS: dict[str, ActionSpec] = {
         ActionSpec("create_room", "allowed", CreateRoomParams,
                    "Create a sub-room (parent_room_id) or a project room (project_id)."),
         ActionSpec("add_room_member", "allowed", AddRoomMemberParams, "Add an agent to a room."),
+        ActionSpec("remove_room_member", "ask", RemoveRoomMemberParams,
+                   "Remove an agent from a room. Its open tasks there are released; if it was the "
+                   "room's representative, the next agent takes over."),
         ActionSpec("create_task", "allowed", CreateTaskParams,
                    "Create a task in a room, optionally assigned to a participant."),
         ActionSpec("reassign_task", "allowed", ReassignTaskParams, "Give a task to another participant."),
