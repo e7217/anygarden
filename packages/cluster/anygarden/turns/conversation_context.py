@@ -11,6 +11,10 @@ agent's previous *completed* turn in the same conversation. So at delivery
 it attaches the messages after that point and before this turn's trigger.
 Without a previous turn (a new conversation for this agent) it attaches the
 recent tail, the agent's own messages included.
+
+A delivery that runs in a fresh engine session (#984) — an operating room's
+lead, whose unbound turns never resume, or a retry — holds none of its
+earlier turns, so it gets that recent tail every time.
 """
 
 from __future__ import annotations
@@ -24,6 +28,9 @@ from anygarden.db.models import Agent, AgentTurn, Message, Room
 from anygarden.messages import agent_view
 
 MAX_CONTEXT_MESSAGES = 30
+# Paid on every turn of a fresh-session agent, so tighter than a one-off
+# catch-up.
+FRESH_SESSION_CONTEXT_MESSAGES = 20
 
 
 def _same_conversation(stmt, root_id: str | None):
@@ -38,9 +45,13 @@ def _same_conversation(stmt, root_id: str | None):
 
 
 async def build_conversation_context(
-    db: AsyncSession, turn: AgentTurn, trigger: Message
+    db: AsyncSession, turn: AgentTurn, trigger: Message, *, fresh_session: bool = False
 ) -> dict[str, Any] | None:
-    """What *turn*'s agent missed before *trigger*, or ``None`` for nothing."""
+    """What *turn*'s agent missed before *trigger*, or ``None`` for nothing.
+
+    *fresh_session* says the engine session holds nothing from earlier
+    turns, so no previous turn counts as already seen.
+    """
     if turn.execution_id is not None or turn.agent_id is None:
         return None
     room = await db.get(Room, turn.room_id)
@@ -51,7 +62,7 @@ async def build_conversation_context(
         return None
 
     root_id = trigger.root_message_id
-    baseline = (
+    baseline = None if fresh_session else (
         await db.execute(
             _same_conversation(
                 select(Message.seq)
@@ -87,7 +98,9 @@ async def build_conversation_context(
     rows = list(
         (
             await db.execute(
-                window.order_by(Message.seq.desc()).limit(MAX_CONTEXT_MESSAGES)
+                window.order_by(Message.seq.desc()).limit(
+                    FRESH_SESSION_CONTEXT_MESSAGES if fresh_session else MAX_CONTEXT_MESSAGES
+                )
             )
         ).scalars().all()
     )

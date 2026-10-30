@@ -243,7 +243,9 @@ class RoomExecutionAdapter(CodexCliAdapter):
         if metadata.get("execution_id"):
             return ("execution-input-v1", metadata["execution_id"], metadata.get("input_revision"), *retry_scope)
         # #802 — the server marks a leased delivery to an operating room's
-        # lead with ``operating_lead``.
+        # lead with ``operating_lead``. Both fresh-session cases below are
+        # mirrored by the server's conversation context (#984,
+        # ``turns.service`` ``fresh_session``); change them together.
         if metadata.get("turn_lease") and metadata.get("operating_lead"):
             # The operating source turn is initially unbound. It must not
             # resume another execution before begin_project_execution binds it.

@@ -14,6 +14,7 @@ from anygarden.db.models import (
     User,
 )
 from anygarden.turns.conversation_context import (
+    FRESH_SESSION_CONTEXT_MESSAGES,
     MAX_CONTEXT_MESSAGES,
     build_conversation_context,
 )
@@ -179,3 +180,65 @@ async def test_project_execution_turns_keep_their_frozen_input(db, room) -> None
     turn = await room.turn(trigger)
     turn.execution_id = "exec-1"  # not persisted; the builder only reads it
     assert await build_conversation_context(db, turn, trigger) is None
+
+
+# #984 — a delivery that runs in a fresh engine session (an operating room's
+# lead, a retry) has nothing from its earlier turns in that session.
+
+
+@pytest.mark.req("COL-12")
+async def test_fresh_session_gets_the_recent_tail_despite_a_completed_turn(db, room) -> None:
+    await room.say(room.human_p, "@pm rows are projects, columns are periods")
+    asked = await room.say(room.human_p, "@pm columns grouped by year/month/week?")
+    await room.turn(asked, state="completed")
+    await room.say(room.me_p, "yes, I'll merge year and month cells")
+    trigger = await room.say(room.human_p, "@pm show me")
+    turn = await room.turn(trigger)
+
+    # A resumed session already holds its own reply: nothing is missed.
+    assert await build_conversation_context(db, turn, trigger) is None
+
+    ctx = await build_conversation_context(db, turn, trigger, fresh_session=True)
+    assert _contents(ctx) == [
+        "@pm rows are projects, columns are periods",
+        "@pm columns grouped by year/month/week?",
+        "yes, I'll merge year and month cells",
+    ]
+    assert ctx["messages"][-1]["speaker"] == "you"
+
+
+@pytest.mark.req("COL-12")
+async def test_fresh_session_tail_is_capped_and_counted(db, room) -> None:
+    for i in range(FRESH_SESSION_CONTEXT_MESSAGES + 5):
+        await room.say(room.human_p, f"m{i}")
+    trigger = await room.say(room.human_p, "@pm ?")
+    turn = await room.turn(trigger)
+
+    ctx = await build_conversation_context(db, turn, trigger, fresh_session=True)
+    contents = _contents(ctx)
+    assert len(contents) == FRESH_SESSION_CONTEXT_MESSAGES
+    assert contents[-1] == f"m{FRESH_SESSION_CONTEXT_MESSAGES + 4}"
+    assert ctx["omitted"] == 5
+
+
+@pytest.mark.req("COL-12")
+async def test_fresh_session_in_a_thread_stays_in_that_thread(db, room) -> None:
+    root = await room.say(room.human_p, "thread root")
+    await room.say(room.human_p, "main chatter")
+    first = await room.say(room.human_p, "@pm in thread", root=root)
+    await room.turn(first, state="completed")
+    await room.say(room.me_p, "my thread reply", root=root)
+    trigger = await room.say(room.human_p, "@pm again", root=root)
+    turn = await room.turn(trigger)
+
+    ctx = await build_conversation_context(db, turn, trigger, fresh_session=True)
+    assert _contents(ctx) == ["thread root", "@pm in thread", "my thread reply"]
+
+
+@pytest.mark.req("COL-12")
+async def test_fresh_session_does_not_reach_execution_turns(db, room) -> None:
+    await room.say(room.dev_p, "context")
+    trigger = await room.say(room.human_p, "@pm ?")
+    turn = await room.turn(trigger)
+    turn.execution_id = "exec-1"
+    assert await build_conversation_context(db, turn, trigger, fresh_session=True) is None
