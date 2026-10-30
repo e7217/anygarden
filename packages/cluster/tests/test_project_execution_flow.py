@@ -247,7 +247,7 @@ class Harness:
 
     # -- scenario steps ------------------------------------------------
 
-    async def user_request(self, content: str) -> str:
+    async def user_request(self, content: str, thread_root_id: str | None = None) -> str:
         """Owner posts a request in the operating room; the lead gets a turn."""
         async with self.sessions() as db:
             seq = (
@@ -262,6 +262,8 @@ class Harness:
                 participant_id=self.ids["owner_pid"],
                 content=content,
                 seq=seq,
+                parent_message_id=thread_root_id,
+                root_message_id=thread_root_id,
             )
             db.add(message)
             await db.flush()
@@ -271,15 +273,17 @@ class Harness:
                 participant_id=self.ids["lead_pid"],
                 agent_id=self.ids["lead"],
                 trigger_message_id=message.id,
+                thread_root_id=thread_root_id,
             )
             await db.commit()
             return message.id
 
     async def begin_and_delegate(
-        self, objective: str = "Fix the login bug", **begin_args
+        self, objective: str = "Fix the login bug", *,
+        thread_root_id: str | None = None, **begin_args
     ) -> dict:
         """QA-03 prefix: lead begins the execution and delegates to the worker."""
-        await self.user_request(objective)
+        await self.user_request(objective, thread_root_id=thread_root_id)
         lead_turn = await self.deliver("lead")
         execution = await self.tool(
             lead_turn, "begin_project_execution", objective=objective, **begin_args
@@ -743,8 +747,8 @@ async def test_dependent_task_waits_for_prerequisite_and_receives_its_result(har
 # -- INB-03 artifact access · QA-07/21 result collection ----------------------
 
 
-async def _finish_work(harness: Harness) -> dict:
-    flow = await harness.begin_and_delegate()
+async def _finish_work(harness: Harness, thread_root_id: str | None = None) -> dict:
+    flow = await harness.begin_and_delegate(thread_root_id=thread_root_id)
     task_id = flow["delegated"]["task_id"]
     # The lead fixes the required work while planning, before results arrive.
     await harness.tool(
@@ -941,6 +945,53 @@ async def test_lead_collects_child_result_and_completes_execution(harness):
     async with harness.sessions() as db:
         assert (await db.scalar(select(func.count()).select_from(Message).where(
             Message.content.contains("A different summary")))) == 0
+
+
+async def _complete_and_locate(harness: Harness, thread_root_id: str | None) -> dict:
+    done = await _finish_work(harness, thread_root_id=thread_root_id)
+    execution_id = done["execution"]["execution_id"]
+    await harness.end_turn(done["lead_turn"])
+    lead_turn = await harness.deliver("lead")
+    await harness.tool(
+        lead_turn, "complete_project_execution", execution_id=execution_id,
+        summary="Login bug fixed.",
+    )
+    async with harness.sessions() as db:
+        execution = await db.get(ProjectExecution, execution_id)
+        source = await db.get(Message, execution.source_message_id)
+        report = await db.get(Message, execution.final_report_message_id)
+        notice = await db.scalar(select(Message).where(
+            Message.room_id == harness.ids["lead_room"],
+            Message.extra_metadata["execution_id"].as_string() == execution_id,
+            Message.extra_metadata["system_origin"].as_string() == "project_execution",
+        ))
+    return {"source": source, "report": report, "notice": notice}
+
+
+@pytest.mark.req("EXE-08")
+async def test_final_report_for_main_chat_request_lands_in_main_chat(harness):
+    """#978 — a top-level request gets its final report in the main chat,
+    while the child-result notice stays in the request's thread."""
+    found = await _complete_and_locate(harness, thread_root_id=None)
+    assert found["source"].root_message_id is None
+    assert found["report"].root_message_id is None
+    assert found["notice"].root_message_id == found["source"].id
+
+    history = await harness.client.get(
+        f"/api/v1/rooms/{harness.ids['lead_room']}/messages", headers=harness.user(),
+    )
+    assert history.status_code == 200, history.text
+    assert found["report"].id in json.dumps(history.json())
+
+
+@pytest.mark.req("EXE-08")
+async def test_final_report_for_thread_request_stays_in_that_thread(harness):
+    """#978 — a request made inside a thread is answered in that thread."""
+    root_id = await harness.user_request("Earlier discussion")
+    await harness.end_turn(await harness.deliver("lead"))
+    found = await _complete_and_locate(harness, thread_root_id=root_id)
+    assert found["report"].root_message_id == root_id
+    assert found["notice"].root_message_id == root_id
 
 
 # -- QA-12 failure and retry --------------------------------------------------
