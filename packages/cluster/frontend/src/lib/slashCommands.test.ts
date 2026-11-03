@@ -119,7 +119,7 @@ describe('parseSlashCommand routing (#940)', () => {
 
 describe('matchSlashCommands (#940)', () => {
   it('lists every command for a bare slash', () => {
-    expect(matchSlashCommands('/').map(c => c.name)).toEqual(['task', 'routine', 'goal'])
+    expect(matchSlashCommands('/').map(c => c.name)).toEqual(['task', 'routine', 'goal', 'clear'])
   })
 
   it('filters by the typed prefix', () => {
@@ -131,5 +131,19 @@ describe('matchSlashCommands (#940)', () => {
     expect(matchSlashCommands('/goal ')).toEqual([])
     expect(matchSlashCommands('hello')).toEqual([])
     expect(matchSlashCommands('/zzz')).toEqual([])
+  })
+})
+
+describe('parseClearCommand (#986)', () => {
+  it('[COL-13] clears every agent, or the one mentioned', () => {
+    expect(parseSlashCommand('/clear')).toEqual({ command: 'clear', parsed: { ok: true, payload: { agent_pid: null } } })
+    expect(parseSlashCommand('/clear <@user:a1>')).toEqual({
+      command: 'clear', parsed: { ok: true, payload: { agent_pid: 'a1' } },
+    })
+  })
+
+  it('[COL-13] refuses extra text or several agents', () => {
+    expect(parseSlashCommand('/clear everything please')?.parsed.ok).toBe(false)
+    expect(parseSlashCommand('/clear <@user:a1> <@user:a2>')?.parsed.ok).toBe(false)
   })
 })

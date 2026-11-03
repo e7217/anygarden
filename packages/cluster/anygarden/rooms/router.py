@@ -2179,3 +2179,8 @@ async def get_room_activity(
 from anygarden.rooms.delegation_status import router as delegation_status_router  # noqa: E402
 
 router.include_router(delegation_status_router)
+
+# #986 — ``/clear``: start agents' engine sessions in a room over.
+from anygarden.rooms.session_reset import router as session_reset_router  # noqa: E402
+
+router.include_router(session_reset_router)

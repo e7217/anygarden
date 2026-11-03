@@ -130,6 +130,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
         self._progress_by_room: dict[str, _Progress] = {}
         self._active_execution_by_room: dict[str, str] = {}
         self._scope_memory_epochs: dict[str, str] = {}
+        self._buffered_memory_scope: dict[str, str] = {}
         self._turn_timeout = resolve_turn_timeout(
             "pi" if engine == "pi-cli" else "codex"
         )
@@ -237,6 +238,23 @@ class RoomExecutionAdapter(CodexCliAdapter):
         room_id = msg.get("room_id", "_default")
         return room_id, msg.get("root_message_id"), memory_session_scope(self._client, room_id), self._project_session_scope(msg)
 
+    def _forget_context_of_a_cleared_session(self, room_id):
+        """Drop lines buffered for a session a person has since cleared (#986).
+
+        The new session must not inherit the old one's chatter; what came
+        after the clear reaches it through the server's conversation context.
+        """
+        from anygarden.agent.memory.scope import memory_session_scope
+
+        scope = memory_session_scope(self._client, room_id)
+        if self._buffered_memory_scope.get(room_id, scope) != scope:
+            self._pending_context.pop(room_id, None)
+        self._buffered_memory_scope[room_id] = scope
+
+    async def ingest_context(self, msg):
+        self._forget_context_of_a_cleared_session(msg.get("room_id") or "_default")
+        await super().ingest_context(msg)
+
     def _project_session_scope(self, msg):
         metadata = msg.get("metadata") or {}
         retry_scope = self._retry_session_scope(msg)
@@ -282,6 +300,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
             context_token = self._client._execution_input_context.set(context)
             project_scope = self._project_session_scope(msg)
             room_id = msg.get("room_id", "_default")
+            self._forget_context_of_a_cleared_session(room_id)
             if project_scope is not None:
                 if self._last_project_context.get(room_id) != project_scope:
                     self._pending_context.pop(room_id, None)

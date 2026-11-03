@@ -18,6 +18,7 @@ import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignmen
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
 import GoalStatusCard from '@/components/GoalStatusCard'
 import { parseGoalStatus } from '@/lib/goalStatus'
+import { parseSessionReset } from '@/lib/systemMessages'
 import WorkspaceActionCard, { WorkspaceActionResultNote } from '@/components/WorkspaceActionCard'
 import { parseWorkspaceActionRequest, parseWorkspaceActionResult } from '@/lib/workspaceActions'
 import { parseDraftFailed, parseDraftRequest } from '@/lib/drafts'
@@ -196,6 +197,8 @@ export default memo(function MessageBubble({
   )
   // #957 — a goal that needs a person or has ended.
   const goalStatusMeta = useMemo(() => parseGoalStatus(message.metadata), [message])
+  // #986 — a ``/clear`` divider, not a participant statement.
+  const sessionResetMeta = useMemo(() => parseSessionReset(message), [message])
   const artifactReferences = useMemo(() => extractArtifactReferences(message.metadata), [message])
   // #938 — an agent's workspace change waiting for approval, and the
   // server's report of how it ended.
@@ -442,6 +445,22 @@ export default memo(function MessageBubble({
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
+      </div>
+    )
+  }
+
+  if (sessionResetMeta) {
+    return (
+      <div role="note" className="flex items-center gap-3 py-1 text-caption text-[var(--color-foreground-muted)]">
+        <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-border)]" />
+        <span className="text-center">
+          {t('chat.sessionResetNotice', {
+            actor: sessionResetMeta.actorName,
+            agents: sessionResetMeta.agentNames.join(', '),
+          })}
+          <span className="ml-2 text-badge text-[var(--color-foreground-subtle)]">{formatTime(message.created_at)}</span>
+        </span>
+        <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-border)]" />
       </div>
     )
   }
