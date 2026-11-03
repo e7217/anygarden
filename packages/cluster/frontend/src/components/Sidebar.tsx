@@ -879,7 +879,7 @@ export default function Sidebar({
 
       {/* User info */}
       <div data-testid="sidebar-footer" className="min-h-[var(--footer-min-height)] relative flex shrink-0 items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
-        <SidebarPreferencesMenu email={user?.email} serverVersion={serverVersion} />
+        <SidebarPreferencesMenu email={user?.email} serverVersion={serverVersion} isAdmin={isAdmin} />
         <div className="flex shrink-0 items-center gap-1">
           {isAdmin && (
             <SidebarAdminMenu

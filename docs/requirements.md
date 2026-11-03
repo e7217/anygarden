@@ -30,6 +30,11 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | AUTH-08 | 초대를 회수하면 그 초대로 들어온 게스트 세션이 거부된다 | pytest |
 | AUTH-09 | 비멤버가 초대를 만들려 하면 룸 존재 여부와 무관하게 403 (존재 노출 없음) | pytest |
 | AUTH-10 | 계정이 하나도 없는 노드는 공개 `GET /auth/setup`이 `needs_first_account: true`를 반환하고, 로그인 화면이 "계정 만들기" 탭으로 열린다 | pytest, vitest |
+| AUTH-11 | 개인 API 키(`agu_`)로 REST와 WS에 발급한 사람으로 인증된다 | pytest |
+| AUTH-12 | API 키는 scope를 따른다: read 키는 쓰기 메서드가 403이고 WS 전송이 거부되며, admin 키만 admin 권한을 가지며 admin을 회수하면 즉시 거부된다 | pytest |
+| AUTH-13 | 회수·만료된 키는 401. 키 원문은 발급 응답에만 나온다 | pytest |
+| AUTH-14 | API 키로는 키를 발급·조회·회수할 수 없고, 다른 사람의 키는 회수할 수 없다 | pytest |
+| AUTH-15 | 잘못된 키를 반복하면 429로 제한된다 | pytest |
 
 ## 프로젝트·룸 (ROOM)
 

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { ChevronUp, SlidersHorizontal } from 'lucide-react'
+import { ChevronUp, KeyRound, SlidersHorizontal } from 'lucide-react'
+import ApiKeysDialog from '@/components/ApiKeysDialog'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { LocaleToggle } from '@/i18n/LocaleToggle'
 import { ThemeToggle } from '@/theme/ThemeToggle'
@@ -7,12 +8,14 @@ import { ThemeToggle } from '@/theme/ThemeToggle'
 interface SidebarPreferencesMenuProps {
   email?: string
   serverVersion: string | null
+  isAdmin?: boolean
 }
 
 /** Account preferences share a single, stable home beneath navigation. */
-export default function SidebarPreferencesMenu({ email, serverVersion }: SidebarPreferencesMenuProps) {
+export default function SidebarPreferencesMenu({ email, serverVersion, isAdmin = false }: SidebarPreferencesMenuProps) {
   const { t } = useLocale()
   const [open, setOpen] = useState(false)
+  const [apiKeysOpen, setApiKeysOpen] = useState(false)
   const menuId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -80,8 +83,22 @@ export default function SidebarPreferencesMenu({ email, serverVersion }: Sidebar
             <span className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('common.theme')}</span>
             <ThemeToggle showLabel className="aria-pressed:bg-[var(--color-brand-tint-bg)] aria-pressed:text-[var(--color-brand-tint-text)]" />
           </div>
+          <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                setApiKeysOpen(true)
+              }}
+              className="flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-xs font-medium text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+            >
+              <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {t('apiKeys.menuItem')}
+            </button>
+          </div>
         </div>
       )}
+      <ApiKeysDialog open={apiKeysOpen} onOpenChange={setApiKeysOpen} isAdmin={isAdmin} />
     </div>
   )
 }

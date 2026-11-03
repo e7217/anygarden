@@ -40,6 +40,7 @@ from anygarden.api.v1.system import router as system_router
 from anygarden.api.v1.tasks import router as tasks_router
 from anygarden.api.v1.turns import router as turns_router
 from anygarden.api.v1.usage import router as usage_router
+from anygarden.auth.api_key_routes import router as api_keys_router
 from anygarden.auth.routes import router as auth_router
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import (
@@ -1947,6 +1948,7 @@ def create_app(
     app.include_router(mcp_templates_router)
     app.include_router(mcp_rpc_router)
     app.include_router(auth_router)
+    app.include_router(api_keys_router)
     app.include_router(projects_router)
     app.include_router(invites_router)
     app.include_router(saved_router)
