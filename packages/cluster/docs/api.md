@@ -10,6 +10,11 @@ Base URL: `/api/v1`
 | POST | `/auth/login` | 로그인 → JWT 토큰 반환 |
 | GET | `/auth/dev-token` | 개발 모드 자동 로그인 |
 | GET | `/auth/me` | 현재 유저 정보 |
+| GET | `/auth/api-keys` | 내 API 키 목록 (원문·해시 없음, 로그인 세션 전용) |
+| POST | `/auth/api-keys` | API 키 발급 `{name, scope: read\|write\|admin, expires_in_days?}` → 원문 `key`는 이 응답에만 |
+| DELETE | `/auth/api-keys/{id}` | API 키 회수 |
+
+API 키(`agu_…`)는 `Authorization: Bearer <key>`(REST) 또는 `Sec-WebSocket-Protocol: anygarden.v1, bearer.<key>`(WS)로 보냅니다. `read` 키는 GET/HEAD/OPTIONS와 WS 구독만, `write`는 그 외 메서드와 WS 전송까지, `admin`은 발급자의 admin 권한까지 가집니다.
 
 ## Rooms
 

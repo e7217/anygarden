@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.auth.api_key import (
+    API_KEY_PREFIX,
+    SCOPE_ADMIN,
+    verify_api_key_hash,
+)
 from anygarden.auth.jwt import (
     GuestClaims,
     InvalidToken,
@@ -24,7 +29,12 @@ from anygarden.db.models import (
     Participant,
     RoomInviteLink,
     User,
+    UserApiKey,
 )
+
+# #988 — ``last_used_at`` is a hint for the key list, not an audit log;
+# writing it on every call would turn read-only polling into DB writes.
+API_KEY_LAST_USED_RESOLUTION = timedelta(seconds=60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +53,11 @@ class Identity:
     kind: str  # "user" | "agent" | "guest"
     id: str
     claims: Optional[UserClaims | GuestClaims] = None
+    # #988 — set when a user authenticated with a personal API key: the
+    # key's scope (``read`` / ``write`` / ``admin``). ``None`` means a
+    # browser session, which is not scope-limited.
+    api_key_scope: Optional[str] = None
+    api_key_id: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +98,9 @@ async def get_identity(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication token",
         )
+
+    if token.startswith(API_KEY_PREFIX):
+        return await _identity_from_api_key(db, token)
 
     # Try JWT first (user or guest tokens; same HS256 secret, the
     # payload's ``is_guest`` flag selects the claim shape).
@@ -145,6 +163,52 @@ async def get_identity(
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid agent token",
+    )
+
+
+async def _identity_from_api_key(db: AsyncSession, token: str) -> Identity:
+    """Resolve a personal API key (#988) to the person who issued it.
+
+    Admin rights come from the DB like a session's (#782), and only an
+    ``admin``-scoped key carries them: every other key acts as a
+    non-admin, so the many inline ``claims.is_admin`` checks need no
+    key awareness.
+    """
+    now = datetime.now(timezone.utc)
+    candidates = (
+        await db.execute(
+            select(UserApiKey).where(
+                UserApiKey.lookup_hint == token[:12],
+                UserApiKey.revoked_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    for key in candidates:
+        if key.expires_at and key.expires_at < now:
+            continue
+        if not verify_api_key_hash(token, key.token_hash):
+            continue
+        user = await db.get(User, key.user_id)
+        if user is None or user.is_anonymous:
+            break
+        if key.last_used_at is None or now - key.last_used_at >= API_KEY_LAST_USED_RESOLUTION:
+            key.last_used_at = now
+            await db.commit()
+        claims = UserClaims(
+            user_id=user.id,
+            email=user.email or "",
+            is_admin=bool(user.is_admin) and key.scope == SCOPE_ADMIN,
+        )
+        return Identity(
+            kind="user",
+            id=user.id,
+            claims=claims,
+            api_key_scope=key.scope,
+            api_key_id=key.id,
+        )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid API key",
     )
 
 

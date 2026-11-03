@@ -698,6 +698,40 @@ class AgentToken(Base):
     agent: Mapped["Agent"] = relationship("Agent")
 
 
+class UserApiKey(Base):
+    """A person's API key for calling the API from outside the browser (#988).
+
+    Same shape as ``AgentToken``: only the argon2 hash and a 12-char
+    ``lookup_hint`` (``agu_`` + 8 chars) are stored. ``scope`` is one of
+    ``read`` / ``write`` / ``admin`` (see ``anygarden.auth.api_key``).
+    """
+
+    __tablename__ = "user_api_keys"
+    __table_args__ = (
+        Index("ix_user_api_keys_hint", "lookup_hint"),
+        Index("ix_user_api_keys_user", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    lookup_hint: Mapped[str] = mapped_column(String(12), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+
+
 class RoomInviteLink(Base):
     """Shareable invite token that lets an anonymous guest join a room.
 

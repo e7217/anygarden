@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
 from anygarden.auth.invite_token import verify_invite_token
+from anygarden.auth.limiter import FailureLimiter
 from anygarden.auth.jwt import create_guest_token, create_user_token
 from anygarden.auth.password import hash_password, verify_password
 from anygarden.db.models import Participant, Room, RoomInviteLink, User
@@ -28,35 +28,11 @@ LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
 
 
-class LoginFailureLimiter:
+class LoginFailureLimiter(FailureLimiter):
     """Sliding-window count of failed logins, keyed by normalized email."""
 
     def __init__(self) -> None:
-        self._failures: dict[str, list[float]] = {}
-
-    def _recent(self, key: str, now: float) -> list[float]:
-        window_start = now - LOGIN_FAILURE_WINDOW_SECONDS
-        recent = [t for t in self._failures.get(key, []) if t >= window_start]
-        if recent:
-            self._failures[key] = recent
-        else:
-            self._failures.pop(key, None)
-        return recent
-
-    def retry_after(self, key: str) -> int | None:
-        """Seconds until another attempt is allowed, or None if allowed now."""
-        now = time.monotonic()
-        recent = self._recent(key, now)
-        if len(recent) < LOGIN_FAILURE_LIMIT:
-            return None
-        return max(1, int(recent[0] + LOGIN_FAILURE_WINDOW_SECONDS - now) + 1)
-
-    def record_failure(self, key: str) -> None:
-        now = time.monotonic()
-        self._failures[key] = [*self._recent(key, now), now]
-
-    def reset(self, key: str) -> None:
-        self._failures.pop(key, None)
+        super().__init__(LOGIN_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_SECONDS)
 
 
 def _login_limiter(request: Request) -> LoginFailureLimiter:

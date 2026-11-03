@@ -14,6 +14,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.agent_availability import room_notice_for_unavailable
+from anygarden.auth.api_key import SCOPE_WRITE, scope_allows
 from anygarden.auth.dependencies import Identity, get_identity
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import begin_write_transaction
@@ -313,6 +314,16 @@ def _capability_for_frame(frame: Any) -> Capability:
     # create_room/join_room are not supported on this room endpoint, but still
     # require current read access before the handler returns the protocol error.
     return Capability.ROOM_READ
+
+
+def _identity_may_send_frame(identity: Identity, frame: Any) -> bool:
+    """Whether *identity*'s API key scope (#988) allows this inbound frame."""
+
+    if identity.api_key_scope is None:
+        return True
+    if _capability_for_frame(frame) is Capability.ROOM_READ:
+        return True
+    return scope_allows(identity.api_key_scope, SCOPE_WRITE)
 
 
 async def _require_fresh_frame_access(
@@ -997,6 +1008,14 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
             except (json.JSONDecodeError, ValueError) as exc:
                 await websocket.send_text(
                     ErrorOut(detail=f"Bad frame: {exc}").model_dump_json()
+                )
+                continue
+
+            # #988 — a read-only API key may watch the room but not act in it.
+            assert identity is not None
+            if not _identity_may_send_frame(identity, frame_in):
+                await websocket.send_text(
+                    ErrorOut(detail="This API key does not have the write scope").model_dump_json()
                 )
                 continue
 
