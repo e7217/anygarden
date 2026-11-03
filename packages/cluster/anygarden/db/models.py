@@ -483,6 +483,11 @@ class AgentRoomMemory(Base):
     session_epoch: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=sa_text("0")
     )
+    session_reset_seq: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
+    """``seq`` of the room notice where a person cleared this session (#986).
+    Conversation context for later turns starts after it."""
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 

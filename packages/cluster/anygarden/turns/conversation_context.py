@@ -15,6 +15,11 @@ recent tail, the agent's own messages included.
 A delivery that runs in a fresh engine session (#984) — an operating room's
 lead, whose unbound turns never resume, or a retry — holds none of its
 earlier turns, so it gets that recent tail every time.
+
+A person can clear the agent's session in a room (#986). Its new session
+holds nothing from before the room's "session cleared" notice, so nothing
+before that notice is attached, and until the agent's next completed turn
+the window is the tail after it.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import Agent, AgentTurn, Message, Room
+from anygarden.db.models import Agent, AgentRoomMemory, AgentTurn, Message, Room
 from anygarden.messages import agent_view
 
 MAX_CONTEXT_MESSAGES = 30
@@ -81,11 +86,21 @@ async def build_conversation_context(
         )
     ).scalar_one_or_none()
 
+    cleared_at = await db.scalar(
+        select(AgentRoomMemory.session_reset_seq).where(
+            AgentRoomMemory.agent_id == turn.agent_id,
+            AgentRoomMemory.room_id == turn.room_id,
+        )
+    )
+    if cleared_at is not None and (baseline is None or baseline < cleared_at):
+        # The session was cleared after its last turn here: it holds nothing.
+        baseline = None
+
     window = agent_view.in_conversation(
         select(Message).where(
             Message.room_id == turn.room_id,
             Message.seq < trigger.seq,
-            Message.seq > (baseline or 0),
+            Message.seq > max(baseline or 0, cleared_at or 0),
         ),
         root_id,
     )

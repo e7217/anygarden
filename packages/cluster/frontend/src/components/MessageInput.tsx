@@ -284,9 +284,9 @@ export default function MessageInput({
     // #940 — commands match by name prefix; the usage text is not searched.
     if (mention.type === '/') {
       return matchSlashCommands(`/${mention.query}`)
-        .filter(c => c.name === 'task' || onSlashForm)
+        .filter(c => c.name === 'task' || c.name === 'clear' || onSlashForm)
         .map(c => {
-          const extra = c.name === 'task' ? null : slashDescription?.(c.name)
+          const extra = c.name === 'task' || c.name === 'clear' ? null : slashDescription?.(c.name)
           const description = extra ? `${t(c.descriptionKey)} · ${extra}` : t(c.descriptionKey)
           return { id: c.name, display: c.usage, kind: 'command' as const, description }
         })
@@ -377,13 +377,44 @@ export default function MessageInput({
     // normal send (a user typing a URL like ``/path/to/x`` should not
     // be hijacked).
     if (content.startsWith('/') && roomId) {
+      const clearComposer = () => {
+        setValue('')
+        clearDraft(draftKey)
+        trackedMentions.current = []
+        trackedFileReferences.current = []
+        setMention(null)
+        onTyping(false)
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+      }
       const dispatch = parseSlashCommand(content)
       if (dispatch) {
         if (!dispatch.parsed.ok) {
           setSlashError(dispatch.parsed.error)
           return
         }
-        if (dispatch.command !== 'task' && onSlashForm && dispatch.parsed.ok) {
+        if (dispatch.command === 'clear' && dispatch.parsed.ok) {
+          // #986 — the room's "session cleared" notice arrives over WS.
+          const { agent_pid } = dispatch.parsed.payload
+          apiFetch(`/api/v1/rooms/${roomId}/session-reset`, {
+            method: 'POST',
+            body: JSON.stringify(agent_pid ? { agent_participant_id: agent_pid } : {}),
+          })
+            .then(async r => {
+              if (r.ok) {
+                setSlashError(null)
+              } else if (r.status === 403) {
+                setSlashError(t('chat.sessionResetForbidden'))
+              } else {
+                const body = await r.json().catch(() => null)
+                const detail = body?.detail?.message ?? ''
+                setSlashError(t('chat.sessionResetFailed', { status: r.status, detail }))
+              }
+            })
+            .catch(err => setSlashError(String(err)))
+          clearComposer()
+          return
+        }
+        if ((dispatch.command === 'routine' || dispatch.command === 'goal') && onSlashForm && dispatch.parsed.ok) {
           const blocked = onSlashForm(
             dispatch.command === 'routine'
               ? { command: 'routine', payload: dispatch.parsed.payload }
@@ -393,13 +424,7 @@ export default function MessageInput({
             setSlashError(blocked)
             return
           }
-          setValue('')
-          clearDraft(draftKey)
-          trackedMentions.current = []
-          trackedFileReferences.current = []
-          setMention(null)
-          onTyping(false)
-          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+          clearComposer()
           return
         }
         if (dispatch.command === 'task' && dispatch.parsed.ok) {
@@ -425,13 +450,7 @@ export default function MessageInput({
           // Clear the input regardless — the API call is in flight,
           // and a duplicate submission while waiting on the response
           // would just race with itself.
-          setValue('')
-          clearDraft(draftKey)
-          trackedMentions.current = []
-          trackedFileReferences.current = []
-          setMention(null)
-          onTyping(false)
-          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+          clearComposer()
           return
         }
       }

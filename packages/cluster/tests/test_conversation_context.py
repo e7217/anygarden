@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 from anygarden.db.models import (
     Agent,
+    AgentRoomMemory,
     AgentTurn,
     Message,
     Participant,
@@ -242,3 +243,94 @@ async def test_fresh_session_does_not_reach_execution_turns(db, room) -> None:
     turn = await room.turn(trigger)
     turn.execution_id = "exec-1"
     assert await build_conversation_context(db, turn, trigger, fresh_session=True) is None
+
+
+# #986 — a person cleared this agent's session at a room notice: the new
+# engine session holds nothing from before it, so context starts after it.
+
+
+async def _clear(db, room: _Room) -> Message:
+    notice = await room.say(room.human_p, "session cleared")
+    db.add(AgentRoomMemory(
+        agent_id=room.me.id, room_id=room.room.id, session_epoch=1, session_reset_seq=notice.seq,
+    ))
+    await db.flush()
+    return notice
+
+
+@pytest.mark.req("COL-13")
+async def test_resumed_session_after_a_clear_gets_only_what_followed_it(db, room) -> None:
+    asked = await room.say(room.human_p, "@pm my name is Kim")
+    await room.turn(asked, state="completed")
+    await room.say(room.me_p, "hi Kim")
+    await _clear(db, room)
+    await room.say(room.me_p, "late reply from the old session")
+    await room.say(room.dev_p, "after the clear")
+    trigger = await room.say(room.human_p, "@pm what is my name?")
+    turn = await room.turn(trigger)
+
+    ctx = await build_conversation_context(db, turn, trigger)
+    assert _contents(ctx) == ["late reply from the old session", "after the clear"]
+
+
+@pytest.mark.req("COL-13")
+async def test_a_clear_with_nothing_after_it_attaches_nothing(db, room) -> None:
+    await room.say(room.human_p, "before")
+    await _clear(db, room)
+    trigger = await room.say(room.human_p, "@pm hello")
+    turn = await room.turn(trigger)
+
+    assert await build_conversation_context(db, turn, trigger) is None
+    assert await build_conversation_context(db, turn, trigger, fresh_session=True) is None
+
+
+@pytest.mark.req("COL-13")
+async def test_fresh_session_tail_stops_at_the_clear(db, room) -> None:
+    await room.say(room.human_p, "before")
+    await _clear(db, room)
+    await room.say(room.dev_p, "after")
+    trigger = await room.say(room.human_p, "@pm ?")
+    turn = await room.turn(trigger)
+
+    ctx = await build_conversation_context(db, turn, trigger, fresh_session=True)
+    assert _contents(ctx) == ["after"]
+
+
+@pytest.mark.req("COL-13")
+async def test_a_turn_after_the_clear_is_the_baseline_again(db, room) -> None:
+    await _clear(db, room)
+    asked = await room.say(room.human_p, "@pm first")
+    await room.turn(asked, state="completed")
+    await room.say(room.me_p, "my answer")
+    await room.say(room.dev_p, "missed")
+    trigger = await room.say(room.human_p, "@pm second")
+    turn = await room.turn(trigger)
+
+    ctx = await build_conversation_context(db, turn, trigger)
+    assert _contents(ctx) == ["missed"]
+
+
+@pytest.mark.req("COL-13")
+async def test_a_thread_started_before_the_clear_keeps_its_root(db, room) -> None:
+    root = await room.say(room.human_p, "thread topic")
+    await room.say(room.human_p, "old reply", root=root)
+    await _clear(db, room)
+    await room.say(room.dev_p, "new reply", root=root)
+    trigger = await room.say(room.human_p, "@pm continue", root=root)
+    turn = await room.turn(trigger)
+
+    ctx = await build_conversation_context(db, turn, trigger)
+    assert _contents(ctx) == ["thread topic", "new reply"]
+
+
+@pytest.mark.req("COL-13")
+async def test_another_agents_clear_does_not_move_this_baseline(db, room) -> None:
+    await room.say(room.human_p, "before")
+    notice = await room.say(room.human_p, "session cleared")
+    db.add(AgentRoomMemory(agent_id=room.dev.id, room_id=room.room.id, session_reset_seq=notice.seq))
+    await db.flush()
+    trigger = await room.say(room.human_p, "@pm ?")
+    turn = await room.turn(trigger)
+
+    ctx = await build_conversation_context(db, turn, trigger)
+    assert _contents(ctx) == ["before", "session cleared"]

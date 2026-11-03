@@ -233,6 +233,34 @@ async def apply_machine_memory_update(db: AsyncSession, *, machine_id: str, data
     return ack
 
 
+async def reset_room_sessions(
+    db: AsyncSession, *, room_id: str, agent_ids: list[str], reset_seq: int
+) -> None:
+    """Start each agent's next turn here in a new engine session (#986).
+
+    The epoch rotates the runtime's session key; the revision bump keeps a
+    late older snapshot from undoing it. ``reset_seq`` is where the new
+    session's conversation context starts. Memory notes are kept.
+    """
+    for agent_id in agent_ids:
+        if await db.get(AgentRoomMemory, (agent_id, room_id)) is None:
+            try:
+                async with db.begin_nested():
+                    db.add(AgentRoomMemory(agent_id=agent_id, room_id=room_id))
+                    await db.flush()
+            except IntegrityError:
+                pass
+        await db.execute(update(AgentRoomMemory).where(
+            AgentRoomMemory.agent_id == agent_id,
+            AgentRoomMemory.room_id == room_id,
+        ).values(
+            revision=AgentRoomMemory.revision + 1,
+            session_epoch=AgentRoomMemory.session_epoch + 1,
+            session_reset_seq=reset_seq,
+            updated_at=datetime.now(UTC),
+        ).execution_options(synchronize_session=False))
+
+
 async def _push_room_memory(app, db: AsyncSession, *, agent_id: str, room_id: str, machine_snapshot: bool) -> None:
     """After commit, update the placed daemon and only this agent's room socket."""
     try:

@@ -36,6 +36,9 @@ vi.mock('@/lib/roomFiles', async importOriginal => ({
   uploadRoomFile,
 }))
 
+const apiFetch = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/api', () => ({ apiFetch }))
+
 const uploadRoomArtifact = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/roomArtifacts', async importOriginal => ({
   ...(await importOriginal<typeof import('@/lib/roomArtifacts')>()),
@@ -465,5 +468,46 @@ describe('MessageInput slash commands (#940)', () => {
     fireEvent.change(input, { target: { value: '/goal faster parser', selectionStart: 19 } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledWith('/goal faster parser', undefined)
+  })
+})
+
+describe('MessageInput /clear (#986)', () => {
+  const placeholder = 'Type a message... (@ to mention, # for rooms)'
+  const submit = (value: string) => {
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value, selectionStart: value.length } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    return input
+  }
+
+  it('[COL-13] is offered even where no form can open', () => {
+    render(<MessageInput onSend={vi.fn()} onTyping={vi.fn()} roomId="room-1" />)
+    const input = screen.getByPlaceholderText(placeholder)
+    fireEvent.change(input, { target: { value: '/cl', selectionStart: 3 } })
+    expect(screen.getByText('/clear [@agent]')).toBeInTheDocument()
+  })
+
+  it('[COL-13] asks the server to clear the mentioned agent instead of sending a message', async () => {
+    apiFetch.mockResolvedValue(new Response('{}', { status: 200 }))
+    const onSend = vi.fn()
+    render(<MessageInput onSend={onSend} onTyping={vi.fn()} roomId="room-1" onSlashForm={vi.fn(() => null)} />)
+    const input = submit('/clear <@user:p1>')
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/rooms/room-1/session-reset', {
+      method: 'POST', body: JSON.stringify({ agent_participant_id: 'p1' }),
+    })
+    expect(onSend).not.toHaveBeenCalled()
+    expect(input).toHaveValue('')
+  })
+
+  it('[COL-13] says who may clear when the server refuses', async () => {
+    apiFetch.mockResolvedValue(new Response('{}', { status: 403 }))
+    render(<MessageInput onSend={vi.fn()} onTyping={vi.fn()} roomId="room-1" />)
+    submit('/clear ')
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/rooms/room-1/session-reset', { method: 'POST', body: '{}' })
+    await waitFor(() =>
+      expect(screen.getByTestId('slash-error')).toHaveTextContent('Only a room admin or owner can clear sessions.'),
+    )
   })
 })

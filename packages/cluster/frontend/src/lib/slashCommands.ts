@@ -3,7 +3,8 @@
  *
  * Tiny dispatch layer for in-input commands like ``/task @bot title``.
  * ``/task`` creates a task directly; ``/routine`` and ``/goal`` (#940)
- * open the matching form pre-filled. The framework stays small: adding
+ * open the matching form pre-filled; ``/clear`` (#986) starts the agents'
+ * engine sessions in the room over. The framework stays small: adding
  * a command is a parser plus one ``SLASH_COMMANDS`` entry.
  *
  * Parsers return a discriminated union (`{ ok: true, payload }` or
@@ -86,10 +87,26 @@ export function parseGoalCommand(body: string): ParseResult<GoalCommandPayload> 
   return { ok: true, payload: { text: stripUserMentions(body) } }
 }
 
+/** Payload of ``/clear`` (#986): one agent, or every agent when null. */
+export interface ClearCommandPayload {
+  agent_pid: string | null
+}
+
+/** Parse the ``/clear`` body: an optional agent mention, nothing else. */
+export function parseClearCommand(body: string): ParseResult<ClearCommandPayload> {
+  const mentions = body.match(ALL_USER_MENTIONS_RE) ?? []
+  if (mentions.length > 1 || stripUserMentions(body)) {
+    return { ok: false, error: '/clear는 에이전트를 하나만 지정하거나 아무것도 쓰지 않습니다.' }
+  }
+  const match = body.match(ID_MENTION_RE)
+  return { ok: true, payload: { agent_pid: match ? match[1] : null } }
+}
+
 export type SlashDispatch =
   | { command: 'task'; parsed: ParseResult<TaskCommandPayload> }
   | { command: 'routine'; parsed: ParseResult<RoutineCommandPayload> }
   | { command: 'goal'; parsed: ParseResult<GoalCommandPayload> }
+  | { command: 'clear'; parsed: ParseResult<ClearCommandPayload> }
 
 export type SlashCommandName = SlashDispatch['command']
 
@@ -103,13 +120,14 @@ export interface SlashCommandInfo {
   /** What to type, shown in the suggestion list. */
   usage: string
   /** i18n key of the one-line description. */
-  descriptionKey: 'chat.slash.task' | 'chat.slash.routine' | 'chat.slash.goal'
+  descriptionKey: 'chat.slash.task' | 'chat.slash.routine' | 'chat.slash.goal' | 'chat.slash.clear'
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: 'task', usage: '/task @agent title', descriptionKey: 'chat.slash.task' },
   { name: 'routine', usage: '/routine @agent description', descriptionKey: 'chat.slash.routine' },
   { name: 'goal', usage: '/goal description', descriptionKey: 'chat.slash.goal' },
+  { name: 'clear', usage: '/clear [@agent]', descriptionKey: 'chat.slash.clear' },
 ]
 
 /** Commands to suggest while the user is still typing the command word
@@ -136,6 +154,7 @@ export function parseSlashCommand(input: string): SlashDispatch | null {
     case 'task': return { command: 'task', parsed: parseTaskCommand(body) }
     case 'routine': return { command: 'routine', parsed: parseRoutineCommand(body) }
     case 'goal': return { command: 'goal', parsed: parseGoalCommand(body) }
+    case 'clear': return { command: 'clear', parsed: parseClearCommand(body) }
     default: return null
   }
 }

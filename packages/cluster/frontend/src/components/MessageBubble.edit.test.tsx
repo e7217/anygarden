@@ -123,3 +123,26 @@ describe('MessageBubble edit/delete', () => {
     expect(screen.getByText('This message was deleted')).toBeInTheDocument()
   })
 })
+
+describe('MessageBubble session reset notice (#986)', () => {
+  it('[COL-13] renders a /clear notice as a divider naming who cleared which agents', () => {
+    render(
+      <MessageBubble
+        message={msg({
+          participant_id: null as unknown as string,
+          content: 'Owner cleared the conversation session of dev, pm. Room memory is kept.',
+          metadata: {
+            system_origin: 'session_reset',
+            session_reset: { actor_name: 'Owner', agents: [{ name: 'dev' }, { name: 'pm' }] },
+          },
+        })}
+        participants={participants}
+        isMine={false}
+      />,
+    )
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Owner cleared the conversation session of dev, pm. Room memory is kept.',
+    )
+    expect(screen.queryByText('(left the room)')).toBeNull()
+  })
+})
