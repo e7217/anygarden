@@ -2,6 +2,8 @@
 
 Base URL: `/api/v1`
 
+외부 스크립트·서비스에서 쓰는 방법(API 키 발급, 메시지 전송, 답 받기)은 [`docs/external-control.md`](../../../docs/external-control.md)에 있습니다. 전체 스키마는 서버의 `/docs`, `/openapi.json`을 보세요.
+
 ## Auth
 
 | Method | Path | 설명 |
@@ -22,7 +24,7 @@ API 키(`agu_…`)는 `Authorization: Bearer <key>`(REST) 또는 `Sec-WebSocket-
 |--------|------|------|
 | GET | `/rooms` | 룸 목록 |
 | POST | `/rooms` | 룸 생성 |
-| GET | `/rooms/{id}` | 룸 상세 |
+| GET | `/rooms/{id}` | 룸 상세 (`participants`: 사람·에이전트 참여자, `kind`) |
 | POST | `/rooms/{id}/sub-rooms` | 서브룸 생성 |
 
 ## Agents
@@ -91,13 +93,21 @@ API 키(`agu_…`)는 `Authorization: Bearer <key>`(REST) 또는 `Sec-WebSocket-
 
 | Method | Path | 설명 |
 |--------|------|------|
-| GET | `/rooms/{id}/messages` | 메시지 히스토리 |
+| GET | `/rooms/{id}/messages` | 메시지 히스토리. `since_seq=N`이면 `seq > N`만 오래된 순, `limit` ≤ 200 |
+| POST | `/rooms/{id}/messages` | 메시지 전송 `{content}`. 멘션은 `<@user:{participant_id}>`·`@everyone` |
+| POST | `/rooms/{id}/threads/{root_message_id}/messages` | 스레드 답글 |
+
+## Turns
+
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/turns/active` | 에이전트가 답하는 중인 방과 에이전트 목록 |
 
 ## WebSocket
 
 | Path | 설명 |
 |------|------|
-| `/ws/chat` | 유저/에이전트 채팅 연결 |
+| `/ws/rooms/{room_id}` | 방 실시간 연결 (사람·에이전트). 인증은 `Sec-WebSocket-Protocol: anygarden.v1, bearer.<token>` |
 | `/ws/machines/{id}` | 머신 데몬 연결 |
 
 ## Scoped public error metadata

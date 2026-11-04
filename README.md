@@ -58,6 +58,7 @@ Stop with `anygarden stop`. Data is kept in `~/.anygarden`.
 - [Local node details](docs/runbook/local-node.md) · [Model endpoints](docs/runbook/direct-model-endpoints.md)
 - [Goals: improve a metric in a loop](docs/campaigns.md) (Korean)
 - [Manage the workspace from chat](docs/workspace-tools.md) (Korean)
+- [Control Anygarden from scripts with an API key](docs/external-control.md) (Korean)
 - [Contributing](CONTRIBUTING.md)
 
 ## License
