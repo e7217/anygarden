@@ -16,9 +16,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from anygarden.mcp.auth import resolve_agent_id
+from anygarden.mcp.jsonrpc import PROTOCOL_VERSION, read_call, tool_call_params
+from anygarden.mcp.jsonrpc import jsonrpc_error as _jsonrpc_error
+from anygarden.mcp.jsonrpc import jsonrpc_ok as _jsonrpc_ok
 from anygarden.mcp.tools import (
     TOOL_SCHEMAS,
     add_task_blocker,
@@ -35,20 +38,7 @@ from anygarden.mcp.tools import (
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
 
-PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "anygarden-skills", "version": "0.1.0"}
-
-
-def _jsonrpc_error(req_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {
-        "jsonrpc": "2.0",
-        "id": req_id,
-        "error": {"code": code, "message": message},
-    }
-
-
-def _jsonrpc_ok(req_id: Any, result: dict[str, Any]) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
 @router.post("/rpc", response_model=None)
@@ -74,32 +64,10 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
     config = request.app.state.config
     auth_header = request.headers.get("authorization")
 
-    # Parse body early so we can echo id on error responses.
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Malformed JSON body",
-        )
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Expected JSON object",
-        )
-    req_id = payload.get("id")
-    method = payload.get("method")
-
-    # JSON-RPC notifications carry no ``id`` and MUST NOT receive a
-    # response body. Ack them with 202 + empty body so a strict MCP
-    # Streamable HTTP client (codex/rmcp) completes its handshake
-    # instead of aborting on an unexpected ``-32601`` response (#352).
-    # Notifications are fire-and-forget and trigger no handler, so the
-    # ack is unconditional (no auth/session work needed).
-    if req_id is None or (
-        isinstance(method, str) and method.startswith("notifications/")
-    ):
-        return Response(status_code=status.HTTP_202_ACCEPTED)
+    call = await read_call(request)
+    if isinstance(call, Response):
+        return call
+    req_id, method, payload = call
 
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
@@ -144,17 +112,10 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
 
     # ── tools/call ──────────────────────────────────────────────
     if method == "tools/call":
-        params = payload.get("params") or {}
-        if not isinstance(params, dict):
-            return _jsonrpc_error(req_id, -32602, "params must be an object")
-        name = params.get("name")
-        arguments = params.get("arguments") or {}
-        if not isinstance(name, str):
-            return _jsonrpc_error(req_id, -32602, "params.name is required")
-        if not isinstance(arguments, dict):
-            return _jsonrpc_error(
-                req_id, -32602, "params.arguments must be an object"
-            )
+        parsed = tool_call_params(req_id, payload)
+        if isinstance(parsed, dict):
+            return parsed
+        name, arguments = parsed
         from anygarden.mcp.project_tools import PROJECT_TOOL_NAMES, call_project_tool
 
         if name in PROJECT_TOOL_NAMES:

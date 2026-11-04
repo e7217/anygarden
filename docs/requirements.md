@@ -35,6 +35,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | AUTH-13 | 회수·만료된 키는 401. 키 원문은 발급 응답에만 나온다 | pytest |
 | AUTH-14 | API 키로는 키를 발급·조회·회수할 수 없고, 다른 사람의 키는 회수할 수 없다 | pytest |
 | AUTH-15 | 잘못된 키를 반복하면 429로 제한된다 | pytest |
+| AUTH-16 | 사용자 MCP 엔드포인트 `/mcp/user`는 개인 API 키로만 인증되고(에이전트 토큰·세션은 403, 개인 키는 `/mcp/rpc`에서 403) 도구 호출은 그 키의 REST 권한을 그대로 따른다 | pytest |
 
 ## 프로젝트·룸 (ROOM)
 
