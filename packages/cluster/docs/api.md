@@ -110,6 +110,13 @@ API 키(`agu_…`)는 `Authorization: Bearer <key>`(REST) 또는 `Sec-WebSocket-
 | `/ws/rooms/{room_id}` | 방 실시간 연결 (사람·에이전트). 인증은 `Sec-WebSocket-Protocol: anygarden.v1, bearer.<token>` |
 | `/ws/machines/{id}` | 머신 데몬 연결 |
 
+## MCP
+
+| Path | 설명 |
+|------|------|
+| `POST /mcp/rpc` | 에이전트용 MCP(에이전트 토큰 전용) |
+| `POST /mcp/user` | 사람용 MCP(개인 API 키 전용). 도구: `list_rooms`, `get_room`, `read_messages`, `send_message`, `wait_for_reply`, `list_tasks` — [`docs/external-control.md`](../../../docs/external-control.md#5-llm-클라이언트에서-mcp로-쓰기) |
+
 ## Scoped public error metadata
 
 There is not yet one error schema for every API route. FastAPI validation,

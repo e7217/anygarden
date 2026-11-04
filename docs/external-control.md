@@ -2,7 +2,7 @@
 
 스크립트, CI, 다른 서비스에서 Anygarden 방에 메시지를 보내고 에이전트 답을 받는 방법입니다. 브라우저 로그인 대신 **개인 API 키**로 인증하고, 웹 화면과 같은 REST API·WebSocket을 그대로 씁니다. 키는 발급한 사람의 권한으로 동작하므로, 키로 보낸 메시지는 웹에서 그 사람이 보낸 메시지와 똑같이 처리됩니다(멘션, 에이전트 응답, 알림).
 
-LLM 클라이언트(Claude Code 등)에서 도구로 쓰려면 같은 키로 사용자용 MCP 엔드포인트를 연결할 수 있습니다(#990).
+LLM 클라이언트(Claude Code 등)에서 도구로 쓰려면 같은 키로 사용자용 MCP 엔드포인트 `/mcp/user`를 연결합니다([5. LLM 클라이언트에서 MCP로 쓰기](#5-llm-클라이언트에서-mcp로-쓰기)).
 
 ## 1. API 키 발급
 
@@ -112,7 +112,32 @@ uv run python examples/external_control.py rooms
 uv run python examples/external_control.py ask "$ROOM_ID" "<@user:$AGENT_PARTICIPANT_ID> 오늘 바뀐 내용 정리해줘"
 ```
 
-## 5. 운영 주의
+## 5. LLM 클라이언트에서 MCP로 쓰기
+
+`POST /mcp/user`는 같은 API 키로 인증하는 MCP 서버입니다(Streamable HTTP, 도구 전용). 에이전트용 `/mcp/rpc`와는 별개라서, 에이전트 토큰은 여기서, 개인 키는 `/mcp/rpc`에서 `403`으로 거절됩니다.
+
+Claude Code에 연결:
+
+```bash
+claude mcp add --transport http anygarden "$ANYGARDEN_URL/mcp/user" \
+  --header "Authorization: Bearer $ANYGARDEN_API_KEY"
+```
+
+다른 MCP 클라이언트도 URL `…/mcp/user`와 같은 `Authorization` 헤더를 설정하면 됩니다.
+
+| 도구 | 하는 일 |
+|---|---|
+| `list_rooms` | 볼 수 있는 방 목록 |
+| `get_room` | 방 정보와 참여자(에이전트는 `kind: "agent"`) |
+| `read_messages` | 메시지 읽기(`since_seq`, `limit`) |
+| `send_message` | 내 이름으로 메시지 전송(멘션 `<@user:{참여자 id}>`, 스레드 `thread_root_id`). 응답의 `seq`를 `wait_for_reply`에 넘깁니다 |
+| `wait_for_reply` | `after_seq` 이후 에이전트 답을 기다려 반환(기본 60초, 최대 120초). 오지 않으면 에이전트가 아직 일하는 중인지(`agent_working`) 알려 주므로 다시 호출해 이어서 기다립니다 |
+| `list_tasks` | 방의 작업 목록(`status`로 거르기) |
+
+- 도구는 서버 안에서 위의 REST API를 같은 키로 호출합니다. 그래서 권한·scope·멘션 처리가 REST와 똑같습니다. 읽기 전용 키로 `send_message`를 부르면 도구 오류(`403 … write scope`)가 납니다.
+- 대화형 클라이언트에 줄 키는 용도를 좁혀 두세요. 보기만 할 거라면 읽기 전용 키로 충분합니다.
+
+## 6. 운영 주의
 
 - 키는 비밀번호처럼 다루세요. 저장소에 커밋하지 말고, 노출되면 즉시 회수합니다. `agu_` 접두어는 시크릿 스캐너가 찾기 쉽게 고정되어 있습니다.
 - 용도마다 키를 따로 만들면, 하나를 회수해도 다른 연동이 멈추지 않습니다. 목록의 **마지막 사용** 시각으로 안 쓰는 키를 찾아 정리하세요.

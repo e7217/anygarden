@@ -52,6 +52,7 @@ from anygarden.db.fts import backfill_message_fts, create_message_fts
 from anygarden.db.models import Base
 from anygarden.machine.safefs import secure_chmod
 from anygarden.mcp import router as mcp_rpc_router
+from anygarden.mcp.user_router import router as mcp_user_router
 from anygarden.memory.router import router as room_memory_router
 from anygarden.messages.router import router as messages_router
 from anygarden.observability.logging import configure_logging
@@ -1960,6 +1961,7 @@ def create_app(
     app.include_router(skills_api_router)
     app.include_router(mcp_templates_router)
     app.include_router(mcp_rpc_router)
+    app.include_router(mcp_user_router)
     app.include_router(auth_router)
     app.include_router(api_keys_router)
     app.include_router(projects_router)
