@@ -1920,7 +1920,20 @@ def create_app(
     if config is None:
         config = AnygardenSettings()
 
-    app = FastAPI(title="Anygarden", version="0.2.0", lifespan=lifespan)
+    from anygarden import __version__
+
+    # #989 — /docs and /openapi.json are the reference for external clients
+    # (docs/external-control.md), so report the real package version.
+    app = FastAPI(
+        title="Anygarden",
+        version=__version__,
+        description=(
+            "Anygarden REST API. Authenticate with a personal API key "
+            "(`Authorization: Bearer agu_…`) or a session token. "
+            "See docs/external-control.md."
+        ),
+        lifespan=lifespan,
+    )
     app.add_exception_handler(PublicAPIError, public_api_error_handler)
     app.state.config = config
     app.include_router(ws_router)

@@ -56,6 +56,7 @@ anygarden start
 - [로컬 노드 상세](docs/runbook/local-node.md) · [모델 엔드포인트](docs/runbook/direct-model-endpoints.md) (영어)
 - [목표: 지표를 정해 두고 계속 개선하기](docs/campaigns.md)
 - [대화로 워크스페이스 관리하기](docs/workspace-tools.md)
+- [API 키로 스크립트에서 제어하기](docs/external-control.md)
 - [기여하기](CONTRIBUTING.md) (영어)
 
 ## 라이선스
