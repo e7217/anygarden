@@ -48,6 +48,7 @@ class TestCatalog:
 
     def test_is_valid_model(self) -> None:
         assert is_valid_model("codex-cli", "gpt-6.1-sol") is True
+        assert is_valid_model("codex-cli", "gpt-6.1-terra") is True
         assert is_valid_model("codex-cli", "gpt-6-sol") is True
         assert is_valid_model("codex-cli", "nonexistent") is False
         assert is_valid_model("unknown-engine", "gpt-6-sol") is False
@@ -83,12 +84,14 @@ class TestCatalog:
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6-astra") is True
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6-sol") is True
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6.1-sol") is True
+        assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6.1-terra") is True
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6-luna") is False
         assert is_valid_reasoning_effort("codex-cli", "max", model="gpt-6-luna") is True
         # The backend rejects ``minimal`` for every catalog model.
         for model in (
             "gpt-6.1-sol",
             "gpt-6-astra",
+            "gpt-6.1-terra",
             "gpt-6-sol",
             "gpt-6-luna",
             "gpt-5.6-sol",
@@ -207,9 +210,10 @@ class TestEngineModelsEndpoint:
         assert data["engine"] == "codex-cli"
         assert data["default_model"] == "gpt-6.1-sol"
         model_ids = [m["id"] for m in data["models"]]
-        assert model_ids[:4] == [
+        assert model_ids[:5] == [
             "gpt-6.1-sol",
             "gpt-6-astra",
+            "gpt-6.1-terra",
             "gpt-6-sol",
             "gpt-6-luna",
         ]
@@ -270,6 +274,8 @@ class TestEngineModelsEndpoint:
         assert "ultra" in by_id["gpt-6-sol"]
         assert "ultra" in by_id["gpt-6.1-sol"]
         assert "minimal" not in by_id["gpt-6.1-sol"]
+        assert "ultra" in by_id["gpt-6.1-terra"]
+        assert "minimal" not in by_id["gpt-6.1-terra"]
         assert "ultra" not in by_id["gpt-6-luna"]
         assert "minimal" not in by_id["gpt-6-sol"]
         assert "ultra" in data["reasoning_levels"]

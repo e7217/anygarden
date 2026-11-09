@@ -105,6 +105,13 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # Live-verified (low and ultra) against codex 0.159.0 on 2026-09-30 and
     # made the default. gpt-6-sol stays for agents already pinned to it.
     #
+    # GPT-6.1 terra appeared in codex 0.164.0's list (2026-11-09) with the
+    # same reasoning levels as sol. Live-verified (low and ultra; minimal
+    # rejected) against codex 0.164.0 on 2026-11-09 (#996). The backend also
+    # accepts ``none`` for it, but codex does not list that level, so the
+    # catalog keeps codex's list. Codex describes terra only generically, so
+    # gpt-6.1-sol stays the default.
+    #
     # The same 2026-09-30 check realigned the older models with codex's own
     # lists: the backend now rejects ``minimal`` for every model (gpt-5.5
     # answers "Supported values are: none, low, medium, high, xhigh"), and
@@ -128,6 +135,11 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             EngineModel(
                 id="gpt-6-astra",
                 label="GPT-6 Astra",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
+            ),
+            EngineModel(
+                id="gpt-6.1-terra",
+                label="GPT-6.1 Terra",
                 reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
             ),
             EngineModel(

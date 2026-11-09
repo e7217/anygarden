@@ -4,6 +4,9 @@
 
 ### Added
 
+- The codex-cli engine offers `gpt-6.1-terra` (#996), which codex 0.164.0
+  added to its model list. It was checked against a live `codex exec` call;
+  the default model stays `gpt-6.1-sol`.
 - A node started with `anygarden start` can update itself from the web UI
   (#927). **Admin → Machines → This server** offers **Update to X and
   restart** once *Check for updates* finds a newer release: the node installs
