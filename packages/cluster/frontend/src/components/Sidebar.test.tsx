@@ -49,6 +49,7 @@ const roomsMockState = vi.hoisted(() => ({
   fetchAgentDMs: vi.fn(),
   pinRoom: vi.fn(),
   reorderPinnedRooms: vi.fn(),
+  reorderProjects: vi.fn(),
   createAgentDM: vi.fn(),
   setRoomEphemeral: vi.fn(),
   markRoomRead: vi.fn(),
@@ -115,6 +116,7 @@ vi.mock('@/hooks/useRooms', () => ({
     fetchAgentDMs: roomsMockState.fetchAgentDMs,
     pinRoom: roomsMockState.pinRoom,
     reorderPinnedRooms: roomsMockState.reorderPinnedRooms,
+    reorderProjects: roomsMockState.reorderProjects,
     createAgentDM: roomsMockState.createAgentDM,
     setRoomEphemeral: roomsMockState.setRoomEphemeral,
     markRoomRead: roomsMockState.markRoomRead,
@@ -180,6 +182,8 @@ beforeEach(() => {
   roomsMockState.fetchAgentDMs.mockReset()
   roomsMockState.pinRoom.mockReset()
   roomsMockState.reorderPinnedRooms.mockReset()
+  roomsMockState.reorderProjects.mockReset()
+  roomsMockState.reorderProjects.mockResolvedValue(undefined)
   roomsMockState.createAgentDM.mockReset()
   roomsMockState.setRoomEphemeral.mockReset()
   roomsMockState.markRoomRead.mockReset()
@@ -434,7 +438,7 @@ describe('Sidebar — agent actions requested from chat', () => {
 })
 
 describe('Sidebar — project delete permission (#783)', () => {
-  it('shows the project menu only for projects the caller may delete', () => {
+  it('offers delete only for projects the caller may delete', () => {
     roomsMockState.projects = [
       { id: 'mine', name: 'Mine', can_delete: true },
       { id: 'shared', name: 'Shared', can_delete: false },
@@ -442,8 +446,67 @@ describe('Sidebar — project delete permission (#783)', () => {
 
     renderSidebar()
 
-    expect(screen.getByTestId('sidebar-project-menu-mine')).toBeInTheDocument()
-    expect(screen.queryByTestId('sidebar-project-menu-shared')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('sidebar-project-menu-mine'))
+    expect(screen.getByTestId('sidebar-project-menu-delete-mine')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    fireEvent.click(screen.getByTestId('sidebar-project-menu-shared'))
+    expect(screen.queryByTestId('sidebar-project-menu-delete-shared')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — project order (#995)', () => {
+  beforeEach(() => {
+    roomsMockState.projects = [
+      { id: 'p0', name: 'Zero', can_delete: true },
+      { id: 'p1', name: 'One', can_delete: false },
+      { id: 'p2', name: 'Two', can_delete: false },
+    ]
+  })
+
+  it('[ROOM-14] gives every project a drag handle named after it', () => {
+    renderSidebar()
+
+    for (const name of ['Zero', 'One', 'Two']) {
+      expect(screen.getByRole('button', { name: `Reorder ${name}` })).toBeInTheDocument()
+    }
+  })
+
+  it('[ROOM-14] moves a project down from its menu', () => {
+    renderSidebar()
+
+    fireEvent.click(screen.getByTestId('sidebar-project-menu-p0'))
+    fireEvent.click(screen.getByRole('button', { name: 'Move down' }))
+
+    expect(roomsMockState.reorderProjects).toHaveBeenCalledWith(['p1', 'p0', 'p2'])
+  })
+
+  it('[ROOM-14] moves a project up from its menu, even without delete rights', () => {
+    renderSidebar()
+
+    fireEvent.click(screen.getByTestId('sidebar-project-menu-p2'))
+    fireEvent.click(screen.getByRole('button', { name: 'Move up' }))
+
+    expect(roomsMockState.reorderProjects).toHaveBeenCalledWith(['p0', 'p2', 'p1'])
+  })
+
+  it('disables moves past either end of the list', () => {
+    renderSidebar()
+
+    fireEvent.click(screen.getByTestId('sidebar-project-menu-p0'))
+    expect(screen.getByRole('button', { name: 'Move up' })).toBeDisabled()
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    fireEvent.click(screen.getByTestId('sidebar-project-menu-p2'))
+    expect(screen.getByRole('button', { name: 'Move down' })).toBeDisabled()
+  })
+
+  it('has no move actions when there is a single project', () => {
+    roomsMockState.projects = [{ id: 'p0', name: 'Zero', can_delete: false }]
+    renderSidebar()
+
+    expect(screen.queryByTestId('sidebar-project-menu-p0')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reorder Zero' })).not.toBeInTheDocument()
   })
 })
 

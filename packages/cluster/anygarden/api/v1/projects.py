@@ -6,13 +6,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
-from anygarden.db.models import Participant, Project, Room
+from anygarden.db.models import Participant, Project, Room, UserProjectOrder
 from anygarden.dependencies import forbid_guest, get_db
 from anygarden.rooms.authorization import is_global_admin
+from anygarden.rooms.service import PIN_ORDER_STEP
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -35,6 +36,15 @@ class ProjectOut(BaseModel):
     created_by: Optional[str] = None
     # #783 — lets the UI hide actions the caller is not allowed to take.
     can_delete: bool = False
+
+
+class ProjectOrderBody(BaseModel):
+    # Full snapshot of the caller's sidebar order (#995).
+    project_ids: list[str] = Field(max_length=1000)
+
+
+class ProjectOrderOut(BaseModel):
+    project_ids: list[str]
 
 
 # ── Access rules (#783) ──────────────────────────────────────────────
@@ -75,6 +85,49 @@ def _out(project: Project, identity: Identity) -> ProjectOut:
     )
 
 
+async def _visible_projects(db: AsyncSession, identity: Identity) -> list[Project]:
+    """Projects *identity* may see, in the caller's sidebar order (#995)."""
+    stmt = select(Project).outerjoin(
+        UserProjectOrder,
+        (UserProjectOrder.project_id == Project.id)
+        & (UserProjectOrder.user_id == identity.id),
+    )
+    if not is_global_admin(identity):
+        stmt = stmt.where(
+            or_(
+                Project.created_by == identity.id,
+                Project.id.in_(_member_project_ids(identity)),
+            )
+        )
+    stmt = stmt.order_by(
+        case((UserProjectOrder.sort_order.is_(None), 1), else_=0),
+        UserProjectOrder.sort_order,
+        Project.created_at,
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def _send_order_to_user(
+    request: Request, db: AsyncSession, *, user_id: str, project_ids: list[str]
+) -> None:
+    """Push the new order to every live WS session of *user_id*.
+
+    Same fan-out as the pinned-room order: the connection manager is
+    keyed by participant id, so resolve the user's participant rows.
+    """
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is None:
+        return
+    from anygarden.ws.protocol import ProjectOrderChangedOut
+
+    frame = ProjectOrderChangedOut(user_id=user_id, project_ids=project_ids)
+    participant_ids = (
+        await db.execute(select(Participant.id).where(Participant.user_id == user_id))
+    ).scalars().all()
+    for pid in participant_ids:
+        await manager.send_to(pid, frame)
+
+
 # ── Endpoints ────────────────────────────────────────────────────────
 
 
@@ -107,17 +160,53 @@ async def list_projects(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """List the projects the caller may see (see access rules above)."""
-    stmt = select(Project).order_by(Project.created_at)
-    if not is_global_admin(identity):
-        stmt = stmt.where(
-            or_(
-                Project.created_by == identity.id,
-                Project.id.in_(_member_project_ids(identity)),
+    """List the projects the caller may see (see access rules above).
+
+    Projects the caller has placed (#995) come first in their order;
+    the rest follow by creation time.
+    """
+    return [_out(p, identity) for p in await _visible_projects(db, identity)]
+
+
+@router.put("/order", response_model=ProjectOrderOut)
+async def set_project_order(
+    body: ProjectOrderBody,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rewrite the caller's sidebar project order from a full snapshot (#995).
+
+    Ids the caller cannot see are dropped silently so the call does not
+    reveal whether a project exists. Saved positions of projects missing
+    from the snapshot are kept, so a partial payload never loses order.
+    """
+    if identity.kind != "user":
+        raise HTTPException(status_code=403, detail="Only users can reorder projects")
+    visible = {p.id for p in await _visible_projects(db, identity)}
+    existing = {
+        row.project_id: row
+        for row in (
+            await db.execute(
+                select(UserProjectOrder).where(UserProjectOrder.user_id == identity.id)
             )
-        )
-    result = await db.execute(stmt)
-    return [_out(p, identity) for p in result.scalars().all()]
+        ).scalars().all()
+    }
+    position = 0
+    for project_id in dict.fromkeys(body.project_ids):
+        if project_id not in visible:
+            continue
+        position += 1
+        row = existing.get(project_id)
+        if row is None:
+            row = UserProjectOrder(user_id=identity.id, project_id=project_id)
+            db.add(row)
+        row.sort_order = position * PIN_ORDER_STEP
+    await db.commit()
+
+    order = [p.id for p in await _visible_projects(db, identity)]
+    await _send_order_to_user(request, db, user_id=identity.id, project_ids=order)
+    return ProjectOrderOut(project_ids=order)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

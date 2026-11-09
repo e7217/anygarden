@@ -116,6 +116,9 @@ interface RoomsContextValue {
   /** Overwrite the pinned section order with a full snapshot (#47).
    *  Optimistic with rollback on failure. */
   reorderPinnedRooms: (roomIds: string[]) => Promise<void>;
+  /** Save the caller's sidebar project order from a full snapshot
+   *  (#995). Optimistic with rollback on failure. */
+  reorderProjects: (projectIds: string[]) => Promise<void>;
   /** #237 — create a new DM room bound to ``agentId``. Returns the
    *  new room so callers can navigate to it. */
   createAgentDM: (agentId: string, name?: string) => Promise<Room>;
@@ -146,6 +149,16 @@ const RoomsContext = createContext<RoomsContextValue | null>(null);
  * ``App.tsx`` and keep consumer components calling ``useRooms()``
  * — the call site stays identical.
  */
+/** Put *projects* in *order*; projects missing from it keep their
+ *  relative place after the listed ones. */
+function orderProjects(projects: Project[], order: string[]): Project[] {
+  const rank = new Map(order.map((id, i) => [id, i]));
+  return projects
+    .map((p, i) => ({ p, key: rank.get(p.id) ?? order.length + i }))
+    .sort((a, b) => a.key - b.key)
+    .map(({ p }) => p);
+}
+
 export function RoomsProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [rooms, setRooms] = useState<Record<string, Room[]>>({});
@@ -448,6 +461,26 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     }
   }, [rooms]);
 
+  // ---- Project order (#995) --------------------------------
+  //
+  // Same shape as the pinned-room order: reorder locally, PUT the
+  // full snapshot, roll back on failure. Other sessions of the user
+  // converge through ``project_order_changed``.
+  const reorderProjects = useCallback(async (projectIds: string[]) => {
+    const previous = projects;
+    setProjects(prev => orderProjects(prev, projectIds));
+    try {
+      const resp = await apiFetch('/api/v1/projects/order', {
+        method: 'PUT',
+        body: JSON.stringify({ project_ids: projectIds }),
+      });
+      if (!resp.ok) throw new Error(`PUT /projects/order → ${resp.status}`);
+    } catch (e) {
+      setProjects(previous);
+      throw e;
+    }
+  }, [projects]);
+
   // ---- #237 helpers ----------------------------------------
   //
   // ``createAgentDM`` mirrors ``createRoom`` but hits the
@@ -548,9 +581,17 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   // boot doubles up briefly (refetch + this cascade both fire
   // once) but that's a tiny bandwidth cost for the correctness
   // guarantee.
+  //
+  // Keyed on the set of project ids, not the array, so reordering
+  // projects (#995) does not refetch every project's rooms.
+  const projectIdsKey = useMemo(
+    () => projects.map(p => p.id).sort().join('\n'),
+    [projects],
+  );
   useEffect(() => {
-    projects.forEach(p => { void fetchRooms(p.id); });
-  }, [projects, fetchRooms]);
+    if (!projectIdsKey) return;
+    projectIdsKey.split('\n').forEach(id => { void fetchRooms(id); });
+  }, [projectIdsKey, fetchRooms]);
 
   // #385 — keep sidebar update dots reasonably fresh even when the
   // current tab is idle: poll once a minute and refresh immediately
@@ -618,6 +659,18 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Project order saved in another session of the same user (#995).
+  // ``useWebSocket`` forwards ``project_order_changed`` with the full
+  // order, so apply it without a refetch.
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      const projectIds = (evt as CustomEvent<{ project_ids?: string[] }>).detail?.project_ids;
+      if (projectIds) setProjects(prev => orderProjects(prev, projectIds));
+    };
+    window.addEventListener('anygarden:projects:order', handler);
+    return () => window.removeEventListener('anygarden:projects:order', handler);
+  }, []);
+
   // #237 — server-pushed ``room_settings_changed`` frame updates
   // our cached ``ephemeral`` flag so a toggle in another tab
   // propagates without a refetch. Guard on ``None`` → "not touched"
@@ -665,10 +718,11 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     createSubRoom,
     pinRoom,
     reorderPinnedRooms,
+    reorderProjects,
     createAgentDM,
     setRoomEphemeral,
     markRoomRead,
-  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, deleteProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms, createAgentDM, setRoomEphemeral, markRoomRead]);
+  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, deleteProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms, reorderProjects, createAgentDM, setRoomEphemeral, markRoomRead]);
 
   // JSX is deliberately avoided here to keep this file a ``.ts``
   // (not ``.tsx``) so the import shape of existing callers stays

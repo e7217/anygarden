@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import SidebarMenuPopover from '@/components/SidebarMenuPopover'
-import { MoreHorizontal, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, MoreHorizontal, Trash2 } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
@@ -8,8 +8,10 @@ import { useLocale } from '@/i18n/LocaleProvider'
  *
  * Mirrors ``SidebarRoomMenu`` — see that file for the rationale on
  * keeping these narrow menus separate from ``RoomSettingsMenu``.
- * The project row's menu exposes only "Delete project"; rename is
- * not currently implemented (issue #77 is delete-only).
+ * The project row's menu moves the project up or down in the
+ * caller's own sidebar order (#995) and, for callers who may, deletes
+ * it. Rename is not currently implemented (issue #77 is delete-only).
+ * Each action is omitted when its handler is not passed.
  *
  * The parent project row uses the ``group`` / ``group-hover``
  * pattern so the trigger fades in on hover at md+. On mobile the
@@ -24,10 +26,17 @@ import { useLocale } from '@/i18n/LocaleProvider'
 
 export interface SidebarProjectMenuProps {
   projectId: string
-  onDelete: () => void
+  /** Omitted when the caller may not delete the project (#783). */
+  onDelete?: () => void
+  /** Omitted when there is nothing to reorder; null when the project
+   *  is already at that end of the list (#995). */
+  onMoveUp?: (() => void) | null
+  onMoveDown?: (() => void) | null
 }
 
-export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProjectMenuProps) {
+const itemClass = 'flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer disabled:cursor-not-allowed disabled:text-[var(--color-foreground-subtle)] disabled:hover:bg-transparent'
+
+export default function SidebarProjectMenu({ projectId, onDelete, onMoveUp, onMoveDown }: SidebarProjectMenuProps) {
   const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -75,17 +84,47 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
           width="narrow"
         >
           <ul className="py-1">
-            <li>
-              <button
-                type="button"
-                onClick={pick(onDelete)}
-                data-testid={`sidebar-project-menu-delete-${projectId}`}
-                className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
-              >
-                <Trash2 className="h-4 w-4" />
-                <span>{t('chat.deleteProject')}</span>
-              </button>
-            </li>
+            {onMoveUp !== undefined && (
+              <li>
+                <button
+                  type="button"
+                  disabled={onMoveUp === null}
+                  onClick={onMoveUp ? pick(onMoveUp) : undefined}
+                  data-testid={`sidebar-project-menu-up-${projectId}`}
+                  className={itemClass}
+                >
+                  <ArrowUp className="h-4 w-4" />
+                  <span>{t('chat.moveProjectUp')}</span>
+                </button>
+              </li>
+            )}
+            {onMoveDown !== undefined && (
+              <li>
+                <button
+                  type="button"
+                  disabled={onMoveDown === null}
+                  onClick={onMoveDown ? pick(onMoveDown) : undefined}
+                  data-testid={`sidebar-project-menu-down-${projectId}`}
+                  className={itemClass}
+                >
+                  <ArrowDown className="h-4 w-4" />
+                  <span>{t('chat.moveProjectDown')}</span>
+                </button>
+              </li>
+            )}
+            {onDelete && (
+              <li>
+                <button
+                  type="button"
+                  onClick={pick(onDelete)}
+                  data-testid={`sidebar-project-menu-delete-${projectId}`}
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>{t('chat.deleteProject')}</span>
+                </button>
+              </li>
+            )}
           </ul>
         </SidebarMenuPopover>
       )}

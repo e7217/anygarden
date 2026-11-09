@@ -382,6 +382,18 @@ class RoomPinOrderChangedOut(BaseModel):
     pinned_room_ids: list[str]
 
 
+class ProjectOrderChangedOut(BaseModel):
+    """Notify the caller's other sessions that their project order changed (#995).
+
+    Sent only to the sessions of ``user_id`` — the order is per-user.
+    ``project_ids`` is the caller's full visible project order.
+    """
+
+    type: Literal["project_order_changed"] = "project_order_changed"
+    user_id: str
+    project_ids: list[str]
+
+
 class TypingOut(BaseModel):
     type: Literal["typing"] = "typing"
     room_id: str
@@ -614,6 +626,7 @@ OutgoingFrame = (
     | RoomDeletedOut
     | RoomMembershipChangedOut
     | RoomPinOrderChangedOut
+    | ProjectOrderChangedOut
     | TypingOut
     | PresenceUpdateOut
     | WelcomeOut

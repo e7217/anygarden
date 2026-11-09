@@ -72,6 +72,28 @@ class Project(Base):
     )
 
 
+class UserProjectOrder(Base):
+    """A user's own position for a project in the sidebar (#995).
+
+    Per-user so one person's order never reshuffles anyone else's
+    sidebar. A project without a row has no saved position and is
+    listed after the ordered ones, by creation time. ``sort_order``
+    uses the same sparse spacing as pinned rooms (``PIN_ORDER_STEP``).
+    """
+
+    __tablename__ = "user_project_orders"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (PrimaryKeyConstraint("user_id", "project_id"),)
+
+
 class Room(Base):
     __tablename__ = "rooms"
     __table_args__ = (
