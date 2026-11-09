@@ -344,8 +344,11 @@ async def test_s2b_unpicked_cycle_is_swept_and_campaign_moves_on(env):
     # Closed at once by the sweeper hook (not by a later tick), CMP-11.
     assert (attempt.outcome, attempt.eval_status) == ("unknown", "skipped")
     assert attempt.closed_at is not None
-    assert (await env.campaign(cid)).next_cycle_at is not None
-    nxt = await env.tick(T0 + timedelta(minutes=12))
+    next_cycle_at = (await env.campaign(cid)).next_cycle_at
+    assert next_cycle_at is not None
+    # The sweeper hook closes on the real clock, which runs ahead of T0 once
+    # the suite has been going for a while (#999), so tick when it says.
+    nxt = await env.tick(max(T0 + timedelta(minutes=12), next_cycle_at))
     assert len(nxt) == 1 and nxt[0] != created[0]
     assert (await env.campaign(cid)).status == "active"
 
@@ -558,12 +561,17 @@ async def _completed_cycle(env, cid=None, *, now=T0) -> str:
 
 async def test_completed_run_requests_an_evaluation_with_a_persisted_job(env):
     cid = await env.create(pin_paths=["bench.py"])
+    before = datetime.now(UTC)
     cycle = await _completed_cycle(env, cid)
+    after = datetime.now(UTC)
     attempt = await env.attempt(cycle)
     assert attempt.eval_status == "pending" and attempt.eval_job_id == attempt.id
-    # Until the machine accepts the job only the outer pending bound applies
-    # (the terminal hook stamps the real clock, just before T0).
-    assert timedelta(hours=24) < attempt.eval_deadline_at - T0 < timedelta(hours=24, minutes=5)
+    # Until the machine accepts the job only the outer pending bound applies.
+    # The terminal hook stamps the real clock, not the test's T0, so measure
+    # from the real clock around it (T0 is fixed at import and drifts once
+    # the suite has run for a while under xdist, #999).
+    deadline = attempt.eval_deadline_at
+    assert before + timedelta(hours=24) < deadline < after + timedelta(hours=24, minutes=5)
     assert attempt.closed_at is None
     assert await env.dispatch(cycle, T0 + timedelta(minutes=11)) == "accepted"
     frame = env.bus.frames[-1]
@@ -917,12 +925,14 @@ async def test_the_tick_asks_again_for_a_running_eval_without_a_result(env):
 
 async def test_a_pending_eval_has_an_outer_deadline(env):
     cid = await env.create()
+    before = datetime.now(UTC)
     cycle = await _completed_cycle(env, cid)
+    after = datetime.now(UTC)
     env.bus.online.clear()
     attempt = await env.attempt(cycle)
     assert attempt.eval_status == "pending"
-    # Requested now (just before T0): 60s timeout + 120s grace + the 24h window.
-    assert timedelta(hours=24) < attempt.eval_deadline_at - T0 < timedelta(hours=24, minutes=5)
+    # Requested on the real clock: 60s timeout + 120s grace + the 24h window.
+    assert before + timedelta(hours=24) < attempt.eval_deadline_at < after + timedelta(hours=24, minutes=5)
     await env.scheduler(T0 + timedelta(hours=12)).reconcile()
     assert (await env.attempt(cycle)).closed_at is None
     await env.scheduler(T0 + timedelta(hours=25)).reconcile()
