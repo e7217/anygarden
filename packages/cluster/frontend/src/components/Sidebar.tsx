@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties, type ReactNode } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useSystemVersion, useUpdateStatus } from '@/hooks/useSystemVersion'
@@ -192,7 +192,7 @@ export default function Sidebar({
   }, [toggleCollapsed])
   const {
     projects, rooms, agentDMs, createProject, deleteProject, createRoom, fetchRooms,
-    pinRoom, reorderPinnedRooms,
+    pinRoom, reorderPinnedRooms, reorderProjects,
   } = useRooms()
   const navigate = useNavigate()
   const location = useLocation()
@@ -219,6 +219,16 @@ export default function Sidebar({
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
+
+  // #995 — the caller's own project order. Failures roll back inside
+  // ``reorderProjects``; tell the user the order was not kept.
+  const projectIds = useMemo(() => projects.map(p => p.id), [projects])
+  const canReorderProjects = projects.length > 1
+  const moveProject = (from: number, to: number) => {
+    reorderProjects(arrayMove(projectIds, from, to)).catch(() => {
+      notify({ message: t('chat.projectOrderFailed'), tone: 'error' })
+    })
+  }
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
     try {
@@ -583,62 +593,105 @@ export default function Sidebar({
                 </div>
               )}
 
-              {projects.map(project => (
-                <div key={project.id} className="mb-1">
-                  {/* Project header row: the expand/collapse <button>
-                      and the overflow-menu trigger live side-by-side
-                      inside a ``group`` container so the menu fades
-                      in on hover without nesting interactive elements
-                      (which would be invalid HTML). ``relative`` anchors
-                      the menu's absolute-positioned popover. */}
-                  <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] transition-colors">
-                    <button
-                      onClick={() => toggleProject(project.id)}
-                      aria-expanded={expandedProjects.has(project.id)}
-                      className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
-                    >
-                      {expandedProjects.has(project.id)
-                        ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                        : <ChevronRight className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                      }
-                      <span className="truncate">{project.name}</span>
-                    </button>
-                    {/* The menu holds only "Delete project", so it is hidden when
-                        the caller may not delete (#783). */}
-                    {project.can_delete && (
-                      <SidebarProjectMenu
-                        projectId={project.id}
-                        onDelete={() => setDeleteProjectTarget({ id: project.id, name: project.name })}
-                      />
-                    )}
-                  </div>
+              {/* Projects in the caller's own order (#995). A separate
+                  ``DndContext`` from the pinned section so the two
+                  lists never reorder each other. */}
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={(event: DragEndEvent) => {
+                  const { active, over } = event
+                  if (!over || active.id === over.id) return
+                  const from = projectIds.indexOf(String(active.id))
+                  const to = projectIds.indexOf(String(over.id))
+                  if (from === -1 || to === -1) return
+                  moveProject(from, to)
+                }}
+              >
+                <SortableContext items={projectIds} strategy={verticalListSortingStrategy}>
+                  {projects.map((project, index) => (
+                    <SortableProject key={project.id} id={project.id}>
+                      {handle => (
+                        <>
+                          {/* Project header row: the expand/collapse <button>
+                              and the overflow-menu trigger live side-by-side
+                              inside a ``group`` container so the menu fades
+                              in on hover without nesting interactive elements
+                              (which would be invalid HTML). ``relative`` anchors
+                              the menu's absolute-positioned popover. */}
+                          <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] transition-colors">
+                            {canReorderProjects && (
+                              <button
+                                type="button"
+                                {...handle}
+                                title={t('chat.dragToReorder')}
+                                aria-label={t('chat.reorderProject', { name: project.name })}
+                                data-testid={`sidebar-project-drag-${project.id}`}
+                                className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 cursor-grab touch-none items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] focus:opacity-100 active:cursor-grabbing md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                              >
+                                <GripVertical className="h-3 w-3" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => toggleProject(project.id)}
+                              aria-expanded={expandedProjects.has(project.id)}
+                              className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
+                            >
+                              {expandedProjects.has(project.id)
+                                ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                                : <ChevronRight className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                              }
+                              <span className="truncate">{project.name}</span>
+                            </button>
+                            {/* Move actions are there whenever there is something to
+                                reorder (#995); delete only for callers who may (#783).
+                                With neither, there is no menu. */}
+                            {(canReorderProjects || project.can_delete) && (
+                              <SidebarProjectMenu
+                                projectId={project.id}
+                                onDelete={project.can_delete
+                                  ? () => setDeleteProjectTarget({ id: project.id, name: project.name })
+                                  : undefined}
+                                onMoveUp={canReorderProjects
+                                  ? (index > 0 ? () => moveProject(index, index - 1) : null)
+                                  : undefined}
+                                onMoveDown={canReorderProjects
+                                  ? (index < projects.length - 1 ? () => moveProject(index, index + 1) : null)
+                                  : undefined}
+                              />
+                            )}
+                          </div>
 
-                  {expandedProjects.has(project.id) && (
-                    <div className="ml-3 mt-0.5 flex flex-col gap-0.5">
-                      <RoomTreeBranch
-                        nodes={projectTrees[project.id] ?? []}
-                        selectedRoom={selectedRoom}
-                        onGo={go}
-                        onPin={(roomId) => { void pinRoom(roomId, true) }}
-                        isAdmin={isAdmin}
-                        projectId={project.id}
-                        onRename={(roomId) => setEditRoomId(roomId)}
-                        onDelete={(roomId, name) => {
-                          void handleDeleteRoom(roomId, project.id, name)
-                        }}
-                      />
+                          {expandedProjects.has(project.id) && (
+                            <div className="ml-3 mt-0.5 flex flex-col gap-0.5">
+                              <RoomTreeBranch
+                                nodes={projectTrees[project.id] ?? []}
+                                selectedRoom={selectedRoom}
+                                onGo={go}
+                                onPin={(roomId) => { void pinRoom(roomId, true) }}
+                                isAdmin={isAdmin}
+                                projectId={project.id}
+                                onRename={(roomId) => setEditRoomId(roomId)}
+                                onDelete={(roomId, name) => {
+                                  void handleDeleteRoom(roomId, project.id, name)
+                                }}
+                              />
 
-                      <button
-                        onClick={() => openNewRoomDialog(project.id)}
-                        className="flex min-h-[var(--control-sm-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-caption font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
-                      >
-                        <Plus className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
-                        <span>{t('chat.newRoom')}</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                              <button
+                                onClick={() => openNewRoomDialog(project.id)}
+                                className="flex min-h-[var(--control-sm-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-caption font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+                              >
+                                <Plus className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
+                                <span>{t('chat.newRoom')}</span>
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </SortableProject>
+                  ))}
+                </SortableContext>
+              </DndContext>
 
               {projects.length === 0 && (
                 <p className="text-caption text-[var(--color-foreground-muted)] px-2 py-4 text-center">
@@ -1545,6 +1598,35 @@ function AgentDMListAdmin({
           onSaved={() => { fetchAgentDMs() }}
         />
       )}
+    </div>
+  )
+}
+
+/** One sortable project block in the sidebar (#995). The whole block,
+ *  rooms included, moves while dragging; only the handle that the
+ *  render prop receives starts a drag, so the header row still toggles
+ *  on click. */
+function SortableProject({
+  id,
+  children,
+}: {
+  id: string
+  children: (handle: Record<string, unknown>) => ReactNode
+}) {
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({ id })
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.5 : 1,
+      }}
+      className="mb-1"
+    >
+      {children({ ...attributes, ...listeners })}
     </div>
   )
 }

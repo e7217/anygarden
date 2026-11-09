@@ -176,6 +176,12 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
         window.dispatchEvent(
           new CustomEvent('anygarden:rooms:pin-order', { detail: data }),
         )
+      } else if (data.type === 'project_order_changed') {
+        // Sidebar project order saved in another session of the same
+        // user (#995). Shape: { user_id, project_ids }.
+        window.dispatchEvent(
+          new CustomEvent('anygarden:projects:order', { detail: data }),
+        )
       } else if (data.type === 'room_deleted') {
         // The whole room is gone. Bubble two events:
         //   1. ``anygarden:rooms:invalidate`` — same listener
