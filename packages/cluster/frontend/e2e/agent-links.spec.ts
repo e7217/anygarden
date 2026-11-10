@@ -178,7 +178,7 @@ async function signIn(page: Page, locale = 'en') {
   await expect(page).toHaveURL(/\/$/)
 }
 
-async function dragLink(page: Page, source: Locator, target: Locator) {
+async function dragLink(page: Page, source: Locator, target: Locator, targetRight = false) {
   await source.hover()
   const handle = source.locator('.agent-link-node__source')
   await expect(handle).toHaveCSS('opacity', '1')
@@ -186,7 +186,7 @@ async function dragLink(page: Page, source: Locator, target: Locator) {
   const end = (await target.boundingBox())!
   await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
   await page.mouse.down()
-  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 16 })
+  await page.mouse.move(end.x + (targetRight ? end.width - 4 : end.width / 2), end.y + end.height / 2, { steps: 16 })
   await page.mouse.up()
 }
 
@@ -258,6 +258,7 @@ test.describe('agent links', () => {
     await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
     await page.mouse.down()
     await other.hover()
+    await expect(other.locator('.agent-link-node__source')).toHaveCSS('opacity', '0')
     await expect(handle).toHaveCSS('opacity', '1')
     await expect(edge).toHaveAttribute('d', path!)
     await page.mouse.move(0, 0)
@@ -289,7 +290,7 @@ test.describe('agent links', () => {
       posted.push(route.request().postDataJSON())
       await fulfillJson(route, 500, { detail: 'Could not save the relationship' })
     })
-    await dragLink(page, reviewer, page.getByTestId('rf__node-a-sec'))
+    await dragLink(page, reviewer, page.getByTestId('rf__node-a-sec'), true)
     await expect.poll(() => posted.length).toBe(1)
     await expect(page.getByText('Could not save the relationship')).toBeVisible()
     await expect(page.locator('.react-flow__edge')).toHaveCount(1)

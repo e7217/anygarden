@@ -35,7 +35,7 @@ const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodePr
   const updateInternals = useUpdateNodeInternals()
   // React Flow must remeasure handles as a link changes the source's size.
   useEffect(() => { updateInternals(id) }, [id, data.width, data.height, updateInternals])
-  return <div className={`agent-link-node${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
+  return <div className={`agent-link-node${connecting ? ' is-linking' : ''}${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
     <span className="agent-link-node__name">{data.name}</span>
     <Handle type="target" position={Position.Left} isConnectableStart={false} className={`agent-link-node__target${connecting ? ' is-active' : ''}`} />
     <Handle type="source" position={Position.Right} isConnectableEnd={false} className={`agent-link-node__source${connectingFrom ? ' is-connecting' : ''}`} />

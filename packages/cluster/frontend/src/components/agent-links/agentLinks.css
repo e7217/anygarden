@@ -36,13 +36,13 @@
   border: 1.5px solid var(--color-brand-text); background: var(--color-surface-elevated);
 }
 .agent-link-node__source::after { width: 2.75rem; height: 2.75rem; }
-.agent-link-node.is-selected .agent-link-node__source,
-.agent-links-root .react-flow__node:focus-visible .agent-link-node__source,
+.agent-link-node:not(.is-linking).is-selected .agent-link-node__source,
+.agent-links-root .react-flow__node:focus-visible .agent-link-node:not(.is-linking) .agent-link-node__source,
 .agent-link-node .agent-link-node__source.is-connecting {
   opacity: 1; pointer-events: all; cursor: crosshair;
 }
 @media (hover: hover) and (pointer: fine) {
-  .agent-links-root .react-flow__node:hover .agent-link-node__source {
+  .agent-links-root .react-flow__node:hover .agent-link-node:not(.is-linking) .agent-link-node__source {
     opacity: 1; pointer-events: all; cursor: crosshair;
   }
 }
