@@ -44,7 +44,7 @@ describe('PeerChainProgressCard', () => {
   it('sums up a running chain in one line', () => {
     renderCard('ko', { chain: sampleChain({ root: { participant_id: 'p', agent_id: 'a', name: '개발자' } }) })
     expect(screen.getByTestId('peer-chain-progress')).toHaveTextContent(
-      '개발자 · 답을 모으는 중 · 7명 관여 · 최대 깊이 4 · 지금: G 답변 중',
+      '개발자 · 답을 모으는 중 · 7명 관여 · 지금: G 답변 중',
     )
   })
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import { ScrollArea, scrollToEnd } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
 import RoomQueryBanner from '@/components/RoomQueryBanner'
 import BrailleSpinner from '@/components/BrailleSpinner'
@@ -263,7 +263,7 @@ export default function ChatArea({
 
   useEffect(() => {
     if (focusedMessageId) return
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    scrollToEnd(bottomRef.current)
   }, [messages, typingNames.length, focusedMessageId])
 
   if (messages.length === 0) {
@@ -295,6 +295,8 @@ export default function ChatArea({
             // are internal plumbing, not chat content. The cluster persists
             // them so the audit trail is complete; we just hide them.
             if (isHiddenSystemMessage(msg)) return null
+            const chains = activeChainsForMessage(peerChains, msg.id)
+            const hostsThread = Boolean(threadIndex && onOpenThread && canHostThread(threadIndex, msg.id))
             return (
               <div key={msg.seq || i} data-message-id={msg.id} className="group/message relative">
                 <MessageBubble
@@ -308,7 +310,7 @@ export default function ChatArea({
                     cannot host a thread — the server rejects a thread rooted
                     at a reply, so an affordance would be a button that always
                     fails. Its own thread is reachable once its root loads. */}
-                {threadIndex && onOpenThread && canHostThread(threadIndex, msg.id) && (
+                {hostsThread && threadIndex && onOpenThread && (
                   <ThreadReplyAffordance
                     root={msg}
                     index={threadIndex}
@@ -320,17 +322,16 @@ export default function ChatArea({
                     workingSince={threadSince(msg.id)}
                     stopTurnIds={cancellable ? threadTurnIds(openTurns, msg.id) : undefined}
                     onStop={onCancelTurns}
+                    chains={chains}
+                    onCancelChain={canCancelTurns ? onCancelPeerChain : undefined}
                   />
                 )}
-                {activeChainsForMessage(peerChains, msg.id).map(chain => (
+                {/* #1013 — the reply row above carries a chain's progress;
+                    the card is only for a message that has no such row. */}
+                {!hostsThread && chains.map(chain => (
                   <PeerChainProgressCard
                     key={chain.id}
                     chain={chain}
-                    // Opens only: unlike the reply row, this button never
-                    // closes a thread that is already showing.
-                    onOpenThread={threadIndex && onOpenThread
-                      ? id => { if (activeThreadRootId !== id) onOpenThread(id) }
-                      : undefined}
                     onCancel={canCancelTurns ? onCancelPeerChain : undefined}
                   />
                 ))}

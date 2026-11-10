@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { X, MessagesSquare } from 'lucide-react'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import { ScrollArea, scrollToEnd } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
 import MessageInput from '@/components/MessageInput'
 import type { ChatMessage } from '@/hooks/useWebSocket'
@@ -132,7 +132,7 @@ export default function ThreadPanel({
   // re-render with identical contents doesn't yank the viewport.
   useEffect(() => {
     if (focusedMessageId) return
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    scrollToEnd(bottomRef.current)
   }, [replies.length, workers.length, focusedMessageId])
 
   return (
