@@ -179,8 +179,7 @@ async function signIn(page: Page, locale = 'en') {
 }
 
 async function dragLink(page: Page, source: Locator, target: Locator, targetRight = false) {
-  await source.hover()
-  const handle = source.locator('.agent-link-node__source')
+  const handle = source.locator('.react-flow__handle.source')
   await expect(handle).toHaveCSS('opacity', '1')
   const start = (await handle.boundingBox())!
   const end = (await target.boundingBox())!
@@ -201,10 +200,9 @@ test.describe('agent links', () => {
     const target = page.getByTestId('rf__node-a-sec')
     await expect(source).toBeVisible()
     await expect(page.getByTestId('rf__edge-l-1')).toHaveAttribute('aria-label', 'Developer asks Reviewer')
-    const handle = source.locator('.agent-link-node__source')
-    await expect(handle).toHaveCSS('opacity', '0')
-    await source.hover()
+    const handle = source.locator('.react-flow__handle.source')
     await expect(handle).toHaveCSS('opacity', '1')
+    await expect(target.locator('.react-flow__handle.target')).toHaveCSS('opacity', '1')
     await expect.poll(async () => (await handle.boundingBox())?.width).toBeGreaterThan(0)
     const start = (await handle.boundingBox())!
     const end = (await target.boundingBox())!
@@ -228,23 +226,31 @@ test.describe('agent links', () => {
     await expect(page.getByText('When to ask', { exact: true })).toHaveCount(0)
   })
 
-  test('[COL-14] ports follow hover, keyboard focus and selection without moving edge anchors', async ({ page }) => {
+  test('[COL-14] ports stay visible through hover, keyboard focus and selection without moving edge anchors', async ({ page }) => {
     await stubWebSocket(page)
     await stubApi(page, [])
     await signIn(page)
     await page.goto('/agents/links')
     const node = page.getByTestId('rf__node-a-dev')
     const other = page.getByTestId('rf__node-a-sec')
-    const handle = node.locator('.agent-link-node__source')
+    const handle = node.locator('.react-flow__handle.source')
     const edge = page.getByTestId('rf__edge-l-1').locator('.react-flow__edge-path')
     await expect(edge).toHaveAttribute('d', /M/)
     const path = await edge.getAttribute('d')
-    await expect(handle).toHaveCSS('opacity', '0')
-    await expect(handle).toHaveCSS('pointer-events', 'none')
-    await node.hover()
     await expect(handle).toHaveCSS('opacity', '1')
+    await expect(handle).toHaveCSS('pointer-events', 'all')
+    // The port sits on the card border and the edge leaves from its outer side.
+    const box = (await node.boundingBox())!
+    const [, sx, sy] = path!.match(/^M\s*([\d.-]+)[ ,]+([\d.-]+)/)!.map(Number)
+    const viewport = await page.locator('.react-flow__viewport').evaluate(el => new DOMMatrix(getComputedStyle(el).transform))
+    const pane = (await page.locator('.react-flow').boundingBox())!
+    const port = (await handle.boundingBox())!
+    expect(Math.abs(viewport.a * sx + viewport.e + pane.x - (port.x + port.width))).toBeLessThan(1.5)
+    expect(Math.abs(viewport.d * sy + viewport.f + pane.y - (port.y + port.height / 2))).toBeLessThan(1.5)
+    expect(Math.abs(port.x + port.width / 2 - box.x - box.width)).toBeLessThan(1.5)
+    await node.hover()
+    await expect(edge).toHaveAttribute('d', path!)
     await page.mouse.move(0, 0)
-    await expect(handle).toHaveCSS('opacity', '0')
     await node.focus()
     await expect(handle).toHaveCSS('opacity', '1')
     await expect(edge).toHaveAttribute('d', path!)
@@ -258,7 +264,7 @@ test.describe('agent links', () => {
     await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
     await page.mouse.down()
     await other.hover()
-    await expect(other.locator('.agent-link-node__source')).toHaveCSS('opacity', '0')
+    await expect(other.locator('.react-flow__handle.target')).toHaveCSS('opacity', '1')
     await expect(handle).toHaveCSS('opacity', '1')
     await expect(edge).toHaveAttribute('d', path!)
     await page.mouse.move(0, 0)
@@ -295,6 +301,39 @@ test.describe('agent links', () => {
     await expect(page.getByText('Could not save the relationship')).toBeVisible()
     await expect(page.locator('.react-flow__edge')).toHaveCount(1)
     await expect(page.locator('.react-flow__connection')).toHaveCount(0)
+  })
+
+  test('[COL-14] dropping exactly on the target port saves the link once', async ({ page }) => {
+    const posted: unknown[] = []
+    await stubWebSocket(page)
+    await stubApi(page, posted)
+    await signIn(page)
+    await page.goto('/agents/links')
+    const start = (await page.getByTestId('rf__node-a-rev').locator('.react-flow__handle.source').boundingBox())!
+    const end = (await page.getByTestId('rf__node-a-sec').locator('.react-flow__handle.target').boundingBox())!
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 16 })
+    await page.mouse.up()
+    await expect.poll(() => posted).toEqual([{ from_agent_id: 'a-rev', to_agent_id: 'a-sec' }])
+    await page.waitForTimeout(300)
+    expect(posted).toHaveLength(1)
+  })
+
+  test('[COL-14] flowing dashes show direction, with a solid arrow under reduced motion', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await signIn(page)
+    await page.goto('/agents/links')
+    const edge = page.getByTestId('rf__edge-l-1')
+    const path = edge.locator('.react-flow__edge-path')
+    await expect(edge).toHaveClass(/animated/)
+    await expect(path).toHaveCSS('animation-name', 'dashdraw')
+    await expect(path).toHaveCSS('marker-end', 'none')
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await expect(path).toHaveCSS('animation-name', 'none')
+    await expect(path).toHaveCSS('stroke-dasharray', 'none')
+    await expect(path).toHaveCSS('marker-end', /url\(/)
   })
 
   test('[COL-14] keyboard picker, reverse and confirmed deletion remain available', async ({ page }) => {
@@ -336,7 +375,7 @@ test.describe('agent links', () => {
     await expect(page.getByTestId('agent-link-details')).toContainText('Developer → Reviewer')
   })
 
-  test('[COL-14] touch selection reveals a usable port and the picker creates a link', async ({ browser }) => {
+  test('[COL-14] touch keeps a usable port and the picker creates a link', async ({ browser }) => {
     const context = await browser.newContext({ hasTouch: true, viewport: { width: 375, height: 900 } })
     try {
       const page = await context.newPage()
@@ -346,10 +385,9 @@ test.describe('agent links', () => {
       await signIn(page)
       await page.goto('/agents/links')
       const node = page.getByTestId('rf__node-a-rev')
-      const handle = node.locator('.agent-link-node__source')
-      await expect(handle).toHaveCSS('opacity', '0')
-      await node.tap()
+      const handle = node.locator('.react-flow__handle.source')
       await expect(handle).toHaveCSS('opacity', '1')
+      await node.tap()
       const targetSize = await handle.evaluate(element => {
         const hit = getComputedStyle(element, '::after')
         return [parseFloat(hit.width), parseFloat(hit.height)]

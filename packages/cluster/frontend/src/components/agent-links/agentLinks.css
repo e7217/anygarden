@@ -8,8 +8,16 @@
 .agent-links-root .react-flow__edge-path { stroke-width: 1.25; }
 .agent-links-root .react-flow__edge.is-emphasized .react-flow__edge-path { stroke-width: 1.5; }
 .agent-links-root .react-flow__edge:focus-visible { outline: none; }
-.agent-links-root .react-flow__edge:focus-visible .react-flow__edge-path {
-  stroke-width: 2; stroke-dasharray: 4 3;
+/* Every edge is dashed while it flows, so keyboard focus reads through width. */
+.agent-links-root .react-flow__edge:focus-visible .react-flow__edge-path { stroke-width: 2.5; }
+/* Direction is shown by dashes flowing source → target, at a calm pace. */
+.agent-links-root .react-flow__edge.animated .react-flow__edge-path { animation-duration: 1s; }
+@media (prefers-reduced-motion: no-preference) {
+  .agent-links-root .react-flow__edge-path { marker-end: none; }
+}
+/* Without motion the dashes stop, so a solid line and an arrow carry direction. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-links-root .react-flow__edge.animated .react-flow__edge-path { animation: none; stroke-dasharray: none; }
 }
 .agent-link-node {
   position: relative; box-sizing: border-box; width: 100%; height: 100%;
@@ -22,38 +30,16 @@
 .agent-link-node.is-reachable { border-color: var(--color-brand-text); }
 .agent-link-node.is-selected { border-color: var(--color-brand-text); background: var(--color-surface-selected); }
 .agent-links-root .react-flow__node:focus-visible { outline: 2px solid var(--color-brand-focus); outline-offset: 3px; }
-/* The measured anchor stays at the card boundary. Its dot and hit area are independent. */
-.agent-link-node .agent-link-node__source {
-  width: 1px; height: 1px; min-width: 0; min-height: 0; right: -1px;
-  border: 0; background: transparent; opacity: 0; pointer-events: none;
+/* React Flow's default ports; only their two colour variables map to theme tokens. */
+.agent-links-root .react-flow {
+  --xy-handle-background-color-default: var(--color-foreground);
+  --xy-handle-border-color-default: var(--color-surface-elevated);
 }
-.agent-link-node__source::before,
-.agent-link-node__source::after {
-  content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-}
-.agent-link-node__source::before {
-  box-sizing: border-box; width: 0.5rem; height: 0.5rem; border-radius: 50%;
-  border: 1.5px solid var(--color-brand-text); background: var(--color-surface-elevated);
-}
-.agent-link-node__source::after { width: 2.75rem; height: 2.75rem; }
-.agent-link-node:not(.is-linking).is-selected .agent-link-node__source,
-.agent-links-root .react-flow__node:focus-visible .agent-link-node:not(.is-linking) .agent-link-node__source,
-.agent-link-node .agent-link-node__source.is-connecting {
-  opacity: 1; pointer-events: all; cursor: crosshair;
-}
-@media (hover: hover) and (pointer: fine) {
-  .agent-links-root .react-flow__node:hover .agent-link-node:not(.is-linking) .agent-link-node__source {
-    opacity: 1; pointer-events: all; cursor: crosshair;
+.agent-links-root .react-flow__handle.connectingto.valid { --xy-handle-background-color: var(--color-brand-text); }
+/* Touch needs a 44px grab area around the small source port. */
+@media (pointer: coarse) {
+  .agent-links-root .react-flow__handle.source::after {
+    content: ''; position: absolute; left: 50%; top: 50%; width: 2.75rem; height: 2.75rem;
+    transform: translate(-50%, -50%);
   }
-}
-/* Keep this full-card drop target mounted at the same size, even when inactive.
-   React Flow's Left position anchors the edge at its left-middle boundary. */
-.agent-link-node .agent-link-node__target {
-  position: absolute; inset: -1px; width: auto; height: auto; transform: none;
-  min-width: 0; min-height: 0; border: 0; border-radius: var(--radius-md);
-  background: transparent; pointer-events: none;
-}
-.agent-link-node .agent-link-node__target.is-active { pointer-events: all; }
-.agent-link-node .agent-link-node__target.connectingto.valid {
-  outline: 2px solid var(--color-brand-focus); outline-offset: 3px;
 }

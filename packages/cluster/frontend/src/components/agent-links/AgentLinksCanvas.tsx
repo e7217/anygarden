@@ -2,9 +2,9 @@ import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import dagre from 'dagre'
 import {
   BaseEdge, Controls, Background, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
-  applyNodeChanges, getBezierPath, useConnection, useNodesInitialized, useNodesState,
+  applyNodeChanges, getBezierPath, useNodesInitialized, useNodesState,
   useReactFlow, useStore, useUpdateNodeInternals,
-  type Connection, type Edge, type EdgeChange, type EdgeProps, type EdgeTypes,
+  type Connection, type Edge, type EdgeChange, type EdgeProps, type EdgeTypes, type FinalConnectionState,
   type Node, type NodeChange, type NodeProps, type NodeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -30,19 +30,24 @@ interface AgentNodeData extends Record<string, unknown> {
 }
 function viewportDuration() { return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 220 }
 const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData>>) {
-  const connecting = useConnection(connection => connection.inProgress)
-  const connectingFrom = useConnection(connection => connection.fromNode?.id === id)
   const updateInternals = useUpdateNodeInternals()
   // React Flow must remeasure handles as a link changes the source's size.
   useEffect(() => { updateInternals(id) }, [id, data.width, data.height, updateInternals])
-  return <div className={`agent-link-node${connecting ? ' is-linking' : ''}${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
+  return <div className={`agent-link-node${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
     <span className="agent-link-node__name">{data.name}</span>
-    <Handle type="target" position={Position.Left} isConnectableStart={false} className={`agent-link-node__target${connecting ? ' is-active' : ''}`} />
-    <Handle type="source" position={Position.Right} isConnectableEnd={false} className={`agent-link-node__source${connectingFrom ? ' is-connecting' : ''}`} />
+    <Handle type="target" position={Position.Left} isConnectableStart={false} />
+    <Handle type="source" position={Position.Right} isConnectableEnd={false} />
   </div>
 })
+// A drop anywhere on a card links to it, not only within reach of its small port.
+function nodeIdAt(event: MouseEvent | TouchEvent) {
+  const point = 'changedTouches' in event ? event.changedTouches[0] : event
+  if (!point) return null
+  return document.elementFromPoint(point.clientX, point.clientY)?.closest('.react-flow__node')?.getAttribute('data-id') ?? null
+}
 const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style }: EdgeProps) {
-  const [bezier] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
+  // A stronger curve keeps the run into each card level instead of hooking at the end.
+  const [bezier] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, curvature: 0.5 })
   // A return connection uses a separate lane, keeping both arrows readable.
   const y = Math.max(sourceY, targetY) + 64
   const path = sourceX > targetX
@@ -126,7 +131,8 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
   const edges = useMemo<Edge[]>(() => links.map(l => {
     const emphasized = selection?.kind === 'link' && selection.id === l.id || !!reach?.links.has(l.id)
     const color = emphasized ? 'var(--color-brand-text)' : 'var(--color-foreground-subtle)'
-    return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link',
+    // Flowing dashes show direction; the arrow only appears under reduced motion (agentLinks.css).
+    return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link', animated: true,
       selected: selection?.kind === 'link' && selection.id === l.id, focusable: true,
       ariaLabel: t('agentLinks.linkLabel', { from: names.get(l.from_agent_id) ?? '?', to: names.get(l.to_agent_id) ?? '?' }),
       className: emphasized ? 'is-emphasized' : undefined,
@@ -149,7 +155,14 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
       else if (selectionRef.current?.kind === 'link' && selectionRef.current.id === change.id) select(null)
     }
   }, [select])
-  const isValidConnection = useCallback((connection: Connection | Edge) => connection.source !== connection.target && !links.some(l => l.from_agent_id === connection.source && l.to_agent_id === connection.target), [links])
+  const canLink = useCallback((from: string, to: string) => from !== to && !links.some(l => l.from_agent_id === from && l.to_agent_id === to), [links])
+  const isValidConnection = useCallback((connection: Connection | Edge) => canLink(connection.source, connection.target), [canLink])
+  const onConnectEnd = useCallback((event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+    // A valid drop on a port already went through onConnect.
+    if (state.isValid || !state.fromNode) return
+    const to = nodeIdAt(event)
+    if (to && canLink(state.fromNode.id, to)) onConnect(state.fromNode.id, to)
+  }, [canLink, onConnect])
   const rearrange = useCallback(() => {
     reset()
     setLocalNodes(nodes => nodes.map(node => ({ ...node, position: positions.get(node.id) ?? node.position })))
@@ -159,7 +172,7 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
   return <div className="agent-links-root relative h-full w-full" role="application" aria-label={t('agentLinks.canvasLabel')} onKeyDown={e => { if (e.key === 'Escape') select(null) }}>
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-      onConnect={c => { if (c.source && c.target) onConnect(c.source, c.target) }} isValidConnection={isValidConnection}
+      onConnect={c => { if (c.source && c.target) onConnect(c.source, c.target) }} onConnectEnd={onConnectEnd} isValidConnection={isValidConnection}
       onNodeDragStop={(_, node) => savePosition(node.id, node.position)}
       onMoveEnd={(_, viewport) => { if (restored.current) saveViewport(viewport) }}
       onPaneClick={() => select(null)} deleteKeyCode={null} connectionRadius={32}
