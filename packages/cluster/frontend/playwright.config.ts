@@ -13,7 +13,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Tests stub REST and share nothing, so they run in parallel on CI too;
+  // one worker made the suite the slowest CI job (~9.4 min for 91 tests).
+  workers: process.env.CI ? 4 : undefined,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
     baseURL,
@@ -21,8 +23,14 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
+  // CI serves the production bundle that the job has already built: the dev
+  // server compiles each route on first request, and with parallel workers
+  // that pushed first paints past the 5 s expect timeout. Locally the dev
+  // server keeps the edit-and-rerun loop build-free.
   webServer: {
-    command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+    command: process.env.CI
+      ? `npm run preview -- --host 127.0.0.1 --port ${port} --strictPort`
+      : `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

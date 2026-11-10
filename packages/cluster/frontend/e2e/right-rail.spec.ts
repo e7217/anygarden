@@ -348,7 +348,8 @@ test.describe('panel widths', () => {
     await openRoom(page)
     await page.getByRole('button', { name: 'Open sidebar' }).first().click()
     await expect(sidebar(page)).not.toHaveClass(/-translate-x-full/)
-    expect(await width(sidebar(page))).toBe(256)
+    // Measured mid slide-in the box reads 255.99…; wait for it to settle.
+    await expect.poll(() => width(sidebar(page))).toBe(256)
     await expect(sidebarHandle(page)).toHaveCount(0)
   })
 })
