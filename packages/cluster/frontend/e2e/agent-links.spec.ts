@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test'
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
 
 /**
  * #1006 — agent links and question chains, in a real browser.
@@ -118,7 +118,7 @@ async function stubApi(page: Page, posted: unknown[], dmPosts: string[] = [], is
       const body = request.postDataJSON()
       posted.push(body)
       return fulfillJson(route, 201, {
-        id: 'l-new', ...body, created_at: '2026-11-10T00:00:00Z', updated_at: '2026-11-10T00:00:00Z',
+        id: posted.length === 1 ? 'l-new' : `l-new-${posted.length}`, ...body, created_at: '2026-11-10T00:00:00Z', updated_at: '2026-11-10T00:00:00Z',
       })
     }
     if (pathname === '/api/v1/agent-links') {
@@ -150,8 +150,8 @@ async function stubApi(page: Page, posted: unknown[], dmPosts: string[] = [], is
   })
 }
 
-async function stubWebSocket(page: Page) {
-  await page.addInitScript(() => {
+async function stubWebSocket(page: Page, locale = 'en') {
+  await page.addInitScript(locale => {
     class FakeWebSocket {
       static readonly OPEN = 1
       readyState = 1
@@ -166,16 +166,28 @@ async function stubWebSocket(page: Page) {
       removeEventListener() {}
     }
     ;(window as unknown as { WebSocket: unknown }).WebSocket = FakeWebSocket
-    localStorage.setItem('anygarden_locale', 'en')
-  })
+    localStorage.setItem('anygarden_locale', locale)
+  }, locale)
 }
 
-async function signIn(page: Page) {
+async function signIn(page: Page, locale = 'en') {
   await page.goto('/login')
   await page.locator('#login-email').fill(user.email)
   await page.locator('#login-password').fill('correct-password')
-  await page.getByRole('button', { name: 'Sign In' }).click()
+  await page.getByRole('button', { name: locale === 'ko' ? '로그인' : 'Sign in', exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
+}
+
+async function dragLink(page: Page, source: Locator, target: Locator, targetRight = false) {
+  await source.hover()
+  const handle = source.locator('.agent-link-node__source')
+  await expect(handle).toHaveCSS('opacity', '1')
+  const start = (await handle.boundingBox())!
+  const end = (await target.boundingBox())!
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(end.x + (targetRight ? end.width - 4 : end.width / 2), end.y + end.height / 2, { steps: 16 })
+  await page.mouse.up()
 }
 
 test.describe('agent links', () => {
@@ -190,7 +202,9 @@ test.describe('agent links', () => {
     await expect(source).toBeVisible()
     await expect(page.getByTestId('rf__edge-l-1')).toHaveAttribute('aria-label', 'Developer asks Reviewer')
     const handle = source.locator('.agent-link-node__source')
-    await expect(handle).toBeVisible()
+    await expect(handle).toHaveCSS('opacity', '0')
+    await source.hover()
+    await expect(handle).toHaveCSS('opacity', '1')
     await expect.poll(async () => (await handle.boundingBox())?.width).toBeGreaterThan(0)
     const start = (await handle.boundingBox())!
     const end = (await target.boundingBox())!
@@ -202,7 +216,7 @@ test.describe('agent links', () => {
     await expect.poll(() => posted).toEqual([{ from_agent_id: 'a-rev', to_agent_id: 'a-sec' }])
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect.poll(async () => (await source.boundingBox())!.width).toBeGreaterThan(before.width)
-    await expect(source.locator('.agent-link-node')).toHaveText('Reviewer+')
+    await expect(source.locator('.agent-link-node')).toHaveText('Reviewer')
     const sourceHandle = (await handle.boundingBox())!
     const sourceBox = (await source.boundingBox())!
     expect(Math.abs(sourceHandle.x + sourceHandle.width / 2 - sourceBox.x - sourceBox.width)).toBeLessThan(2)
@@ -213,6 +227,213 @@ test.describe('agent links', () => {
     await expect(page.getByTestId('agent-link-details')).toContainText('Reviewer → Security')
     await expect(page.getByText('When to ask', { exact: true })).toHaveCount(0)
   })
+
+  test('[COL-14] ports follow hover, keyboard focus and selection without moving edge anchors', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await signIn(page)
+    await page.goto('/agents/links')
+    const node = page.getByTestId('rf__node-a-dev')
+    const other = page.getByTestId('rf__node-a-sec')
+    const handle = node.locator('.agent-link-node__source')
+    const edge = page.getByTestId('rf__edge-l-1').locator('.react-flow__edge-path')
+    await expect(edge).toHaveAttribute('d', /M/)
+    const path = await edge.getAttribute('d')
+    await expect(handle).toHaveCSS('opacity', '0')
+    await expect(handle).toHaveCSS('pointer-events', 'none')
+    await node.hover()
+    await expect(handle).toHaveCSS('opacity', '1')
+    await page.mouse.move(0, 0)
+    await expect(handle).toHaveCSS('opacity', '0')
+    await node.focus()
+    await expect(handle).toHaveCSS('opacity', '1')
+    await expect(edge).toHaveAttribute('d', path!)
+    await node.press('Enter')
+    await page.getByRole('button', { name: 'Close details' }).focus()
+    await expect(handle).toHaveCSS('opacity', '1')
+    await expect(other).toHaveCSS('opacity', '1')
+    await expect(node.locator('.agent-link-node')).toHaveText('Developer')
+    // Starting a connection leaves existing endpoint geometry intact.
+    const start = (await handle.boundingBox())!
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
+    await page.mouse.down()
+    await other.hover()
+    await expect(other.locator('.agent-link-node__source')).toHaveCSS('opacity', '0')
+    await expect(handle).toHaveCSS('opacity', '1')
+    await expect(edge).toHaveAttribute('d', path!)
+    await page.mouse.move(0, 0)
+    await page.mouse.up()
+    await expect(page.locator('.react-flow__connection')).toHaveCount(0)
+    // The name region still moves the node instead of creating a link.
+    const before = (await node.boundingBox())!
+    await page.mouse.move(before.x + 12, before.y + before.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(before.x + 42, before.y + before.height / 2 + 25, { steps: 8 })
+    await page.mouse.up()
+    await expect.poll(async () => (await node.boundingBox())!.y).toBeGreaterThan(before.y + 15)
+  })
+
+  test('[COL-14] rejects self and duplicate drops and leaves no edge after a failed creation', async ({ page }) => {
+    const posted: unknown[] = []
+    await stubWebSocket(page)
+    await stubApi(page, posted)
+    await signIn(page)
+    await page.goto('/agents/links')
+    const developer = page.getByTestId('rf__node-a-dev')
+    const reviewer = page.getByTestId('rf__node-a-rev')
+    await dragLink(page, developer, developer)
+    await dragLink(page, developer, reviewer)
+    expect(posted).toEqual([])
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+    await page.route('**/api/v1/agent-links', async route => {
+      if (route.request().method() !== 'POST') return route.fallback()
+      posted.push(route.request().postDataJSON())
+      await fulfillJson(route, 500, { detail: 'Could not save the relationship' })
+    })
+    await dragLink(page, reviewer, page.getByTestId('rf__node-a-sec'), true)
+    await expect.poll(() => posted.length).toBe(1)
+    await expect(page.getByText('Could not save the relationship')).toBeVisible()
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+    await expect(page.locator('.react-flow__connection')).toHaveCount(0)
+  })
+
+  test('[COL-14] keyboard picker, reverse and confirmed deletion remain available', async ({ page }) => {
+    const posted: unknown[] = []
+    await stubWebSocket(page)
+    await stubApi(page, posted)
+    await page.route('**/api/v1/agent-links/l-new-2', route => route.fulfill({ status: 204 }))
+    await signIn(page)
+    await page.goto('/agents/links')
+    const add = page.getByRole('button', { name: 'Add link', exact: true })
+    await add.focus()
+    await add.press('Enter')
+    const dialog = page.getByRole('dialog')
+    const from = dialog.getByLabel('Agent that asks', { exact: true })
+    const to = dialog.getByLabel('Agent it can ask', { exact: true })
+    await from.focus()
+    await from.press('r')
+    await from.press('Tab')
+    await expect(to).toBeFocused()
+    await to.press('s')
+    await to.press('Tab')
+    await page.keyboard.press('Tab')
+    await expect(dialog.getByRole('button', { name: 'Add link', exact: true })).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect.poll(() => posted).toEqual([{ from_agent_id: 'a-rev', to_agent_id: 'a-sec' }])
+    await expect(dialog).toHaveCount(0)
+    await page.getByRole('button', { name: 'Close details' }).click()
+    const original = page.getByTestId('rf__edge-l-1')
+    await original.focus()
+    await original.press('Enter')
+    await page.getByRole('button', { name: 'Link the other direction' }).click()
+    await expect.poll(() => posted.length).toBe(2)
+    expect(posted[1]).toEqual({ from_agent_id: 'a-rev', to_agent_id: 'a-dev' })
+    await page.getByTestId('agent-link-details').getByRole('button', { name: 'Delete', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Delete this link?' }).getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.getByTestId('rf__edge-l-new-2')).toHaveCount(0)
+    await original.focus()
+    await original.press('Enter')
+    await expect(page.getByTestId('agent-link-details')).toContainText('Developer → Reviewer')
+  })
+
+  test('[COL-14] touch selection reveals a usable port and the picker creates a link', async ({ browser }) => {
+    const context = await browser.newContext({ hasTouch: true, viewport: { width: 375, height: 900 } })
+    try {
+      const page = await context.newPage()
+      const posted: unknown[] = []
+      await stubWebSocket(page)
+      await stubApi(page, posted)
+      await signIn(page)
+      await page.goto('/agents/links')
+      const node = page.getByTestId('rf__node-a-rev')
+      const handle = node.locator('.agent-link-node__source')
+      await expect(handle).toHaveCSS('opacity', '0')
+      await node.tap()
+      await expect(handle).toHaveCSS('opacity', '1')
+      const targetSize = await handle.evaluate(element => {
+        const hit = getComputedStyle(element, '::after')
+        return [parseFloat(hit.width), parseFloat(hit.height)]
+      })
+      expect(Math.min(...targetSize)).toBeGreaterThanOrEqual(44)
+      const add = page.getByTestId('agent-reach-details').getByRole('button', { name: 'Add link', exact: true })
+      await add.tap()
+      const dialog = page.getByRole('dialog')
+      await expect(dialog.getByLabel('Agent that asks', { exact: true })).toHaveValue('a-rev')
+      await dialog.getByLabel('Agent it can ask', { exact: true }).selectOption('a-sec')
+      await dialog.getByRole('button', { name: 'Add link', exact: true }).tap()
+      await expect.poll(() => posted).toEqual([{ from_agent_id: 'a-rev', to_agent_id: 'a-sec' }])
+      await expect(page.getByTestId('rf__edge-l-new')).toBeAttached()
+    } finally { await context.close() }
+  })
+
+  for (const theme of ['light', 'dark']) {
+    for (const locale of ['en', 'ko']) {
+      test(`[COL-14] slim cards fit reference widths in ${theme}/${locale}`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 1440, height: 1000 })
+        await stubWebSocket(page, locale)
+        await stubApi(page, [])
+        await signIn(page, locale)
+        await page.evaluate(({ theme, locale }) => {
+          localStorage.setItem('anygarden-theme', theme)
+          localStorage.setItem('anygarden_locale', locale)
+        }, { theme, locale })
+        const graphAgents = [...agents,
+          { id: 'a-design', name: '아주 긴 에이전트 이름 · Product design', description: null, actual_state: 'idle' },
+          { id: 'a-docs', name: 'Documentation', description: null, actual_state: 'idle' },
+        ]
+        const pairs = graphAgents.slice(1).map(agent => ['a-dev', agent.id])
+        pairs.push(['a-rev', 'a-dev'])
+        await page.route('**/api/v1/agent-links', route => fulfillJson(route, 200, {
+          agents: graphAgents,
+          links: pairs.map(([from_agent_id, to_agent_id], i) => ({
+            id: `visual-${i}`, from_agent_id, to_agent_id,
+            created_at: '2026-11-10T00:00:00Z', updated_at: '2026-11-10T00:00:00Z',
+          })),
+        }))
+        async function capture(name: string) {
+          const path = testInfo.outputPath(`${name}.png`)
+          await page.screenshot({ path })
+          await testInfo.attach(name, { path, contentType: 'image/png' })
+        }
+        for (const width of [375, 768, 1024, 1440]) {
+          await page.setViewportSize({ width, height: 1000 })
+          await page.evaluate(() => localStorage.removeItem('anygarden_agent_links_view_v1_e2e-user'))
+          await page.goto('/agents/links')
+          const hub = page.getByTestId('rf__node-a-dev')
+          await expect(hub).toBeVisible()
+          await expect(page.locator('.react-flow__edge')).toHaveCount(5)
+          await expect(page.getByTestId('rf__node-a-design').locator('.agent-link-node')).toHaveAttribute('title', graphAgents[3].name)
+          expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+          await capture(`${theme}-${locale}-${width}`)
+          await hub.click()
+          const details = page.getByRole('complementary', { name: locale === 'en' ? 'Details' : '상세', exact: true })
+          await expect(details).toBeVisible()
+          await expect(page.getByTestId('rf__node-a-sec')).toHaveCSS('opacity', '1')
+          await expect.poll(async () => {
+            const card = await hub.boundingBox(), panel = await details.boundingBox()
+            return !!card && !!panel && card.x >= 0 && card.y >= 0 && card.x + card.width <= width
+              && (width >= 1024 ? card.x + card.width <= panel.x : card.y + card.height <= panel.y)
+          }).toBe(true)
+          // Auto-fit must leave cards clear of the canvas's floating controls.
+          const canvas = (await page.locator('.agent-links-root').boundingBox())!
+          const controls = await page.locator('.agent-links-root button').all()
+          for (const card of await page.locator('.react-flow__node').all()) {
+            const box = (await card.boundingBox())!
+            expect(box.x).toBeGreaterThanOrEqual(canvas.x)
+            expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width)
+            expect(box.y).toBeGreaterThanOrEqual(canvas.y)
+            expect(box.y + box.height).toBeLessThanOrEqual(canvas.y + canvas.height)
+            for (const control of controls) {
+              const button = (await control.boundingBox())!
+              expect(box.x >= button.x + button.width || box.x + box.width <= button.x
+                || box.y >= button.y + button.height || box.y + box.height <= button.y).toBe(true)
+            }
+          }
+          await capture(`${theme}-${locale}-${width}-selected`)
+        }
+      })
+    }
+  }
 
   test('[COL-18] opens the selected existing conversation and restores the map view on return', async ({ page }) => {
     await stubWebSocket(page)

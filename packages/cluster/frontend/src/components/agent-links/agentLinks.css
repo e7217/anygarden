@@ -1,42 +1,59 @@
 .agent-links-root { background: var(--color-surface-alt); }
-.agent-links-root .react-flow__node,
-.agent-links-root .react-flow__edge { transition: opacity 180ms ease-out; }
-.agent-links-root .is-dimmed { opacity: 0.25; }
 .agent-links-root .react-flow__controls-button {
   width: 44px; height: 44px; color: var(--color-foreground);
   background: var(--color-surface-elevated); border-color: var(--color-border);
 }
 .agent-links-root .react-flow__controls-button:hover { background: var(--color-surface-hover); }
 .agent-links-root .react-flow__controls-button svg { fill: currentColor; }
+.agent-links-root .react-flow__edge-path { stroke-width: 1.25; }
+.agent-links-root .react-flow__edge.is-emphasized .react-flow__edge-path { stroke-width: 1.5; }
 .agent-links-root .react-flow__edge:focus-visible { outline: none; }
-.agent-links-root .react-flow__edge:focus-visible .react-flow__edge-path { stroke: var(--color-brand); stroke-width: 3; }
+.agent-links-root .react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke-width: 2; stroke-dasharray: 4 3;
+}
 .agent-link-node {
   position: relative; box-sizing: border-box; width: 100%; height: 100%;
-  display: flex; align-items: center; padding: 0 12px;
-  border-radius: var(--radius-md); border: 1px solid var(--color-border-strong);
+  display: flex; align-items: center; padding: 0 0.75rem;
+  border-radius: var(--radius-md); border: 1px solid var(--color-border);
   background: var(--color-surface-elevated); color: var(--color-foreground);
   font-size: 0.875rem; font-weight: 500;
 }
 .agent-link-node__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-link-node.is-reachable { border-color: var(--color-brand-text); }
-.agent-link-node.is-selected { border-color: var(--color-brand); background: var(--color-surface-selected); }
+.agent-link-node.is-selected { border-color: var(--color-brand-text); background: var(--color-surface-selected); }
 .agent-links-root .react-flow__node:focus-visible { outline: 2px solid var(--color-brand-focus); outline-offset: 3px; }
+/* The measured anchor stays at the card boundary. Its dot and hit area are independent. */
 .agent-link-node .agent-link-node__source {
-  width: 20px; height: 20px; border: 2px solid var(--color-surface-elevated);
-  background: var(--color-brand); color: var(--color-on-brand); cursor: crosshair;
-  display: grid; place-items: center; font-size: 14px; line-height: 1;
+  width: 1px; height: 1px; min-width: 0; min-height: 0; right: -1px;
+  border: 0; background: transparent; opacity: 0; pointer-events: none;
 }
-.agent-link-node .agent-link-node__source::after { content: ''; position: absolute; inset: -12px; }
-/* The left endpoint grows to the whole card only while connecting. */
+.agent-link-node__source::before,
+.agent-link-node__source::after {
+  content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+}
+.agent-link-node__source::before {
+  box-sizing: border-box; width: 0.5rem; height: 0.5rem; border-radius: 50%;
+  border: 1.5px solid var(--color-brand-text); background: var(--color-surface-elevated);
+}
+.agent-link-node__source::after { width: 2.75rem; height: 2.75rem; }
+.agent-link-node:not(.is-linking).is-selected .agent-link-node__source,
+.agent-links-root .react-flow__node:focus-visible .agent-link-node:not(.is-linking) .agent-link-node__source,
+.agent-link-node .agent-link-node__source.is-connecting {
+  opacity: 1; pointer-events: all; cursor: crosshair;
+}
+@media (hover: hover) and (pointer: fine) {
+  .agent-links-root .react-flow__node:hover .agent-link-node:not(.is-linking) .agent-link-node__source {
+    opacity: 1; pointer-events: all; cursor: crosshair;
+  }
+}
+/* Keep this full-card drop target mounted at the same size, even when inactive.
+   React Flow's Left position anchors the edge at its left-middle boundary. */
 .agent-link-node .agent-link-node__target {
-  width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0;
-  background: transparent; opacity: 0; pointer-events: none;
+  position: absolute; inset: -1px; width: auto; height: auto; transform: none;
+  min-width: 0; min-height: 0; border: 0; border-radius: var(--radius-md);
+  background: transparent; pointer-events: none;
 }
-.agent-link-node .agent-link-node__target.is-active {
-  position: absolute; inset: 0; width: auto; height: auto; transform: none;
-  border-radius: var(--radius-md); opacity: 1; pointer-events: all;
-}
-.agent-link-node .agent-link-node__target.connectingto.valid { outline: 2px solid var(--color-brand); outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) {
-  .agent-links-root .react-flow__node, .agent-links-root .react-flow__edge { transition: none; }
+.agent-link-node .agent-link-node__target.is-active { pointer-events: all; }
+.agent-link-node .agent-link-node__target.connectingto.valid {
+  outline: 2px solid var(--color-brand-focus); outline-offset: 3px;
 }
