@@ -3,10 +3,10 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 /**
  * Sidebar project order (#995), exercised in a real browser.
  *
- * jsdom cannot drive dnd-kit's pointer and keyboard sensors, so the
- * drag handle lives here: dragging or keyboard-moving a project
- * reorders the list and saves the caller's full order. Runs against
- * Vite alone with REST and WebSocket stubbed.
+ * jsdom cannot drive dnd-kit's pointer sensor, so dragging lives here:
+ * dragging a project by its row reorders the list and saves the
+ * caller's full order, and the keyboard path goes through the project
+ * menu. Runs against Vite alone with REST and WebSocket stubbed.
  */
 
 const user = { id: 'e2e-user', email: 'e2e@example.com', is_admin: true }
@@ -80,9 +80,8 @@ async function signIn(page: Page) {
 }
 
 const projectNames = (page: Page) =>
-  page.getByTestId('sidebar-projects-section').locator('[aria-expanded] > span.truncate')
-const handle = (page: Page, name: string) =>
-  page.getByRole('button', { name: `Reorder ${name}` })
+  page.getByTestId('sidebar-projects-section').locator('button[aria-expanded]:not(#sidebar-projects-heading) > span.truncate')
+const row = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
 
 test.describe('sidebar project order', () => {
   test.beforeEach(async ({ page }) => {
@@ -91,45 +90,44 @@ test.describe('sidebar project order', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
   })
 
-  test('[ROOM-14] dragging a project by its handle saves the new order', async ({ page }) => {
+  test('[ROOM-14] dragging a project by its row saves the new order', async ({ page }) => {
     const saved = await stubApi(page)
     await signIn(page)
 
-    await page.getByTestId('sidebar-project-drag-p0').hover()
-    const from = await handle(page, 'Alpha').boundingBox()
-    const to = await handle(page, 'Charlie').boundingBox()
+    const from = await row(page, 'Alpha').boundingBox()
+    const to = await row(page, 'Charlie').boundingBox()
     expect(from).not.toBeNull()
     expect(to).not.toBeNull()
-    await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2)
+    await page.mouse.move(from!.x + 24, from!.y + from!.height / 2)
     await page.mouse.down()
-    await page.mouse.move(from!.x + from!.width / 2, to!.y + to!.height / 2, { steps: 8 })
-    await page.mouse.move(from!.x + from!.width / 2, to!.y + to!.height, { steps: 4 })
+    await page.mouse.move(from!.x + 24, to!.y + to!.height / 2, { steps: 8 })
+    await page.mouse.move(from!.x + 24, to!.y + to!.height, { steps: 4 })
     await page.mouse.up()
 
     await expect(projectNames(page)).toHaveText(['Bravo', 'Charlie', 'Alpha'])
     expect(saved).toEqual([['p1', 'p2', 'p0']])
+    // The drop is not also a click: the dragged project stays closed.
+    await expect(row(page, 'Alpha')).toHaveAttribute('aria-expanded', 'false')
   })
 
-  test('[ROOM-14] a project moves with the keyboard from its handle', async ({ page }) => {
+  test('[ROOM-14] a project moves with the keyboard from its menu', async ({ page }) => {
     const saved = await stubApi(page)
     await signIn(page)
 
-    // Wait for each step to land: dnd-kit measures the list after the
-    // drag starts and after each move, and ignores keys sent sooner.
-    const charlie = handle(page, 'Charlie')
-    await charlie.focus()
-    await page.keyboard.press('Space')
-    await expect(charlie).toHaveAttribute('aria-pressed', 'true')
-    await page.keyboard.press('ArrowUp')
-    // The handle sits in the header row inside the moving project block.
-    // Drop only after its slide finishes: dnd-kit re-measures the list
-    // mid-transition and can drop back in place.
-    const bravo = handle(page, 'Bravo').locator('xpath=../..')
-    await expect(bravo).toHaveAttribute('style', /translate/)
-    await expect.poll(() => bravo.evaluate(el => el.getAnimations().length)).toBe(0)
-    await page.keyboard.press('Space')
+    await page.getByTestId('sidebar-project-menu-p2').focus()
+    await page.keyboard.press('Enter')
+    await page.getByRole('button', { name: 'Move up' }).focus()
+    await page.keyboard.press('Enter')
 
     await expect(projectNames(page)).toHaveText(['Alpha', 'Charlie', 'Bravo'])
     expect(saved).toEqual([['p0', 'p2', 'p1']])
+  })
+
+  test('a click on the name still opens the project', async ({ page }) => {
+    await stubApi(page)
+    await signIn(page)
+
+    await row(page, 'Bravo').click()
+    await expect(row(page, 'Bravo')).toHaveAttribute('aria-expanded', 'true')
   })
 })
