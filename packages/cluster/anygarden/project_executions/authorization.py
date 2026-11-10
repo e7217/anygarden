@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import exists, func, or_, select, update
 
 from anygarden.db.models import (
     AgentTurn,
     ExecutionInputRevision,
     ExecutionStop,
+    Message,
     ProjectExecution,
     Room,
     Task,
@@ -137,3 +138,64 @@ def disposition(execution: ProjectExecution, input_revision: int | None) -> tupl
     if execution.status == "revising":
         return False, "current"
     return True, "current"
+
+
+async def lead_reply_root_task(
+    db, *, room_id: str, thread_root_id: str | None, participant_id: str, agent_id: str,
+) -> str | None:
+    """Root task a human's thread reply to the lead should be bound to (#994).
+
+    A lead that asks the user about a stuck task gets the answer as a new turn.
+    Only a turn bound to the execution's root task may use the lead tools, so
+    the answer in the execution's source thread is bound to it. Returns None
+    whenever a bound turn would be refused — ``create_turn`` cancels such a
+    turn instead of falling back, and the reply must still reach the agent as
+    an ordinary turn.
+    """
+    if thread_root_id is None:
+        return None
+    now = datetime.now(UTC)
+    executions = (await db.scalars(
+        select(ProjectExecution)
+        .join(Message, Message.id == ProjectExecution.source_message_id)
+        .where(
+            ProjectExecution.operating_room_id == room_id,
+            ProjectExecution.status.in_(ACTIVE_STATES),
+            func.coalesce(Message.root_message_id, Message.id) == thread_root_id,
+        ).limit(2)
+    )).all()
+    if len(executions) != 1:
+        return None
+    execution = executions[0]
+    if execution.lead_agent_id != agent_id or execution.root_task_id is None:
+        return None
+    if execution.deadline_at is not None and execution.deadline_at <= now:
+        return None
+    root = await db.get(Task, execution.root_task_id)
+    if (
+        root is None
+        or root.status != "in_progress"
+        or root.room_id != room_id
+        or root.assignee_participant_id != participant_id
+        or root.execution_id != execution.id
+        or root.input_revision != execution.input_revision
+    ):
+        return None
+    room = await db.get(Room, room_id)
+    if room is None or room.project_id != execution.project_id or room.archived_at is not None:
+        return None
+    if await db.scalar(select(ExecutionStop.id).where(
+        ExecutionStop.execution_id == execution.id,
+        ExecutionStop.status.not_in(SAFE_STOP_STATES),
+    ).limit(1)):
+        return None
+    if await db.scalar(select(ExecutionInputRevision.id).where(
+        ExecutionInputRevision.execution_id == execution.id,
+        ExecutionInputRevision.revision == execution.input_revision,
+    )) is None:
+        return None
+    from anygarden.project_executions.usage import admission_disposition
+
+    if not (await admission_disposition(db, execution=execution, phase="intent")).allowed:
+        return None
+    return root.id

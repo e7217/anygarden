@@ -41,6 +41,7 @@ from anygarden.db.models import (
     Task,
     User,
 )
+from anygarden.project_executions.authorization import lead_reply_root_task
 from anygarden.project_executions.stop_service import deliver_pending_stops
 from anygarden.turns.service import (
     create_turn,
@@ -274,6 +275,44 @@ class Harness:
                 agent_id=self.ids["lead"],
                 trigger_message_id=message.id,
                 thread_root_id=thread_root_id,
+            )
+            await db.commit()
+            return message.id
+
+    async def owner_thread_reply(self, content: str, thread_root_id: str) -> str:
+        """Owner answers the lead in a thread, as the room socket handler does."""
+        async with self.sessions() as db:
+            seq = (
+                await db.scalar(
+                    select(func.coalesce(func.max(Message.seq), 0)).where(
+                        Message.room_id == self.ids["lead_room"]
+                    )
+                )
+            ) + 1
+            message = Message(
+                room_id=self.ids["lead_room"],
+                participant_id=self.ids["owner_pid"],
+                content=content,
+                seq=seq,
+                parent_message_id=thread_root_id,
+                root_message_id=thread_root_id,
+            )
+            db.add(message)
+            await db.flush()
+            await create_turn(
+                db,
+                room_id=self.ids["lead_room"],
+                participant_id=self.ids["lead_pid"],
+                agent_id=self.ids["lead"],
+                trigger_message_id=message.id,
+                thread_root_id=thread_root_id,
+                task_id=await lead_reply_root_task(
+                    db,
+                    room_id=self.ids["lead_room"],
+                    thread_root_id=thread_root_id,
+                    participant_id=self.ids["lead_pid"],
+                    agent_id=self.ids["lead"],
+                ),
             )
             await db.commit()
             return message.id
@@ -1634,6 +1673,82 @@ async def test_lead_resumes_blocked_task_with_guidance_and_finishes(harness):
         summary="Login bug fixed with the v2.4 change list.",
     )
     assert completed["status"] == "completed"
+
+
+async def _execution_thread_root(harness: Harness, execution_id: str) -> str:
+    async with harness.sessions() as db:
+        execution = await db.get(ProjectExecution, execution_id)
+        source = await db.get(Message, execution.source_message_id)
+        return source.root_message_id or source.id
+
+
+@pytest.mark.req("EXE-25")
+async def test_lead_resumes_blocked_task_from_the_owners_thread_answer(harness):
+    """#994 — the lead asks the owner, and the owner's answer can resume."""
+    flow = await _block_then_wake_lead(harness)
+    task_id, execution_id = flow["task_id"], flow["execution_id"]
+    notice = json.dumps(flow["lead_turn"].frame, ensure_ascii=False)
+    assert "in this thread" in notice
+    # The lead cannot decide alone: it asks in the thread and ends its turn.
+    await harness.end_turn(flow["worker_turn"])
+    await harness.end_turn(flow["lead_turn"])
+
+    await harness.owner_thread_reply(
+        "Use the v2.4 tag diff in the repository as the change list.",
+        await _execution_thread_root(harness, execution_id),
+    )
+    answer_turn = await harness.deliver("lead")
+    assert answer_turn.execution_id == execution_id
+    resumed = await harness.tool(
+        answer_turn, "resume_project_task", execution_id=execution_id,
+        task_id=task_id, guidance="Use the v2.4 tag diff as the change list.",
+    )
+    assert resumed["status"] == "in_progress"
+
+    worker_turn = await harness.deliver("worker")
+    await harness.tool(worker_turn, "mark_task_status", task_id=task_id, status="done",
+                       result_markdown="Fixed using the v2.4 tag diff.")
+    await harness.end_turn(answer_turn)
+    collect = await harness.deliver("lead")
+    completed = await harness.tool(
+        collect, "complete_project_execution", execution_id=execution_id,
+        summary="Login bug fixed with the v2.4 change list.",
+    )
+    assert completed["status"] == "completed"
+
+
+async def _reply_root(harness: Harness, thread_root_id: str, agent: str = "lead") -> str | None:
+    async with harness.sessions() as db:
+        return await lead_reply_root_task(
+            db, room_id=harness.ids["lead_room"], thread_root_id=thread_root_id,
+            participant_id=harness.ids[f"{agent}_pid"], agent_id=harness.ids[agent],
+        )
+
+
+@pytest.mark.req("EXE-25")
+async def test_thread_answer_outside_the_execution_stays_an_ordinary_turn(harness):
+    """#994 — a bound turn that would be refused must not replace the reply."""
+    flow = await _block_then_wake_lead(harness)
+    execution_id = flow["execution_id"]
+    root_thread = await _execution_thread_root(harness, execution_id)
+    await harness.end_turn(flow["worker_turn"])
+    await harness.end_turn(flow["lead_turn"])
+    assert await _reply_root(harness, root_thread) is not None
+
+    # Another thread of the same room, and an agent that is not the lead.
+    other_thread = await harness.owner_thread_reply("Unrelated question", root_thread)
+    assert await _reply_root(harness, other_thread) is None
+    assert await _reply_root(harness, root_thread, agent="worker") is None
+    await harness.end_turn(await harness.deliver("lead"))
+
+    # The execution is no longer running: the reply is plain conversation.
+    async with harness.sessions() as db:
+        (await db.get(ProjectExecution, execution_id)).status = "stopped"
+        await db.commit()
+    assert await _reply_root(harness, root_thread) is None
+    await harness.owner_thread_reply("Any news?", root_thread)
+    late_turn = await harness.deliver("lead")
+    assert late_turn.execution_id is None
 
 
 @pytest.mark.req("EXE-21")
