@@ -340,6 +340,29 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                 if not tool_result.get("isError"):
                     await db.commit()
             manager = getattr(request.app.state, "connection_manager", None)
+            # #1006 — a linked agent seated for its question must join the
+            # room before its turn can reach it: subscribe its live
+            # sessions, refresh the roster, and let the lifecycle restart
+            # (or start) its process with the new room.
+            seated = [q for q in posted if q.seated]
+            if seated:
+                from anygarden.rooms.membership import notify_agent_joined
+                from anygarden.rooms.roster import broadcast_roster
+
+                lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+                async with session_factory() as db:
+                    for q in seated:
+                        await notify_agent_joined(
+                            db,
+                            manager,
+                            room_id=q.message.room_id,
+                            agent_id=q.turn.agent_id,
+                            participant_id=q.target.target_participant_id,
+                        )
+                    await broadcast_roster(manager, db, room_id=seated[0].message.room_id)
+                if lifecycle is not None:
+                    for agent in dict.fromkeys(q.turn.agent_id for q in seated):
+                        await lifecycle.on_room_added(agent)
             if manager is not None:
                 for q in posted:
                     frame = message_to_frame(q.message)

@@ -19,6 +19,14 @@ now:
    original conversation, and keeps the caller's "waiting for peers"
    indicator alive meanwhile.
 
+#1006 — a peer that was asked may ask on. Its turn then ends with a draft
+too, and the question it was answering waits for that group
+(``awaiting_group_id``) instead of settling; when the peer is woken, the
+question follows the peer's wake turn and settles with its final answer.
+Every group of one person's message shares a ``chain_id``; a chain never
+asks an agent that is already answering higher up in it, and a person can
+stop the whole chain (:func:`cancel_chain`).
+
 The state lives in the database because peer work often takes minutes and
 must survive a restart. Only :func:`dispatch_peer_ask_groups` broadcasts;
 everything else runs inside the caller's transaction.
@@ -121,6 +129,73 @@ async def _targets(db: AsyncSession, group_id: str) -> list[PeerAskTarget]:
     )
 
 
+@dataclass
+class ChainPosition:
+    """Where a group opened by a turn sits in its question chain (#1006)."""
+
+    parent_target_id: str | None
+    chain_id: str | None
+    depth: int
+
+
+async def chain_position(db: AsyncSession, turn: AgentTurn | None) -> ChainPosition:
+    """The chain a question asked from *turn* joins, and at what depth.
+
+    A turn that answers a question (or a peer's wake turn, which the
+    question follows) asks one level deeper. A caller's own wake turn asks
+    again at its group's level. Anything else starts a new chain.
+    """
+    if turn is None:
+        return ChainPosition(None, None, 1)
+    row = await target_for_turn(db, turn.request_id)
+    if row is not None:
+        parent = await db.get(PeerAskGroup, row.group_id)
+        if parent is not None:
+            return ChainPosition(row.id, parent.chain_id or parent.id, parent.depth + 1)
+    woken = (
+        await db.execute(
+            select(PeerAskGroup).where(PeerAskGroup.wake_request_id == turn.request_id)
+        )
+    ).scalars().first()
+    if woken is not None:
+        return ChainPosition(
+            woken.parent_target_id, woken.chain_id or woken.id, woken.depth
+        )
+    return ChainPosition(None, None, 1)
+
+
+async def chain_ancestor_agents(db: AsyncSession, position: ChainPosition) -> set[str]:
+    """Agents answering higher up the chain: asking one would loop."""
+    agents: set[str] = set()
+    seen: set[str] = set()
+    target_id = position.parent_target_id
+    while target_id is not None and target_id not in seen:
+        seen.add(target_id)
+        target = await db.get(PeerAskTarget, target_id)
+        if target is None:
+            break
+        group = await db.get(PeerAskGroup, target.group_id)
+        if group is None:
+            break
+        if group.caller_agent_id:
+            agents.add(group.caller_agent_id)
+        target_id = group.parent_target_id
+    return agents
+
+
+async def chain_question_count(db: AsyncSession, chain_id: str | None) -> int:
+    if chain_id is None:
+        return 0
+    return int(
+        await db.scalar(
+            select(func.count(PeerAskTarget.id))
+            .join(PeerAskGroup, PeerAskGroup.id == PeerAskTarget.group_id)
+            .where(PeerAskGroup.chain_id == chain_id)
+        )
+        or 0
+    )
+
+
 async def open_or_join_group(
     db: AsyncSession, *, caller_turn: AgentTurn, caller_participant_id: str
 ) -> PeerAskGroup:
@@ -128,13 +203,15 @@ async def open_or_join_group(
     group = await group_for_caller(db, caller_turn.request_id)
     if group is not None:
         return group
+    position = await chain_position(db, caller_turn)
+    group_id = str(uuid4())
     trigger = (
         await db.get(Message, caller_turn.trigger_message_id)
         if caller_turn.trigger_message_id
         else None
     )
     group = PeerAskGroup(
-        id=str(uuid4()),
+        id=group_id,
         room_id=caller_turn.room_id,
         caller_participant_id=caller_participant_id,
         caller_agent_id=caller_turn.agent_id,
@@ -145,6 +222,9 @@ async def open_or_join_group(
         ),
         state="collecting",
         deadline_at=_now() + timedelta(seconds=deadline_seconds()),
+        parent_target_id=position.parent_target_id,
+        chain_id=position.chain_id or group_id,
+        depth=position.depth,
     )
     # Two ask_peer calls from one turn can race to create the group; the
     # loser re-reads the winner's row instead of failing its questions.
@@ -165,6 +245,8 @@ class PostedQuestion:
     target: PeerAskTarget
     message: Message
     turn: AgentTurn
+    # #1006 — the target was seated in the room for this question.
+    seated: bool = False
 
 
 async def post_question(
@@ -177,10 +259,11 @@ async def post_question(
 ) -> PostedQuestion:
     """Post one question in the trigger's thread and start the peer's turn.
 
-    The question is authored by the caller and mentions the target, so the
-    peer's turn is a hop-2 turn (``turn_hop``) and cannot ask on. The target
-    row is flushed before the turn exists so a turn that is born cancelled
-    (agent not running) settles it through ``on_turn_terminal``.
+    The question is authored by the caller and mentions the target; the
+    peer's turn answers this row, so a question it asks in turn opens a
+    group one level deeper (:func:`chain_position`). The target row is
+    flushed before the turn exists so a turn that is born cancelled (agent
+    not running) settles it through ``on_turn_terminal``.
     """
     from anygarden.messages.service import append_message
     from anygarden.turns.service import create_turn
@@ -194,9 +277,16 @@ async def post_question(
         if origin is not None
         else group.scope_thread_root_id
     )
+    row_id = str(uuid4())
     metadata: dict[str, Any] = {
         "mentions": [{"type": "user", "id": target.id}],
-        "peer_ask": {"via": "tool", "group_id": group.id},
+        "peer_ask": {
+            "via": "tool",
+            "group_id": group.id,
+            "target_id": row_id,
+            "chain_id": group.chain_id,
+            "depth": group.depth,
+        },
         "peer_depth": 1,
         "kind": "peer_query",
     }
@@ -214,7 +304,7 @@ async def post_question(
     )
     rid = str(uuid4())
     row = PeerAskTarget(
-        id=str(uuid4()),
+        id=row_id,
         group_id=group.id,
         target_participant_id=target.id,
         question=question,
@@ -275,9 +365,26 @@ def _target_outcome(turn: AgentTurn) -> tuple[str, str | None]:
     return turn.state, turn.terminal_reason
 
 
+async def _asked_on(db: AsyncSession, turn: AgentTurn) -> PeerAskGroup | None:
+    """The group a peer's turn opened when it asked on (#1006)."""
+    if turn.state != "completed" or turn.terminal_reason != "awaiting_peers":
+        return None
+    group = await group_for_caller(db, turn.request_id)
+    if group is None or group.state not in {"collecting", "ready", "waking"}:
+        return None
+    return group
+
+
 async def on_turn_terminal(db: AsyncSession, turn: AgentTurn) -> None:
     """Settle the fan-in state a terminal turn belongs to (DB only)."""
     row = await target_for_turn(db, turn.request_id)
+    if row is not None and row.state not in TERMINAL_TARGET_STATES:
+        asked_on = await _asked_on(db, turn)
+        if asked_on is not None:
+            # The peer answers once its own peers have; the question
+            # follows its wake turn (:func:`_follow_wake`).
+            row.awaiting_group_id = asked_on.id
+            row = None
     if row is not None and row.state not in TERMINAL_TARGET_STATES:
         row.state, row.reason = _target_outcome(turn)
         row.reply_message_id = turn.accepted_message_id
@@ -396,6 +503,7 @@ async def _wake(db: AsyncSession, group: PeerAskGroup) -> Message | None:
     if caller is None or agent_id is None:
         group.state = "abandoned"
         logger.warning("peer_ask.abandoned", group_id=group.id, reason="caller_gone")
+        await _follow_wake(db, group, None)
         return None
 
     names = {b.id: b.display_name for b in await build_participants_brief(db, room_id=group.room_id)}
@@ -460,7 +568,56 @@ async def _wake(db: AsyncSession, group: PeerAskGroup) -> Message | None:
         logger.warning(
             "peer_ask.abandoned", group_id=group.id, reason=turn.terminal_reason
         )
+    await _follow_wake(db, group, turn)
+    if group.id == group.chain_id:
+        await _log_chain(db, group)
     return msg
+
+
+async def _follow_wake(
+    db: AsyncSession, group: PeerAskGroup, turn: AgentTurn | None
+) -> None:
+    """Hand the questions waiting on *group* over to the caller's wake turn.
+
+    The caller was a peer answering those questions (#1006); its wake turn
+    now writes that answer, so its terminal transition settles them. A
+    wake that could not start settles them as failed.
+    """
+    rows = (
+        await db.execute(
+            select(PeerAskTarget).where(PeerAskTarget.awaiting_group_id == group.id)
+        )
+    ).scalars().all()
+    now = _now()
+    for row in rows:
+        row.awaiting_group_id = None
+        if turn is not None and turn.state == "pending":
+            row.request_id = turn.request_id
+            continue
+        _settle(row, "failed", (turn.terminal_reason if turn else None) or "caller_gone", now)
+        parent = await db.get(PeerAskGroup, row.group_id)
+        if parent is not None:
+            await _mark_ready_if_done(db, parent)
+
+
+async def _log_chain(db: AsyncSession, root: PeerAskGroup) -> None:
+    """Record how far one person's message spread (#1006 observability)."""
+    rows = (
+        await db.execute(
+            select(PeerAskGroup.depth, PeerAskTarget.target_participant_id)
+            .join(PeerAskTarget, PeerAskTarget.group_id == PeerAskGroup.id)
+            .where(PeerAskGroup.chain_id == root.chain_id)
+        )
+    ).all()
+    logger.info(
+        "peer_ask.chain_settled",
+        chain_id=root.chain_id,
+        room_id=root.room_id,
+        max_depth=max((d for d, _ in rows), default=0),
+        questions=len(rows),
+        peers=len({pid for _, pid in rows}),
+        duration_s=round((_now() - _aware(root.created_at)).total_seconds(), 1),
+    )
 
 
 async def _last_attempt_times(
@@ -526,6 +683,16 @@ async def _advance_collecting(db: AsyncSession, now: datetime) -> None:
     touched: dict[str, PeerAskGroup] = {}
     unstarted: list[tuple[PeerAskTarget, PeerAskGroup]] = []
     for target, group, turn, active_attempt_id in rows:
+        if target.awaiting_group_id is not None:
+            if _aware(group.deadline_at) <= now:
+                target.awaiting_group_id = None
+                _settle(target, "timeout", "deadline", now)
+                touched[group.id] = group
+            else:
+                await _repair_awaiting(db, target, now)
+                if target.state in TERMINAL_TARGET_STATES:
+                    touched[group.id] = group
+            continue
         if turn is None:
             _settle(target, "failed", "turn_missing", now)
         elif turn.state in TERMINAL_TURN_STATES:
@@ -566,6 +733,17 @@ async def _advance_collecting(db: AsyncSession, now: datetime) -> None:
         touched[group.id] = group
     for group in touched.values():
         await _mark_ready_if_done(db, group)
+
+
+async def _repair_awaiting(db: AsyncSession, target: PeerAskTarget, now: datetime) -> None:
+    """Resolve a waiting question whose awaited group moved on without it."""
+    awaited = await db.get(PeerAskGroup, target.awaiting_group_id)
+    if awaited is None or awaited.state in {"abandoned", "cancelled"}:
+        target.awaiting_group_id = None
+        _settle(target, "failed", "caller_gone", now)
+    elif awaited.state == "woken" and awaited.wake_request_id:
+        target.awaiting_group_id = None
+        target.request_id = awaited.wake_request_id
 
 
 async def _heartbeat(

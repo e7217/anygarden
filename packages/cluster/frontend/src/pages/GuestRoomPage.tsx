@@ -10,6 +10,7 @@ import { useRoomParticipants } from '@/hooks/useRoomParticipants'
 import { clearAuthSession, getAuthToken, isGuestSession } from '@/lib/authStorage'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import type { MentionOption } from '@/components/MentionPopover'
+import { roomMembers } from '@/lib/participants'
 import { Hash, LogOut, Settings2, Users } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { LocaleToggle } from '@/i18n/LocaleToggle'
@@ -73,9 +74,11 @@ export default function GuestRoomPage() {
   // rules (§11.6). Mirrors the shape used by ``ChatPage`` so the
   // renderer/agent-routing gates see the same ``participant.id``
   // token namespace downstream.
+  // #1006 — link-only agents answer peer questions; they are not members.
+  const members = useMemo(() => roomMembers(participants), [participants])
   const mentionParticipants: MentionOption[] = useMemo(
     () =>
-      Object.values(participants).map((p) => ({
+      Object.values(members).map((p) => ({
         id: p.id,
         display: p.display_name,
         kind: (p.kind === 'agent' ? 'agent' : 'user') as 'user' | 'agent',
@@ -83,7 +86,7 @@ export default function GuestRoomPage() {
         // room can also distinguish multiple agents in the popover.
         description: p.description ?? null,
       })),
-    [participants],
+    [members],
   )
 
   const handleLogout = useCallback(() => {
@@ -146,7 +149,7 @@ export default function GuestRoomPage() {
               data-testid="guest-header-participants-toggle"
             >
               <Users className="h-4 w-4" />
-              <span>{Object.keys(participants).length}</span>
+              <span>{Object.keys(members).length}</span>
             </button>
             <Badge variant={connected ? 'default' : 'destructive'}>
               <span className="hidden sm:inline">

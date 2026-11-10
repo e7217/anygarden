@@ -237,6 +237,37 @@ MAX_PEER_DEPTH: int = 1
 MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN: int = 8
 
 
+# #1006 — the ``ask_peer`` tool follows agent links as deep as they go:
+# a peer that was asked may ask on, and no per-turn call count applies.
+# The two caps above stay on the routing-token fallback, where a reply
+# that mentions peers can loop. Set these to bring a cap back to the
+# tool while operating data is gathered; the calls cap counts every
+# question of one chain (one person's message and everything it led to).
+ASK_PEER_MAX_DEPTH_ENV = "ANYGARDEN_ASK_PEER_MAX_DEPTH"
+ASK_PEER_MAX_CALLS_ENV = "ANYGARDEN_ASK_PEER_MAX_CALLS"
+
+
+def _optional_positive_int(name: str) -> int | None:
+    import os
+
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def ask_peer_max_depth() -> int | None:
+    """Deepest question level ``ask_peer`` may open; ``None`` = no limit."""
+    return _optional_positive_int(ASK_PEER_MAX_DEPTH_ENV)
+
+
+def ask_peer_max_calls() -> int | None:
+    """Questions one question chain may send; ``None`` = no limit."""
+    return _optional_positive_int(ASK_PEER_MAX_CALLS_ENV)
+
+
 def is_peer_mention(
     mention: dict[str, Any],
     *,

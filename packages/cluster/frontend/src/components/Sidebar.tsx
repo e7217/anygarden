@@ -36,7 +36,7 @@ import SidebarPreferencesMenu from '@/components/SidebarPreferencesMenu'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, MessageSquare, X,
-  Pin, PinOff, GripVertical, PanelLeftClose, Link2, Inbox,
+  Pin, PinOff, GripVertical, PanelLeftClose, Link2, Inbox, Workflow,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -766,6 +766,20 @@ export default function Sidebar({
                   {agentsCollapsed
                     ? <ChevronRight className="ml-auto h-3 w-3 shrink-0" />
                     : <ChevronDown className="ml-auto h-3 w-3 shrink-0" />}
+                </button>
+                {/* #1006 — the agent link map is open to every signed-in user. */}
+                <button
+                  type="button"
+                  onClick={() => go('/agents/links')}
+                  aria-label={t('agentLinks.navLabel')}
+                  aria-current={location.pathname === '/agents/links' ? 'page' : undefined}
+                  title={t('agentLinks.navLabel')}
+                  data-testid="sidebar-agent-links"
+                  className={`inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] ${
+                    location.pathname === '/agents/links' ? 'text-[var(--color-brand-text)]' : 'text-[var(--color-foreground-muted)]'
+                  }`}
+                >
+                  <Workflow className="h-4 w-4" />
                 </button>
                 {isAdmin && (
                   <button

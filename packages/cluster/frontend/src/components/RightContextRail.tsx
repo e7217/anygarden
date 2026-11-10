@@ -12,6 +12,7 @@ import GoalsSection from '@/components/right-rail/GoalsSection'
 import CampaignSection from '@/components/right-rail/CampaignSection'
 import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
 import type { Participant } from '@/pages/ChatPage'
+import { isLinkParticipant } from '@/lib/participants'
 import type { Room } from '@/hooks/useRooms'
 import { useLocale } from '@/i18n/LocaleProvider'
 
@@ -54,8 +55,9 @@ export default function RightContextRail({
   // rows can resolve agent names locally without an extra fetch.
   const agentParticipants = useMemo(
     () =>
+      // #1006 — link-only agents are not assignable room members.
       Object.values(participants).filter(
-        (p) => p.kind === 'agent' && p.agent_id,
+        (p) => p.kind === 'agent' && p.agent_id && !isLinkParticipant(p),
       ),
     [participants],
   )

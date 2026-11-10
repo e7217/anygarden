@@ -22,6 +22,7 @@ import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
 import ThreadPanel, { type ThreadWorker } from '@/components/ThreadPanel'
 import { useOpenTurns } from '@/hooks/useOpenTurns'
+import { usePeerChains } from '@/hooks/usePeerChains'
 import { ACTIVE_TURNS_INVALIDATE_EVENT } from '@/hooks/useActiveTurns'
 import { activeTurnByParticipant, threadTurnIds } from '@/lib/openTurns'
 import { workLabel } from '@/lib/typingStage'
@@ -46,6 +47,7 @@ import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import SharedRoomConversation from '@/components/SharedRoomConversation'
 import PageShell from '@/components/PageShell'
+import { roomMembers } from '@/lib/participants'
 
 export type { Participant } from '@/lib/participants'
 
@@ -94,10 +96,16 @@ function LocalChatPage() {
   const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
   const { participants, refresh: refreshRoomParticipants } = useRoomParticipants(selectedRoom)
   const myParticipantId = user ? Object.values(participants).find(p => p.user_id === user.id)?.id ?? null : null
+  // #1006 — agents pulled in only to answer through an agent link stay in
+  // ``participants`` for sender names but are not listed, counted or
+  // offered for mentions and assignments.
+  const members = useMemo(() => roomMembers(participants), [participants])
   // Thread grouping is derived once here so the timeline and the side
   // panel can never disagree about which messages are replies.
   const threadIndex = useMemo(() => indexThreads(messages), [messages])
   const { turns: openTurns, cancel: cancelTurns } = useOpenTurns(selectedRoom, typingUsers)
+  // #1006 — agent question chains: progress cards and the thread's call tree.
+  const { chains: peerChains, cancel: cancelPeerChain } = usePeerChains(selectedRoom, messages, typingUsers)
   // MSG-09 — the open room knows at once when an agent starts or stops;
   // nudge the sidebar so it doesn't wait for its next poll.
   const typingKey = Array.from(typingUsers).sort().join(',')
@@ -241,10 +249,10 @@ function LocalChatPage() {
     }))
   }, [selectedRoom, notify, t])
   const openSlashForm = useCallback((request: SlashFormRequest): string | null => {
-    if (request.command === 'routine' && routineAgentOptions(participants).length === 0) {
+    if (request.command === 'routine' && routineAgentOptions(members).length === 0) {
       return t('chat.slash.routineNoAgents')
     }
-    if (request.command === 'goal' && !canStartCampaign(currentRoom, participants, user)) {
+    if (request.command === 'goal' && !canStartCampaign(currentRoom, members, user)) {
       return t('chat.slash.goalUnavailable')
     }
     if (!request.payload.text) {
@@ -252,14 +260,14 @@ function LocalChatPage() {
       return null
     }
     if (request.command === 'routine') {
-      const drafter = routineDrafter(currentRoom, participants, request.payload.assignee_pid)
+      const drafter = routineDrafter(currentRoom, members, request.payload.assignee_pid)
       if (!drafter) return t('chat.slash.routineNeedsAgent')
       askForDraft(request, request.payload.assignee_pid ? drafter.agent_id ?? null : null)
       return null
     }
     askForDraft(request, null)
     return null
-  }, [participants, currentRoom, user, t, askForDraft])
+  }, [members, currentRoom, user, t, askForDraft])
   // A draft that never came offers the empty form from its notice.
   useEffect(() => {
     const onOpen = (e: Event) => setSlashForm((e as CustomEvent<SlashFormRequest>).detail)
@@ -269,17 +277,17 @@ function LocalChatPage() {
   // The suggestion list says who would write the draft.
   const slashDescription = useCallback((name: SlashCommandName): string | null => {
     if (name === 'goal') {
-      const lead = goalDrafter(currentRoom, participants)
+      const lead = goalDrafter(currentRoom, members)
       return lead ? t('chat.slash.goalDrafter', { name: lead.display_name }) : null
     }
     if (name === 'routine') {
-      const drafter = routineDrafter(currentRoom, participants, null)
+      const drafter = routineDrafter(currentRoom, members, null)
       return drafter
         ? t('chat.slash.routineDrafter', { name: drafter.display_name })
         : t('chat.slash.routineNameAgent')
     }
     return null
-  }, [currentRoom, participants, t])
+  }, [currentRoom, members, t])
 
   // #116 — 1:1 agent DMs hide controls that are meaningless (agents
   // 1/1 badge, representative select with only one choice, participant
@@ -359,11 +367,11 @@ function LocalChatPage() {
   // Agent IDs that are participants in the current room (for the manage dialog)
   const participantAgentIds = useMemo(() => {
     const ids = new Set<string>()
-    for (const p of Object.values(participants)) {
+    for (const p of Object.values(members)) {
       if (p.agent_id) ids.add(p.agent_id)
     }
     return ids
-  }, [participants])
+  }, [members])
 
   // #179 — DMs have ``project_id === null``; collapse null→undefined so
   // downstream dialogs keyed on ``string | undefined`` (SearchDialog)
@@ -371,7 +379,7 @@ function LocalChatPage() {
   const currentProjectId = currentRoom?.project_id ?? undefined
 
   const mentionUsers = useMemo<MentionOption[]>(
-    () => Object.values(participants).map(p => ({
+    () => Object.values(members).map(p => ({
       id: p.id,
       display: p.display_name,
       kind: (p.kind === 'agent' ? 'agent' : 'user') as 'user' | 'agent',
@@ -379,7 +387,7 @@ function LocalChatPage() {
       // autocomplete can render a secondary line.
       description: p.description ?? null,
     })),
-    [participants],
+    [members],
   )
 
   // #54 — realtime presence. REST ``/rooms/{id}`` seeds the initial
@@ -401,20 +409,20 @@ function LocalChatPage() {
   // gets no agent reply, so the composer says so. A one-agent room
   // answers without a mention and needs no hint.
   const showMentionHint =
-    Object.values(participants).filter(p => p.kind === 'agent').length >= 2
+    Object.values(members).filter(p => p.kind === 'agent').length >= 2
 
   // Agents online / total — the header marks the participants button
   // only while some are offline (#54, #897).
   const { agentsOnline, agentsTotal } = useMemo(() => {
     let total = 0
     let on = 0
-    for (const p of Object.values(participants)) {
+    for (const p of Object.values(members)) {
       if (p.kind !== 'agent') continue
       total += 1
       if (presence[p.id]?.online ?? Boolean(p.online)) on += 1
     }
     return { agentsOnline: on, agentsTotal: total }
-  }, [participants, presence])
+  }, [members, presence])
 
   // For DM rooms, expose the partner agent so RoomHeader can swap
   // its left Hash glyph for an engine-colored avatar. Derived from
@@ -423,7 +431,7 @@ function LocalChatPage() {
   // unknown until we thread it through the participant payload —
   // EntityAvatar gracefully omits the corner badge in that case.
   const dmAgent = useMemo(() => {
-    const agentP = Object.values(participants).find(
+    const agentP = Object.values(members).find(
       (p) => p.kind === 'agent',
     )
     if (!agentP) return undefined
@@ -436,7 +444,7 @@ function LocalChatPage() {
       avatar_kind: agentP.avatar_kind ?? null,
       avatar_value: agentP.avatar_value ?? null,
     }
-  }, [participants])
+  }, [members])
 
   // Mirror the server auth rule (api/v1/invites.py::_require_room_admin_or_owner):
   // global admin OR a room-level admin/owner Participant. The server
@@ -651,7 +659,7 @@ function LocalChatPage() {
                 // in agent DMs (fixed 1:1, no
                 // meaningful variance in any of those values).
                 participantCount={
-                  isDm ? undefined : Object.keys(participants).length
+                  isDm ? undefined : Object.keys(members).length
                 }
                 agentsOnline={isDm ? undefined : agentsOnline}
                 agentsTotal={isDm ? undefined : agentsTotal}
@@ -745,7 +753,7 @@ function LocalChatPage() {
                   silently reopening it after a room switch. */}
               {!isDm && (
                 <ParticipantListPopover
-                  participants={participants}
+                  participants={members}
                   presence={presence}
                   open={participantsOpen}
                   onClose={() => setParticipantsOpen(false)}
@@ -774,6 +782,8 @@ function LocalChatPage() {
               typingSince={typingSince}
               openTurns={openTurns}
               onCancelTurns={cancelTurns}
+              peerChains={peerChains}
+              onCancelPeerChain={cancelPeerChain}
               threadIndex={threadIndex}
               activeThreadRootId={threadRootId}
               // Re-clicking the open thread's trigger is a close like any
@@ -799,7 +809,7 @@ function LocalChatPage() {
             />
             <SlashFormDialog
               roomId={selectedRoom}
-              participants={participants}
+              participants={members}
               request={slashForm}
               onClose={() => setSlashForm(null)}
             />
@@ -942,6 +952,8 @@ function LocalChatPage() {
           onClose={closeThread}
           workers={threadWorkers}
           onCancelTurns={cancelTurns}
+          peerChains={peerChains}
+          onCancelPeerChain={cancelPeerChain}
         />
       ) : (
         <RightContextRail

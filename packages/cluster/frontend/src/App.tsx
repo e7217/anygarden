@@ -19,6 +19,8 @@ const FederationPreviewPage = lazy(() => import('@/pages/FederationPreviewPage')
 // (~110KB gzip combined) only when the route is actually visited.
 const TopologyPage = lazy(() => import('@/pages/TopologyPage'))
 const InboxPage = lazy(() => import('@/pages/InboxPage'))
+// #1006 — agent link map shares the xyflow chunk with Topology.
+const AgentLinksPage = lazy(() => import('@/pages/AgentLinksPage'))
 
 // #651 — admin surfaces are code-split for the same reason as Topology,
 // with a stronger case behind it: every one of these sits under
@@ -107,6 +109,8 @@ export default function App() {
             <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
             <Route path="/rooms/:roomId" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
             <Route path="/inbox" element={<ProtectedRoute><Suspense fallback={<RouteFallback label={t('common.loading')} />}><InboxPage /></Suspense></ProtectedRoute>} />
+            {/* #1006 — any signed-in user may view and edit agent links. */}
+            <Route path="/agents/links" element={<ProtectedRoute><AgentLinksPage /></ProtectedRoute>} />
             <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
             <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
             <Route path="/admin/system" element={<Navigate to="/admin/machines" replace />} />

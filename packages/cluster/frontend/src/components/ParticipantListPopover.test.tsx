@@ -85,3 +85,23 @@ describe('ParticipantListPopover — representative agent (#897)', () => {
     expect(screen.queryByRole('combobox')).toBeNull()
   })
 })
+
+describe('ParticipantListPopover — agent links (#1006)', () => {
+  it('leaves out agents that joined only to answer through a link', () => {
+    render(
+      <ParticipantListPopover
+        open
+        onClose={() => {}}
+        participants={{
+          p1: { id: 'p1', agent_id: 'a1', display_name: 'Coder', kind: 'agent', joined_via: null },
+          p2: { id: 'p2', agent_id: 'a2', display_name: 'Security', kind: 'agent', joined_via: 'link' },
+          u: { id: 'u', display_name: 'Alice', kind: 'user' },
+        }}
+        onSetRepresentative={() => {}}
+      />,
+    )
+    const group = screen.getByRole('group')
+    expect(within(group).getAllByText('Coder').length).toBeGreaterThan(0)
+    expect(within(group).queryByText('Security')).toBeNull()
+  })
+})

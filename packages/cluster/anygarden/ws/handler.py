@@ -67,6 +67,7 @@ from anygarden.rooms.authorization import (
     room_authorization_session,
 )
 from anygarden.rooms.membership import ensure_agent_in_room
+from anygarden.orchestration.agent_links import room_agent_links
 from anygarden.rooms.roster import build_participants_brief
 from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import (
@@ -826,6 +827,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
             ).scalar_one_or_none()
         )
         participants_brief = await build_participants_brief(db, room_id=room_id)
+        room_links = await room_agent_links(db, room_id=room_id)
         room_last_seq = (
             await db.execute(
                 select(func.max(Message.seq)).where(Message.room_id == room_id)
@@ -842,6 +844,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         agent_id=identity.id if identity and identity.kind == "agent" else None,
         context_window_opt_out=agent_opt_out,
         participants=participants_brief,
+        agent_links=room_links,
         ephemeral=bool(room_ephemeral),
         room_memory=agent_room_memory,
     )
@@ -1257,6 +1260,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                     .where(
                                         Participant.room_id == room_id,
                                         Participant.agent_id.isnot(None),
+                                        # #1006 — see messages/router.py.
+                                        Participant.joined_via.is_(None),
                                     )
                                     .order_by(
                                         Participant.joined_at, Participant.id

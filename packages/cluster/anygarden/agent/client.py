@@ -281,6 +281,9 @@ class ChatClient:
         # ``participants`` entirely — those rooms cache an empty dict
         # so the adapter's iteration stays safe.
         self._participants_by_room: dict[str, dict[str, dict[str, Any]]] = {}
+        # #1006 — each room's ``agent_links`` snapshot (agent id → the
+        # agents it may ask from any room), sent with the roster.
+        self._links_by_room: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
         # Issue #157 Phase B — per-room ring buffer of recent message
         # fingerprints (sender, hash). Feeds ``cycle_guard`` in
@@ -685,6 +688,40 @@ class ChatClient:
             if isinstance(entry, dict) and entry.get("id")
         }
 
+    def _cache_links(self, room_id: str, links: Any) -> None:
+        """Replace *room_id*'s agent-link snapshot (#1006)."""
+        self._links_by_room[room_id] = {
+            str(agent_id): [e for e in entries if isinstance(e, dict) and e.get("agent_id")]
+            for agent_id, entries in (links if isinstance(links, dict) else {}).items()
+            if isinstance(entries, list)
+        }
+
+    def _compose_links(self, room_id: str, member_agent_ids: set[str]) -> str:
+        """The agents this agent may ask through its links (#1006).
+
+        Linked agents that already sit in the room are in the peer list
+        above; the rest are named by agent id, which ``ask_peer`` accepts.
+        """
+        entries = (self._links_by_room.get(room_id) or {}).get(self._agent_id or "", [])
+        if not entries:
+            return ""
+        lines = []
+        for e in entries:
+            name = e.get("display_name") or "?"
+            when = (e.get("when_to_ask") or "").replace("\n", " ").strip()[:300]
+            if e["agent_id"] in member_agent_ids:
+                lines.append(f"- {name} (in this room) — ask when: {when}")
+            else:
+                lines.append(f"- {name} (agent id: {e['agent_id']}) — ask when: {when}")
+        return (
+            "\n\nAgents you are linked to — you may ask them from any room. "
+            "Ask one only when its condition fits; for one that is not in "
+            "this room, pass its agent id as agent_id in ask_peer (instead "
+            "of participant_id). It answers in the thread and does not see "
+            "this conversation, so put the context it needs in the question.\n"
+            + "\n".join(lines)
+        )
+
     def compose_roster_suffix(self, room_id: str) -> str:
         """Compose the participants roster appended to the LLM prompt
         (#221 → #288 → #644).
@@ -732,10 +769,17 @@ class ChatClient:
         my_pids = self._my_participant_ids
         self_line: str | None = None
         lines: list[str] = []
+        member_agent_ids: set[str] = set()
         for pid, brief in roster.items():
             if not isinstance(brief, dict):
                 continue
             name = brief.get("display_name") or "?"
+            if pid not in my_pids and brief.get("joined_via"):
+                # #1006 — seated only to answer a linked question in a
+                # thread: not a member to address or ask from here.
+                continue
+            if brief.get("agent_id"):
+                member_agent_ids.add(str(brief["agent_id"]))
             if pid in my_pids:
                 # #733 — ``_my_participant_ids`` spans every room, so the
                 # roster (not the set) decides which pid is ours *here*.
@@ -764,9 +808,23 @@ class ChatClient:
         )
         if self_line is not None:
             header += "\n\n" + self_line
+        links = self._compose_links(room_id, member_agent_ids)
         if not lines:
             # Alone in the room: nobody to route to, so the peer list
             # and the routing guidance below would be noise.
+            if links:
+                return header + links + (
+                    "\n\nCall the ask_peer tool once with this room ID and one "
+                    "entry per agent. The questions are posted in a thread "
+                    "and the agents start at once, so do not also write the "
+                    "requests in your reply. Your reply for that turn is not "
+                    "posted: write only what you already found yourself; it "
+                    "is kept as your draft. When every agent has finished you "
+                    "are woken with their answers and your draft — then write "
+                    "the final answer once, and say which agent failed or "
+                    "timed out and why. Don't ask for trivial greetings or "
+                    "meta questions — answer those yourself."
+                )
             return header
         suffix = (
             header
@@ -776,6 +834,7 @@ class ChatClient:
             "<@user:PARTICIPANT_ID> in prose that merely lists, recommends, "
             "or describes peers.\n"
             + "\n".join(lines)
+            + links
         )
         # #283 / #288 / #737 / #762: the paragraphs below carry the
         # peer-call rules — call through the ``ask_peer`` tool so the call
@@ -1121,6 +1180,7 @@ class ChatClient:
             # helper caches an empty dict so adapter iteration stays
             # safe.
             self._cache_roster(room_id, data.get("participants"))
+            self._cache_links(room_id, data.get("agent_links"))
             # The server may include rooms that were added while we
             # were disconnected. Join any we don't already have.
             for pending in data.get("pending_rooms") or []:
@@ -1156,6 +1216,8 @@ class ChatClient:
             new_participants = data.get("participants")
             if new_participants is not None:
                 self._cache_roster(target_room, new_participants)
+            if data.get("agent_links") is not None:
+                self._cache_links(target_room, data.get("agent_links"))
             logger.info(
                 "ws.room_settings_changed",
                 room_id=target_room,

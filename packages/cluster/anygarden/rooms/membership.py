@@ -78,7 +78,18 @@ async def ensure_agent_in_room(
     )
     existing = (await db.execute(existing_stmt)).scalar_one_or_none()
 
-    if existing is not None:
+    if existing is not None and existing.joined_via is not None:
+        # #1006 — an agent seated only for a linked question becomes a
+        # real member: it now counts for @everyone, the one-agent rule
+        # and the representative slot.
+        existing.joined_via = None
+        if room.representative_agent_id is None:
+            room.representative_agent_id = agent_id
+        await db.commit()
+        await db.refresh(existing)
+        participant = existing
+        created = True
+    elif existing is not None:
         participant = existing
         created = False
     else:
@@ -100,48 +111,9 @@ async def ensure_agent_in_room(
         await db.refresh(participant)
         created = True
 
-    if manager is not None:
-        other_pids = (
-            await db.execute(
-                select(Participant.id).where(
-                    Participant.agent_id == agent_id,
-                    Participant.id != participant.id,
-                )
-            )
-        ).scalars().all()
-        if other_pids:
-            # #227 — observe silent drops. ``send_to`` is best-effort
-            # (it no-ops if the target pid is missing from
-            # ``_by_participant``), so counting the frames we *know*
-            # will drop is the only way to trip an alert when a whole
-            # cohort of agents misses JoinRoomOut. The send itself
-            # still happens below as a cheap no-op for the pids that
-            # *are* subscribed, plus belt-and-braces for race windows
-            # where a subscription arrives between our check and the
-            # send. Callers that need delivery guarantees must pair
-            # this helper with a machine-side nudge (``bump_generation``
-            # or ``request_start``) — see ``AgentLifecycle.on_room_added``.
-            try:
-                connected_pids = await manager.connected_participant_ids()
-            except AttributeError:
-                # Legacy test doubles without the method — treat as
-                # "nothing connected" conservatively, which is also
-                # the only safe assumption if we can't introspect.
-                connected_pids = set()
-            frame = JoinRoomOut(room_id=room_id, participant_id="")
-            for pid in other_pids:
-                if pid not in connected_pids:
-                    agent_joinroom_drop_total.labels(
-                        reason="not_subscribed"
-                    ).inc()
-                    logger.warning(
-                        "membership.joinroom_dropped",
-                        agent_id=agent_id,
-                        room_id=room_id,
-                        dropped_pid=pid,
-                        reason="not_subscribed",
-                    )
-                await manager.send_to(pid, frame)
+    await notify_agent_joined(
+        db, manager, room_id=room_id, agent_id=agent_id, participant_id=participant.id
+    )
 
     # #732 — refresh the seated peers' roster. Only on insert: the
     # ``#room`` auto-join re-runs this helper on every query, and an
@@ -150,6 +122,65 @@ async def ensure_agent_in_room(
         await broadcast_roster(manager, db, room_id=room_id)
 
     return participant, created
+
+
+async def notify_agent_joined(
+    db: AsyncSession,
+    manager: ConnectionManager | None,
+    *,
+    room_id: str,
+    agent_id: str,
+    participant_id: str,
+) -> None:
+    """Tell *agent_id*'s live sessions to subscribe to *room_id*.
+
+    Pushes ``JoinRoomOut`` to every other participant row of the agent;
+    see :func:`ensure_agent_in_room` for why this runs even when the row
+    already existed. A ``None`` *manager* skips the push.
+    """
+    if manager is None:
+        return
+    other_pids = (
+        await db.execute(
+            select(Participant.id).where(
+                Participant.agent_id == agent_id,
+                Participant.id != participant_id,
+            )
+        )
+    ).scalars().all()
+    if other_pids:
+        # #227 — observe silent drops. ``send_to`` is best-effort
+        # (it no-ops if the target pid is missing from
+        # ``_by_participant``), so counting the frames we *know*
+        # will drop is the only way to trip an alert when a whole
+        # cohort of agents misses JoinRoomOut. The send itself
+        # still happens below as a cheap no-op for the pids that
+        # *are* subscribed, plus belt-and-braces for race windows
+        # where a subscription arrives between our check and the
+        # send. Callers that need delivery guarantees must pair
+        # this helper with a machine-side nudge (``bump_generation``
+        # or ``request_start``) — see ``AgentLifecycle.on_room_added``.
+        try:
+            connected_pids = await manager.connected_participant_ids()
+        except AttributeError:
+            # Legacy test doubles without the method — treat as
+            # "nothing connected" conservatively, which is also
+            # the only safe assumption if we can't introspect.
+            connected_pids = set()
+        frame = JoinRoomOut(room_id=room_id, participant_id="")
+        for pid in other_pids:
+            if pid not in connected_pids:
+                agent_joinroom_drop_total.labels(
+                    reason="not_subscribed"
+                ).inc()
+                logger.warning(
+                    "membership.joinroom_dropped",
+                    agent_id=agent_id,
+                    room_id=room_id,
+                    dropped_pid=pid,
+                    reason="not_subscribed",
+                )
+            await manager.send_to(pid, frame)
 
 
 async def _set_next_rep_after_removal(
@@ -193,6 +224,7 @@ async def _set_next_rep_after_removal(
             .where(
                 Participant.room_id == room_id,
                 Participant.agent_id.is_not(None),
+                Participant.joined_via.is_(None),
                 Participant.id != removed_participant_id,
             )
             .order_by(Participant.joined_at.asc(), Participant.id.asc())

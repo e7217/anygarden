@@ -124,6 +124,9 @@ async def _expand_room_mentions(
                 .where(
                     Participant.room_id == room.id,
                     Participant.agent_id.isnot(None),
+                    # #1006 — agents seated for a linked question are not
+                    # the room's members: no @everyone, no one-agent rule.
+                    Participant.joined_via.is_(None),
                 )
                 .order_by(Participant.joined_at, Participant.id)
             )
