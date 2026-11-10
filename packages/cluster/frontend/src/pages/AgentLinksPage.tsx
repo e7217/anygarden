@@ -1,10 +1,12 @@
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, Pencil, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
 import PageShell from '@/components/PageShell'
 import { Button } from '@/components/ui/button'
 import AgentLinksCanvas, { type LinkSelection } from '@/components/agent-links/AgentLinksCanvas'
-import LinkEditorDialog, { type LinkEditorTarget } from '@/components/agent-links/LinkEditorDialog'
+import LinkCreateDialog, { linkErrorMessage, type LinkCreateTarget } from '@/components/agent-links/LinkCreateDialog'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import AgentConversationsPanel from '@/components/agent-links/AgentConversationsPanel'
+import { useAuth } from '@/hooks/useAuth'
 import { useAgentLinks } from '@/hooks/useAgentLinks'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { findCycles, reachableFrom, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
@@ -34,16 +36,18 @@ function Notice({ title, body, action, tone = 'neutral' }: { title: string; body
 
 /**
  * Relationship map of agent links (#1006): which agent may ask which,
- * and when. Any signed-in user may edit links. Drag between agents to
- * add one; select a link to edit or delete it; select an agent to
+ * Any signed-in user may edit links. Drag between agents to
+ * add one; select a link to delete it; select an agent to
  * highlight everyone it could pull in by following links.
  */
 export default function AgentLinksPage() {
   const { t, formatNumber } = useLocale()
   const { confirm, notify } = useFeedback()
-  const { graph, loading, errorStatus, refresh, create, update, remove } = useAgentLinks()
+  const { graph, loading, errorStatus, refresh, create, remove } = useAgentLinks()
+  const { user } = useAuth()
+  const [saving, setSaving] = useState(0)
   const [selection, setSelection] = useState<LinkSelection>(null)
-  const [editor, setEditor] = useState<LinkEditorTarget | null>(null)
+  const [editor, setEditor] = useState<LinkCreateTarget | null>(null)
 
   const agents = useMemo(() => graph?.agents ?? [], [graph])
   const links = useMemo(() => graph?.links ?? [], [graph])
@@ -79,6 +83,15 @@ export default function AgentLinksPage() {
     }
   }, [confirm, notify, nameOf, remove, t])
 
+  const connect = useCallback(async (fromId: string, toId: string) => {
+    setSaving(n => n + 1)
+    try {
+      const link = await create({ from_agent_id: fromId, to_agent_id: toId })
+      setSelection({ kind: 'link', id: link.id })
+    } catch (error) { notify({ message: linkErrorMessage(t, error), tone: 'error' }) }
+    finally { setSaving(n => n - 1) }
+  }, [create, notify, t])
+
   const selectedLink = selection?.kind === 'link' ? links.find(link => link.id === selection.id) ?? null : null
   const selectedAgent = selection?.kind === 'agent' ? agents.find(agent => agent.id === selection.id) ?? null : null
 
@@ -97,7 +110,7 @@ export default function AgentLinksPage() {
     body = <Notice title={t('agentLinks.noAgentsTitle')} body={t('agentLinks.noAgentsBody')} />
   } else {
     body = (
-      <div className="relative flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
         <section className="relative min-h-0 min-w-0 flex-1" aria-label={t('agentLinks.canvasLabel')}>
           <CanvasBoundary
             fallback={(retry, message) => (
@@ -105,11 +118,13 @@ export default function AgentLinksPage() {
             )}
           >
             <AgentLinksCanvas
+              key={user?.id ?? 'anonymous'}
               agents={agents}
               links={links}
+              userId={user?.id ?? null}
               selection={selection}
               onSelect={setSelection}
-              onConnect={(fromId, toId) => setEditor({ kind: 'create', fromId, toId, lockFrom: true, lockTo: true })}
+              onConnect={(fromId, toId) => void connect(fromId, toId)}
             />
           </CanvasBoundary>
           {links.length === 0 && (
@@ -128,13 +143,15 @@ export default function AgentLinksPage() {
               <LinkDetails
                 link={selectedLink}
                 nameOf={nameOf}
-                onEdit={() => setEditor({ kind: 'edit', link: selectedLink })}
+                onReverse={links.some(l => l.from_agent_id === selectedLink.to_agent_id && l.to_agent_id === selectedLink.from_agent_id) ? undefined : () => void connect(selectedLink.to_agent_id, selectedLink.from_agent_id)}
                 onDelete={() => void askDelete(selectedLink)}
               />
             )}
             {selectedAgent && (
               <AgentDetails
                 agent={selectedAgent}
+                user={user}
+                onAdd={agents.some(a => a.id !== selectedAgent.id && !links.some(l => l.from_agent_id === selectedAgent.id && l.to_agent_id === a.id)) ? () => setEditor({ fromId: selectedAgent.id, lockFrom: true }) : undefined}
                 links={links}
                 nameOf={nameOf}
                 onSelectLink={id => setSelection({ kind: 'link', id })}
@@ -161,11 +178,12 @@ export default function AgentLinksPage() {
               <RefreshCcw className={loading ? 'motion-safe:animate-spin' : undefined} />
               <span className="max-sm:sr-only">{t('common.refresh')}</span>
             </Button>
-            <Button size="sm" onClick={() => setEditor({ kind: 'create' })} disabled={agents.length < 2}>
+            <Button size="sm" onClick={() => setEditor({})} disabled={agents.length < 2}>
               <Plus /> {t('agentLinks.addLink')}
             </Button>
           </div>
         </div>
+        {saving > 0 && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.saving')}</p>}
         <p className="mt-1 max-w-3xl text-caption text-[var(--color-foreground-muted)]">
           {t('agentLinks.description')} <span className="max-md:hidden">{t('agentLinks.dragHint')}</span>
         </p>
@@ -187,7 +205,7 @@ export default function AgentLinksPage() {
         )}
       </div>
       {body}
-      <LinkEditorDialog
+      <LinkCreateDialog
         target={editor}
         onClose={() => setEditor(null)}
         agents={agents}
@@ -196,7 +214,6 @@ export default function AgentLinksPage() {
           const link = await create(input)
           setSelection({ kind: 'link', id: link.id })
         }}
-        onUpdate={update}
       />
     </PageShell>
   )
@@ -207,7 +224,7 @@ function DetailsPanel({ onClose, children }: { onClose: () => void; children: Re
   return (
     <aside
       aria-label={t('agentLinks.details')}
-      className="absolute inset-x-0 bottom-0 z-20 max-h-[60%] overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-deep md:static md:max-h-none md:w-80 md:shrink-0 md:border-l md:border-t-0 md:shadow-none"
+      className="relative z-20 max-h-[55%] shrink-0 overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-deep lg:static lg:max-h-none lg:w-80 lg:shrink-0 lg:border-l lg:border-t-0 lg:shadow-none"
     >
       <div className="mb-2 flex justify-end">
         <Button variant="ghost" size="icon" onClick={onClose} aria-label={t('agentLinks.closeDetails')}>
@@ -219,31 +236,26 @@ function DetailsPanel({ onClose, children }: { onClose: () => void; children: Re
   )
 }
 
-function LinkDetails({ link, nameOf, onEdit, onDelete }: {
+function LinkDetails({ link, nameOf, onReverse, onDelete }: {
   link: AgentLink
   nameOf: (id: string) => string
-  onEdit: () => void
+  onReverse?: () => void
   onDelete: () => void
 }) {
   const { t } = useLocale()
-  return (
-    <div className="space-y-3" data-testid="agent-link-details">
-      <h2 className="break-words text-body font-semibold text-[var(--color-foreground)]">
-        {t('agentLinks.linkDetailsTitle', { from: nameOf(link.from_agent_id), to: nameOf(link.to_agent_id) })}
-      </h2>
-      <div>
-        <p className="text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('agentLinks.whenToAsk')}</p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-caption text-[var(--color-foreground)]">{link.when_to_ask}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={onEdit}><Pencil /> {t('agentLinks.edit')}</Button>
-        <Button variant="ghost" size="sm" onClick={onDelete} className="text-[var(--color-danger)]"><Trash2 /> {t('agentLinks.delete')}</Button>
-      </div>
+  return <div className="space-y-4" data-testid="agent-link-details">
+    <h2 className="break-words text-body font-semibold">{t('agentLinks.linkDetailsTitle', { from: nameOf(link.from_agent_id), to: nameOf(link.to_agent_id) })}</h2>
+    <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.description')}</p>
+    <div className="flex flex-wrap gap-2">
+      {onReverse && <Button variant="outline" size="sm" onClick={onReverse}><ArrowLeftRight />{t('agentLinks.reverseLink')}</Button>}
+      <Button variant="ghost" size="sm" onClick={onDelete} className="text-[var(--color-danger)]"><Trash2 />{t('agentLinks.delete')}</Button>
     </div>
-  )
+  </div>
 }
 
-function AgentDetails({ agent, links, nameOf, onSelectLink }: {
+function AgentDetails({ agent, user, onAdd, links, nameOf, onSelectLink }: {
+  user: { id: string; is_admin: boolean } | null
+  onAdd?: () => void
   agent: LinkAgent
   links: AgentLink[]
   nameOf: (id: string) => string
@@ -261,7 +273,6 @@ function AgentDetails({ agent, links, nameOf, onSelectLink }: {
         className="w-full rounded-[var(--radius-sm)] px-2 py-1.5 text-left hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
       >
         <span className="block text-caption font-medium text-[var(--color-foreground)]">{nameOf(otherId)}</span>
-        <span className="block break-words text-badge text-[var(--color-foreground-muted)]">{link.when_to_ask}</span>
       </button>
     </li>
   )
@@ -271,6 +282,8 @@ function AgentDetails({ agent, links, nameOf, onSelectLink }: {
         <h2 className="break-words text-body font-semibold text-[var(--color-foreground)]">{agent.name}</h2>
         {agent.description && <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">{agent.description}</p>}
       </div>
+      <AgentConversationsPanel key={`${user?.id ?? ''}:${agent.id}`} agentId={agent.id} user={user} />
+      {onAdd && <Button variant="outline" size="sm" onClick={onAdd}><Plus />{t('agentLinks.addLink')}</Button>}
       <div>
         <h3 className="text-caption font-semibold text-[var(--color-foreground)]">{t('agentLinks.reachTitle', { name: agent.name })}</h3>
         {reachable.length === 0 ? (

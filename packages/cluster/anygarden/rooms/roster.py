@@ -25,11 +25,11 @@ close the loop.
 from __future__ import annotations
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from anygarden.db.models import Participant
+from anygarden.db.models import AgentLink, Participant
 from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import ParticipantBrief, RoomSettingsChangedOut
 
@@ -126,13 +126,27 @@ async def broadcast_roster(
     )
 
 
+async def roster_room_ids_for_agent(
+    db: AsyncSession, *, agent_id: str, include_link_sources: bool = False,
+) -> list[str]:
+    """Collect affected rooms before a target's links can be deleted."""
+    affected = Participant.agent_id == agent_id
+    if include_link_sources:
+        callers = select(AgentLink.from_agent_id).where(AgentLink.to_agent_id == agent_id)
+        affected = or_(affected, Participant.agent_id.in_(callers))
+    return list((await db.scalars(
+        select(Participant.room_id).where(affected).distinct()
+    )).all())
+
+
 async def broadcast_roster_for_agent(
     manager: ConnectionManager | None,
     db: AsyncSession,
     *,
     agent_id: str,
+    include_link_sources: bool = False,
 ) -> None:
-    """Refresh the roster in every room *agent_id* participates in.
+    """Refresh an agent's rooms, and optionally its linked callers' rooms.
 
     Used by ``PUT /api/v1/agents/{id}`` when a field the roster renders
     (``name``, ``description``) changes: peers across all of the
@@ -143,10 +157,8 @@ async def broadcast_roster_for_agent(
     """
     if manager is None:
         return
-    room_ids = (
-        await db.execute(
-            select(Participant.room_id).where(Participant.agent_id == agent_id)
-        )
-    ).scalars().all()
+    room_ids = await roster_room_ids_for_agent(
+        db, agent_id=agent_id, include_link_sources=include_link_sources,
+    )
     for room_id in room_ids:
         await broadcast_roster(manager, db, room_id=room_id)

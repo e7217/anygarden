@@ -456,3 +456,53 @@ class TestEveryMembershipPathBroadcasts:
         assert len(frames) == 1
         guests = [p for p in frames[0].participants if p.kind == "guest"]
         assert [g.display_name for g in guests] == ["Alice"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', [
+    {'description': 'Updated security expertise', 'description_set': True},
+    {'name': 'Renamed security reviewer'},
+    None,
+])
+async def test_link_target_metadata_reaches_callers_room(roster_env, change):
+    """The target has never joined the caller's room (#1009)."""
+    app, caller, target = roster_env['app'], roster_env['seated'], roster_env['spare']
+    captured = _spy_on_broadcast(app)
+    headers = {'Authorization': f"Bearer {roster_env['token']}"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post('/api/v1/agent-links', headers=headers, json={
+            'from_agent_id': caller.id, 'to_agent_id': target.id,
+        })
+        assert response.status_code == 201
+        captured.clear()
+        if change is None:
+            response = await client.delete(f'/api/v1/agents/{target.id}', headers=headers)
+        else:
+            response = await client.put(f'/api/v1/agents/{target.id}', headers=headers, json=change)
+        assert response.status_code == 200, response.text
+    frames = _roster_frames(captured)
+    assert [frame.room_id for frame in frames] == [roster_env['room'].id]
+    entries = frames[0].agent_links.get(caller.id, [])
+    if change is None:
+        assert entries == []
+    elif 'description' in change:
+        assert entries[0].description == change['description']
+    else:
+        assert entries[0].display_name == change['name']
+    assert all(p.agent_id != target.id for p in frames[0].participants)
+
+
+@pytest.mark.asyncio
+async def test_link_target_and_caller_sharing_a_room_refresh_once(roster_env):
+    app, caller, target = roster_env["app"], roster_env["seated"], roster_env["spare"]
+    captured = _spy_on_broadcast(app)
+    headers = {"Authorization": f"Bearer {roster_env['token']}"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/rooms/{roster_env['room'].id}/participants", headers=headers, json={"agent_id": target.id, "role": "member"})
+        assert response.status_code == 201
+        response = await client.post("/api/v1/agent-links", headers=headers, json={"from_agent_id": caller.id, "to_agent_id": target.id})
+        assert response.status_code == 201
+        captured.clear()
+        response = await client.put(f"/api/v1/agents/{target.id}", headers=headers, json={"description": "Updated", "description_set": True})
+        assert response.status_code == 200
+    assert len(_roster_frames(captured)) == 1

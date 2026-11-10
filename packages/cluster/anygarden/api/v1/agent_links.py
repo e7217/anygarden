@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Agent, AgentLink
 from anygarden.dependencies import get_current_identity, get_db
-from anygarden.orchestration.agent_links import MAX_WHEN_TO_ASK_CHARS
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.roster import broadcast_roster_for_agent
 
@@ -40,7 +39,6 @@ class AgentLinkOut(BaseModel):
     id: str
     from_agent_id: str
     to_agent_id: str
-    when_to_ask: str
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -51,13 +49,10 @@ class AgentLinksOut(BaseModel):
 
 
 class AgentLinkCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     from_agent_id: str
     to_agent_id: str
-    when_to_ask: str
-
-
-class AgentLinkUpdate(BaseModel):
-    when_to_ask: str
 
 
 def _require_person(identity: Identity) -> None:
@@ -65,22 +60,11 @@ def _require_person(identity: Identity) -> None:
         raise HTTPException(403, detail="Only people can edit agent links")
 
 
-def _clean_when(value: str) -> str:
-    text = value.strip()
-    if not text or len(text) > MAX_WHEN_TO_ASK_CHARS:
-        raise HTTPException(
-            422,
-            detail=f"when_to_ask must be 1–{MAX_WHEN_TO_ASK_CHARS} characters",
-        )
-    return text
-
-
 def _out(link: AgentLink) -> AgentLinkOut:
     return AgentLinkOut(
         id=link.id,
         from_agent_id=link.from_agent_id,
         to_agent_id=link.to_agent_id,
-        when_to_ask=link.when_to_ask,
         created_at=link.created_at.isoformat() if link.created_at else None,
         updated_at=link.updated_at.isoformat() if link.updated_at else None,
     )
@@ -124,7 +108,6 @@ async def create_agent_link(
     db: AsyncSession = Depends(get_db),
 ) -> AgentLinkOut:
     _require_person(identity)
-    when = _clean_when(body.when_to_ask)
     if body.from_agent_id == body.to_agent_id:
         raise HTTPException(400, detail="An agent cannot be linked to itself")
     for agent_id in (body.from_agent_id, body.to_agent_id):
@@ -133,7 +116,6 @@ async def create_agent_link(
     link = AgentLink(
         from_agent_id=body.from_agent_id,
         to_agent_id=body.to_agent_id,
-        when_to_ask=when,
         created_by=identity.id,
     )
     db.add(link)
@@ -142,25 +124,6 @@ async def create_agent_link(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(409, detail="These agents are already linked") from exc
-    await db.refresh(link)
-    await _refresh_rosters(request, db, link.from_agent_id)
-    return _out(link)
-
-
-@router.patch("/api/v1/agent-links/{link_id}", response_model=AgentLinkOut)
-async def update_agent_link(
-    link_id: str,
-    body: AgentLinkUpdate,
-    request: Request,
-    identity: Identity = Depends(get_current_identity),
-    db: AsyncSession = Depends(get_db),
-) -> AgentLinkOut:
-    _require_person(identity)
-    link = await db.get(AgentLink, link_id)
-    if link is None:
-        raise HTTPException(404, detail="Link not found")
-    link.when_to_ask = _clean_when(body.when_to_ask)
-    await db.commit()
     await db.refresh(link)
     await _refresh_rosters(request, db, link.from_agent_id)
     return _out(link)

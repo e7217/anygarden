@@ -463,13 +463,12 @@ class LinkBrief(BaseModel):
     """An agent another agent may ask from any room (#1006).
 
     ``agent_id`` is what the asking agent passes to ``ask_peer``;
-    ``when_to_ask`` is the link's instruction for when to use it.
+    ``description`` is the target's public introduction for choosing help.
     """
 
     agent_id: str
     display_name: str
     description: Optional[str] = None
-    when_to_ask: str
 
 
 class WelcomeOut(BaseModel):

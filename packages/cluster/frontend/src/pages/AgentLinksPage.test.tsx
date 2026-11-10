@@ -7,6 +7,8 @@ import type { ReactNode } from 'react'
 import { apiFetch } from '@/lib/api'
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }))
+vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'u', is_admin: true } }) }))
+vi.mock('@/hooks/useRooms', () => ({ useRooms: () => ({ createAgentDM: vi.fn() }) }))
 // The page frame and the xyflow canvas need a real layout engine; the
 // stand-ins expose the canvas callbacks as plain buttons.
 vi.mock('@/components/PageShell', () => ({
@@ -39,8 +41,8 @@ const agents = [
   { id: 'qa', name: 'QA', description: null, actual_state: 'idle' },
   { id: 'docs', name: 'Docs', description: null, actual_state: 'idle' },
 ]
-function link(id: string, from: string, to: string, when = `${from} asks ${to}`) {
-  return { id, from_agent_id: from, to_agent_id: to, when_to_ask: when, created_at: '', updated_at: '' }
+function link(id: string, from: string, to: string) {
+  return { id, from_agent_id: from, to_agent_id: to, created_at: '', updated_at: '' }
 }
 
 function renderPage() {
@@ -84,25 +86,25 @@ describe('AgentLinksPage', () => {
     expect(screen.getByText('QA has no links, so it answers on its own.')).toBeInTheDocument()
   })
 
-  it('[COL-14] creates a dragged link after asking when to ask', async () => {
-    const created = link('l9', 'qa', 'coder', 'when a test fails')
-    fetchMock.mockImplementation(async (_path, init) => (
-      init?.method === 'POST' ? json(created, 201) : json({ agents, links: [] })
-    ))
+  it('[COL-14] saves a dragged link immediately without a condition dialog', async () => {
+    const created = link('l9', 'qa', 'coder')
+    fetchMock.mockImplementation(async (_path, init) => init?.method === 'POST' ? json(created, 201) : json({ agents, links: [] }))
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'connect QA to Coder' }))
-    const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveTextContent('QA will be able to ask Coder')
-    // Both ends come from the drag, so no agent pickers are shown.
-    expect(within(dialog).queryByLabelText('Agent that asks')).not.toBeInTheDocument()
-    fireEvent.change(within(dialog).getByLabelText('When to ask'), { target: { value: 'when a test fails' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add link' }))
-
-    // The new link is selected so its details show at once.
-    expect(await screen.findByTestId('agent-link-details')).toHaveTextContent('when a test fails')
+    expect(await screen.findByTestId('agent-link-details')).toHaveTextContent('QA → Coder')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!
-    expect(JSON.parse(String(post[1]!.body))).toEqual({ from_agent_id: 'qa', to_agent_id: 'coder', when_to_ask: 'when a test fails' })
-    await waitFor(() => expect(screen.queryByTestId('agent-links-empty')).not.toBeInTheDocument())
+    expect(JSON.parse(String(post[1]!.body))).toEqual({ from_agent_id: 'qa', to_agent_id: 'coder' })
+  })
+
+  it('keeps failed drops out of the graph and reports the error', async () => {
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    fetchMock.mockImplementation(async (_path, init) => init?.method === 'POST' ? json({}, 503) : json({ agents, links: [] }))
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'connect QA to Coder' }))
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Could not save the link (503).'))
+    expect(screen.queryByTestId('agent-link-details')).not.toBeInTheDocument()
+    expect(screen.getByTestId('agent-links-empty')).toBeInTheDocument()
   })
 
   it('shows a failed load with retry', async () => {

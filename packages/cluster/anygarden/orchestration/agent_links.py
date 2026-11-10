@@ -2,7 +2,7 @@
 
 A room used to decide who works together: an agent could ask only the
 peers seated in the same room, so a different team meant a new room or
-sub-room. A link is global and one-directional — "A may ask B, when …" —
+sub-room. A link is global and one-directional — "A may ask B" —
 so whichever agent a person talks to brings its own links along.
 
 ``ask_peer`` reaches a linked agent that is not in the room by seating it
@@ -22,7 +22,6 @@ from anygarden.db.models import Agent, AgentLink, Participant
 from anygarden.ws.protocol import LinkBrief
 
 JOINED_VIA_LINK = "link"
-MAX_WHEN_TO_ASK_CHARS = 300
 
 
 def visible_member():
@@ -65,7 +64,6 @@ async def links_by_agent(
                 agent_id=target.id,
                 display_name=target.name or "",
                 description=target.description,
-                when_to_ask=link.when_to_ask,
             )
         )
     return out

@@ -44,7 +44,11 @@ from anygarden.engines.validation import (
 )
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
-from anygarden.rooms.roster import broadcast_roster, broadcast_roster_for_agent
+from anygarden.rooms.roster import (
+    broadcast_roster,
+    broadcast_roster_for_agent,
+    roster_room_ids_for_agent,
+)
 from anygarden.task_service import release_participant_tasks, source_thread_root_id
 from anygarden.workspaces import moves
 from anygarden.workspaces.managed_router import router as managed_workspace_router
@@ -931,7 +935,9 @@ async def update_agent(
     # edit doesn't race its own broadcast.
     if roster_changed:
         manager = getattr(request.app.state, "connection_manager", None)
-        await broadcast_roster_for_agent(manager, db, agent_id=agent_id)
+        await broadcast_roster_for_agent(
+            manager, db, agent_id=agent_id, include_link_sources=True,
+        )
 
     return await _agent_out(request, db, agent)
 
@@ -1538,6 +1544,11 @@ async def delete_agent(
         .all()
     )
 
+    # Capture callers before CASCADE removes the target's incoming links.
+    affected_rooms = await roster_room_ids_for_agent(
+        db, agent_id=agent_id, include_link_sources=True,
+    )
+
     # Clean up related records and delete agent
     memberships = list(
         (await db.execute(select(Participant).where(Participant.agent_id == agent_id)))
@@ -1556,6 +1567,11 @@ async def delete_agent(
         await db.delete(room)
     await db.delete(agent)
     await db.commit()
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None and affected_rooms:
+        remaining = (await db.scalars(select(Room.id).where(Room.id.in_(affected_rooms)))).all()
+        for room_id in remaining:
+            await broadcast_roster(manager, db, room_id=room_id)
     return {"deleted": True}
 
 

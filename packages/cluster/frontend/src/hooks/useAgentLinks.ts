@@ -3,7 +3,6 @@ import {
   createAgentLink,
   deleteAgentLink,
   fetchAgentLinkGraph,
-  updateAgentLink,
   type AgentLink,
   type AgentLinkGraph,
 } from '@/lib/agentLinks'
@@ -51,22 +50,26 @@ export function useAgentLinks() {
       : previous)
   }, [])
 
-  const create = useCallback(async (input: { from_agent_id: string; to_agent_id: string; when_to_ask: string }) => {
-    const link = await createAgentLink(input)
-    replaceLinks(links => [...links.filter(item => item.id !== link.id), link])
-    return link
-  }, [replaceLinks])
-
-  const update = useCallback(async (id: string, whenToAsk: string) => {
-    const link = await updateAgentLink(id, whenToAsk)
-    replaceLinks(links => links.map(item => item.id === id ? link : item))
-    return link
-  }, [replaceLinks])
+  const pending = useRef(new Map<string, Promise<AgentLink>>())
+  const create = useCallback((input: { from_agent_id: string; to_agent_id: string }) => {
+    const key = `${input.from_agent_id}>${input.to_agent_id}`
+    const running = pending.current.get(key)
+    if (running) return running
+    const request = createAgentLink(input).then(link => {
+      replaceLinks(links => [...links.filter(item => item.id !== link.id), link])
+      return link
+    }).catch(async error => {
+      if (error.status === 409 || error.status === 404) await refresh()
+      throw error
+    }).finally(() => { pending.current.delete(key) })
+    pending.current.set(key, request)
+    return request
+  }, [replaceLinks, refresh])
 
   const remove = useCallback(async (id: string) => {
     await deleteAgentLink(id)
     replaceLinks(links => links.filter(item => item.id !== id))
   }, [replaceLinks])
 
-  return { ...state, refresh, create, update, remove }
+  return { ...state, refresh, create, remove }
 }
