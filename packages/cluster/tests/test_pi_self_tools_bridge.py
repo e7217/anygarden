@@ -319,13 +319,17 @@ async def test_pi_token_reuse_rollback_and_restricted_no_token(bridge):
 
 
 @pytest.mark.asyncio
-async def test_pi_agent_asks_a_peer_and_a_hop_two_peer_hands_its_request_back(bridge):
+async def test_pi_agent_asks_a_peer_and_a_hop_two_peer_hands_its_request_back(
+    bridge, monkeypatch
+):
     """#804 — ``ask_peer`` over the Pi bridge behaves as it does for Codex.
 
     The coordinator's running turn opens a fan-in group and starts the
-    worker's turn; the worker, called by that question, cannot ask on, so
-    its own ``ask_peer`` lands in its target row as a forwarded request.
+    worker's turn; under a depth cap of 1 (#1006: no cap by default) the
+    worker, called by that question, cannot ask on, so its own
+    ``ask_peer`` lands in its target row as a forwarded request.
     """
+    monkeypatch.setenv("ANYGARDEN_ASK_PEER_MAX_DEPTH", "1")
     room_id = bridge["room_id"]
     coordinator_pid, worker_pid = bridge["coordinator_pid"], bridge["worker_pid"]
     async with bridge["factory"]() as db:

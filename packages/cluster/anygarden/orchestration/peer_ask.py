@@ -29,6 +29,7 @@ from anygarden.db.models import (
     RoomArtifact,
 )
 from anygarden.messages.references import artifact_reference
+from anygarden.orchestration.peer_fanin import ChainPosition, chain_position
 from anygarden.rooms.roster import build_participants_brief
 from anygarden.turns.service import OPEN_TURN_STATES
 
@@ -46,16 +47,23 @@ MAX_KNOWN_NAMES = 10
 # Same vocabulary as ``metadata.peer_call_undelivered`` (#743).
 REASON_ALREADY_ANSWERING = "already_answering"
 REASON_LIMIT_REACHED = "limit_reached"
+# #1006 — the target is already answering higher up this question chain.
+REASON_CYCLE = "cycle"
 
 
 @dataclass
 class AskCaller:
-    """The asking agent's side of an ``ask_peer`` call."""
+    """The asking agent's side of an ``ask_peer`` call.
+
+    ``hop`` is the depth a question asked now would have in its chain
+    (#1006): 1 from a turn a person started, one more for each peer level.
+    """
 
     participant: Participant
     turn: AgentTurn | None
     hop: int
     names: dict[str, str]
+    position: ChainPosition | None = None
 
 
 @dataclass
@@ -130,8 +138,13 @@ async def resolve_caller(
         b.id: b.display_name
         for b in await build_participants_brief(db, room_id=room_id)
     }
+    position = await chain_position(db, turn)
     return AskCaller(
-        participant=caller, turn=turn, hop=await turn_hop(db, turn), names=names
+        participant=caller,
+        turn=turn,
+        hop=position.depth,
+        names=names,
+        position=position,
     )
 
 

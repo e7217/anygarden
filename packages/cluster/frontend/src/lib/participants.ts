@@ -28,4 +28,25 @@ export interface Participant {
   // agent participants whose admin set ``Agent.description``; null
   // for users/guests and for agents without a description set.
   description?: string | null
+  // #1006 — ``"link"`` when an agent was pulled in only to answer a
+  // peer question in a thread through an agent link. Such participants
+  // resolve sender names but are not room members: keep them out of
+  // member lists, popovers and mention autocomplete.
+  joined_via?: 'link' | null
+}
+
+/** True for a participant that joined only to answer through an agent link (#1006). */
+export function isLinkParticipant(participant: Pick<Participant, 'joined_via'>): boolean {
+  return participant.joined_via === 'link'
+}
+
+/** The room's actual members: every participant except link-only ones. */
+export function roomMembers<T extends Pick<Participant, 'joined_via'>>(
+  participants: Record<string, T>,
+): Record<string, T> {
+  const members: Record<string, T> = {}
+  for (const [id, participant] of Object.entries(participants)) {
+    if (!isLinkParticipant(participant)) members[id] = participant
+  }
+  return members
 }

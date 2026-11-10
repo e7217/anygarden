@@ -39,6 +39,7 @@ from anygarden.api.v1.skills import router as skills_api_router
 from anygarden.api.v1.system import router as system_router
 from anygarden.api.v1.tasks import router as tasks_router
 from anygarden.api.v1.turns import router as turns_router
+from anygarden.api.v1.agent_links import router as agent_links_router
 from anygarden.api.v1.usage import router as usage_router
 from anygarden.auth.api_key_routes import router as api_keys_router
 from anygarden.auth.routes import router as auth_router
@@ -1973,6 +1974,7 @@ def create_app(
     app.include_router(execution_approvals_router)
     app.include_router(project_inbox_router)
     app.include_router(turns_router)
+    app.include_router(agent_links_router)
     app.include_router(metrics_router)
     app.include_router(workspaces_router)
     app.include_router(goals_router)

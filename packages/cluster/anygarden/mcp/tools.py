@@ -218,7 +218,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "ask_peer",
         "description": (
-            "Ask other agents in this room to answer questions. Use this "
+            "Ask other agents to answer questions: agents in this room (by "
+            "participant_id) or agents you are linked to (by agent_id, even "
+            "when they are not in this room). Use this "
             "instead of writing a routing token in your reply. Put every peer "
             "you need in one call. The questions are posted at once in a "
             "thread under the message you are answering and the peers start "
@@ -227,8 +229,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "When all peers have finished you are woken with their answers "
             "and write the final answer once. A peer that is answering "
             "something in this room right now is rejected; one that already "
-            "finished can be asked again. Only agents can be asked; address "
-            "people by name in your reply."
+            "finished can be asked again, and an agent that is already "
+            "answering higher up the same chain of questions cannot be asked. "
+            "Only agents can be asked; address people by name in your reply."
         ),
         "inputSchema": {
             "type": "object",
@@ -248,6 +251,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "participant_id": {
                                 "type": "string",
                                 "description": "The peer agent's id from your roster.",
+                            },
+                            "agent_id": {
+                                "type": "string",
+                                "description": (
+                                    "Instead of participant_id: the agent id of "
+                                    "an agent you are linked to (from the list "
+                                    "of agents you can ask)."
+                                ),
                             },
                             "question": {
                                 "type": "string",
@@ -274,7 +285,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                                 ),
                             },
                         },
-                        "required": ["participant_id", "question"],
+                        "required": ["question"],
                     },
                 },
             },
@@ -1446,19 +1457,34 @@ async def ask_peer(
     Accepted questions are posted in the caller's thread at once and each
     peer's turn is started; the caller's reply for this turn is kept as a
     draft, and the caller is woken with every answer once all peers finish
-    (:mod:`anygarden.orchestration.peer_fanin`). A peer that was itself
-    called by a question (hop 2) cannot ask on: its request is handed back
-    to the caller with its answer.
+    (:mod:`anygarden.orchestration.peer_fanin`).
+
+    #1006 — a peer may be named by ``agent_id`` when the caller is linked
+    to it: one outside the room is seated for the question's thread only
+    (``PostedQuestion.seated``; the caller of this function announces it
+    after commit). A peer that was asked may ask on; only an agent already
+    answering higher up the same chain is refused. Depth and the number of
+    questions per chain are unlimited unless capped through
+    :func:`anygarden.orchestration.rules.ask_peer_max_depth` /
+    :func:`~anygarden.orchestration.rules.ask_peer_max_calls`; past the
+    depth cap the request is handed back to the caller as before.
 
     Returns the tool result and the posted questions; the caller of this
     function commits, then broadcasts them. A rejection is a normal result
     (``isError`` false) the model should act on in the same turn; only bad
     arguments are tool errors.
     """
+    from anygarden.db.models import Agent
+    from anygarden.orchestration.agent_links import (
+        JOINED_VIA_LINK,
+        link_exists,
+        seat_linked_agent,
+    )
     from anygarden.orchestration.peer_ask import (
         MAX_ASKS_PER_CALL,
         MAX_ATTACHMENTS,
         MAX_QUESTION_CHARS,
+        REASON_CYCLE,
         REASON_LIMIT_REACHED,
         check_peer_ask,
         known_attachment_names,
@@ -1467,32 +1493,44 @@ async def ask_peer(
         since_turn_start,
     )
     from anygarden.orchestration.peer_fanin import (
+        chain_ancestor_agents,
+        chain_question_count,
         open_or_join_group,
         post_question,
         record_forwarded_request,
     )
-    from anygarden.orchestration.rules import MAX_PEER_DEPTH
+    from anygarden.orchestration.rules import ask_peer_max_calls, ask_peer_max_depth
 
     room_id = arguments.get("room_id")
     if not isinstance(room_id, str) or not room_id:
         return _error_result("room_id is required"), []
     raw_asks = arguments.get("asks")
-    if raw_asks is None and "participant_id" in arguments:
+    if raw_asks is None and (
+        "participant_id" in arguments or "agent_id" in arguments
+    ):
         raw_asks = [{
             "participant_id": arguments.get("participant_id"),
+            "agent_id": arguments.get("agent_id"),
             "question": arguments.get("question"),
         }]
     if not isinstance(raw_asks, list) or not raw_asks:
         return _error_result("asks is required"), []
     if len(raw_asks) > MAX_ASKS_PER_CALL:
         return _error_result(f"at most {MAX_ASKS_PER_CALL} asks per call"), []
-    asks: list[tuple[str, str]] = []
-    files: dict[str, list[str]] = {}
+    # Each ask names its peer as ("participant", id) or ("agent", id).
+    asks: list[tuple[tuple[str, str], str]] = []
+    files: dict[tuple[str, str], list[str]] = {}
     for item in raw_asks:
-        pid = item.get("participant_id") if isinstance(item, dict) else None
-        question = item.get("question") if isinstance(item, dict) else None
-        if not isinstance(pid, str) or not pid:
-            return _error_result("each ask needs a participant_id"), []
+        item = item if isinstance(item, dict) else {}
+        pid = item.get("participant_id")
+        aid = item.get("agent_id")
+        question = item.get("question")
+        if isinstance(pid, str) and pid:
+            key = ("participant", pid)
+        elif isinstance(aid, str) and aid:
+            key = ("agent", aid)
+        else:
+            return _error_result("each ask needs a participant_id or an agent_id"), []
         if not isinstance(question, str) or not question.strip():
             return _error_result("each ask needs a question"), []
         question = question.strip()
@@ -1511,8 +1549,8 @@ async def ask_peer(
                 f"at most {MAX_ATTACHMENTS} attachments per question"
             ), []
         # A repeated target keeps its last question.
-        asks = [a for a in asks if a[0] != pid] + [(pid, question)]
-        files[pid] = names
+        asks = [a for a in asks if a[0] != key] + [(key, question)]
+        files[key] = names
 
     caller = await resolve_caller(db, agent_id=agent_id, room_id=room_id)
     if caller is None:
@@ -1524,10 +1562,10 @@ async def ask_peer(
 
     # #969 — resolve every named file before anything is posted, so a
     # wrong name sends nothing and the model can retry with the right one.
-    references: dict[str, list[dict[str, Any]]] = {}
+    references: dict[tuple[str, str], list[dict[str, Any]]] = {}
     missing: list[str] = []
-    for pid, names in files.items():
-        references[pid], absent = await resolve_attachments(
+    for key, names in files.items():
+        references[key], absent = await resolve_attachments(
             db, room_id=room_id, agent_id=agent_id, names=names
         )
         missing += [n for n in absent if n not in missing]
@@ -1547,14 +1585,15 @@ async def ask_peer(
             "ask without it."
         ), []
 
-    # Hop 2: this turn was started by a peer's question. Hand the request
-    # back to that caller instead of calling on (#762).
-    if caller.hop > MAX_PEER_DEPTH:
+    # Past the configured depth cap (none by default) the request goes
+    # back to the agent that asked this caller, as hop-2 asks did (#762).
+    max_depth = ask_peer_max_depth()
+    if max_depth is not None and caller.hop > max_depth:
         forwarded = [
-            (pid, q)
-            for pid, q in asks
+            (key[1], q)
+            for key, q in asks
             if await record_forwarded_request(
-                db, request_id=caller.turn.request_id, participant_id=pid, question=q
+                db, request_id=caller.turn.request_id, participant_id=key[1], question=q
             )
         ]
         if forwarded:
@@ -1576,34 +1615,96 @@ async def ask_peer(
         return _rejected_result(
             [
                 {
-                    "participant_id": pid,
-                    "name": caller.names.get(pid),
+                    "participant_id": key[1],
+                    "name": caller.names.get(key[1]),
                     "status": "rejected",
                     "reason": REASON_LIMIT_REACHED,
                 }
-                for pid, _ in asks
+                for key, _ in asks
             ],
             recent,
         ), []
 
+    position = caller.position
+    ancestors = await chain_ancestor_agents(db, position) if position else set()
+    max_calls = ask_peer_max_calls()
+    used = (
+        await chain_question_count(db, position.chain_id if position else None)
+        if max_calls is not None
+        else 0
+    )
+
     results: list[dict[str, Any]] = []
-    accepted: list[tuple[Any, str]] = []
-    for pid, question in asks:
+    accepted: list[tuple[Any, str, tuple[str, str], bool]] = []
+    for key, question in asks:
+        kind, ident = key
+        entry: dict[str, Any] = {f"{kind}_id": ident}
+        target: Any = None
+        seated = False
+        if kind == "agent":
+            target = (
+                await db.execute(
+                    select(Participant).where(
+                        Participant.room_id == room_id, Participant.agent_id == ident
+                    )
+                )
+            ).scalar_one_or_none()
+            if target is not None and target.joined_via is not None:
+                target = target if await link_exists(
+                    db, from_agent_id=agent_id, to_agent_id=ident
+                ) else None
+            elif target is None and await link_exists(
+                db, from_agent_id=agent_id, to_agent_id=ident
+            ):
+                target, seated = await seat_linked_agent(
+                    db, room_id=room_id, agent_id=ident
+                )
+                agent = await db.get(Agent, ident)
+                caller.names[target.id] = agent.name if agent is not None else ident
+            if target is None:
+                entry.update(
+                    status="invalid",
+                    detail=(
+                        f"{ident} is not in this room and you have no link to it."
+                    ),
+                )
+                results.append(entry)
+                continue
+            pid = target.id
+            entry["participant_id"] = pid
+        else:
+            pid = ident
+            seated_row = await db.get(Participant, pid)
+            if (
+                seated_row is not None
+                and seated_row.joined_via == JOINED_VIA_LINK
+                and seated_row.agent_id is not None
+                and not await link_exists(
+                    db, from_agent_id=agent_id, to_agent_id=seated_row.agent_id
+                )
+            ):
+                entry.update(
+                    status="invalid", detail=f"{pid} is not a participant of this room."
+                )
+                results.append(entry)
+                continue
+
         decision = await check_peer_ask(db, caller=caller, target_pid=pid)
-        entry: dict[str, Any] = {
-            "participant_id": pid,
-            "name": decision.target_name,
-            "status": decision.status,
-        }
+        entry["name"] = decision.target_name
+        entry["status"] = decision.status
         if decision.status == "invalid":
             entry["detail"] = decision.detail
         elif decision.status == "rejected":
             entry["reason"] = decision.reason
-        elif budget is not None and not budget.consume(room_id, 1):
+        elif decision.target.agent_id in ancestors:
+            entry["status"] = "rejected"
+            entry["reason"] = REASON_CYCLE
+        elif max_calls is not None and used >= max_calls:
             entry["status"] = "rejected"
             entry["reason"] = REASON_LIMIT_REACHED
         else:
-            accepted.append((decision.target, question))
+            used += 1
+            accepted.append((decision.target, question, key, seated))
         results.append(entry)
 
     if len(asks) == 1 and results[0]["status"] == "invalid":
@@ -1614,19 +1715,21 @@ async def ask_peer(
         group = await open_or_join_group(
             db, caller_turn=caller.turn, caller_participant_id=caller.participant.id
         )
-        for target, question in accepted:
-            posted.append(await post_question(
+        for target, question, key, seated in accepted:
+            question_posted = await post_question(
                 db, group=group, target=target, question=question,
-                references=references.get(target.id),
-            ))
+                references=references.get(key),
+            )
+            question_posted.seated = seated
+            posted.append(question_posted)
         if budget is not None:
-            budget.mark_peer_called(room_id, [t.id for t, _ in accepted])
+            budget.mark_peer_called(room_id, [t.id for t, *_ in accepted])
 
     if not accepted:
         return _rejected_result(results, await since_turn_start(db, caller)), []
 
     sent = ", ".join(
-        caller.names.get(t.id, t.id) for t, _ in accepted
+        caller.names.get(t.id, t.id) for t, *_ in accepted
     )
     text = (
         f"Sent to {sent}. Each answers in a thread under the message you are "
@@ -1638,7 +1741,8 @@ async def ask_peer(
     not_sent = [r for r in results if r["status"] != "accepted"]
     if not_sent:
         text += "\nNot sent: " + "; ".join(
-            f"{r.get('name') or r['participant_id']} ({r.get('reason') or r.get('detail')})"
+            f"{r.get('name') or r.get('participant_id') or r.get('agent_id')} "
+            f"({r.get('reason') or r.get('detail')})"
             for r in not_sent
         )
     return _ok_result(text, {"status": "sent", "targets": results}), posted
@@ -1649,11 +1753,16 @@ def _rejected_result(
 ) -> dict[str, Any]:
     whys = []
     for r in results:
-        name = r.get("name") or r["participant_id"]
+        name = r.get("name") or r.get("participant_id") or r.get("agent_id")
         if r.get("reason") == "already_answering":
             whys.append(f"{name} is answering a message in this room right now.")
         elif r.get("reason") == "limit_reached":
             whys.append(f"{name}: the peer-call limit for this user turn is reached.")
+        elif r.get("reason") == "cycle":
+            whys.append(
+                f"{name} is already answering higher up this chain of questions "
+                "(asking it would go in a circle)."
+            )
         else:
             whys.append(f"{name}: {r.get('detail') or 'invalid'}")
     recent = "\n".join(

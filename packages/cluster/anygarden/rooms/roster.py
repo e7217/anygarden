@@ -80,6 +80,7 @@ async def build_participants_brief(
                     kind="agent",
                     agent_id=p.agent_id,
                     description=p.agent.description,
+                    joined_via=p.joined_via,
                 )
             )
         else:
@@ -109,10 +110,16 @@ async def broadcast_roster(
     """
     if manager is None:
         return
+    from anygarden.orchestration.agent_links import room_agent_links
+
     participants = await build_participants_brief(db, room_id=room_id)
     await manager.broadcast(
         room_id,
-        RoomSettingsChangedOut(room_id=room_id, participants=participants),
+        RoomSettingsChangedOut(
+            room_id=room_id,
+            participants=participants,
+            agent_links=await room_agent_links(db, room_id=room_id),
+        ),
     )
     logger.info(
         "ws.roster_broadcast", room_id=room_id, participants=len(participants)

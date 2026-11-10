@@ -82,7 +82,7 @@ async def _seed(db) -> dict[str, str]:
     await db.commit()
     return {
         "room": room.id, "caller": caller.id, "caller_p": caller_p.id,
-        "peer_p": peer_p.id, "human_p": human_p.id,
+        "peer_p": peer_p.id, "human_p": human_p.id, "peer": peer.id,
     }
 
 
@@ -198,14 +198,41 @@ class TestCheckPeerAsk:
         assert decision.status == "accepted"
 
     @pytest.mark.asyncio
-    async def test_turn_started_by_a_peer_call_is_hop_two(self, db) -> None:
+    async def test_turn_answering_a_question_asks_one_level_deeper(self, db) -> None:
+        """#1006 — the hop is the question's depth in its chain."""
+        from datetime import datetime, timedelta, timezone
+
+        from anygarden.db.models import PeerAskGroup, PeerAskTarget
+
+        ids = await _seed(db)
+        group = PeerAskGroup(
+            id="g1", room_id=ids["room"], caller_participant_id=ids["peer_p"],
+            caller_agent_id=ids["peer"], caller_request_id="peer-turn",
+            deadline_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            chain_id="g1", depth=1,
+        )
+        db.add(group)
+        await db.flush()
+        db.add(PeerAskTarget(
+            group_id="g1", target_participant_id=ids["caller_p"], question="q",
+            request_id="turn-1", forwarded_requests=[],
+        ))
+        await db.commit()
+
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
+
+        assert caller.hop == 2
+        assert caller.position.chain_id == "g1"
+
+    @pytest.mark.asyncio
+    async def test_turn_woken_by_a_routing_token_starts_its_own_chain(self, db) -> None:
         ids = await _seed(db)
         await _retrigger(db, ids, author_pid=ids["peer_p"],
                          metadata={"mentions": [{"type": "user", "id": ids["caller_p"]}]})
 
         caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
 
-        assert caller.hop == 2
+        assert caller.hop == 1
 
     @pytest.mark.asyncio
     async def test_running_turn_is_preferred_over_a_newer_queued_one(self, db) -> None:

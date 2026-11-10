@@ -12,7 +12,9 @@ import { taskRecoveryEn, taskRecoveryKo } from './catalogs/taskRecovery'
 import { budgetsEn, budgetsKo } from './catalogs/budgets'
 import { campaignsEn, campaignsKo } from './catalogs/campaigns'
 import { apiKeysEn, apiKeysKo } from './catalogs/apiKeys'
+import { agentLinksEn, agentLinksKo } from './catalogs/agentLinks'
+import { peerChainsEn, peerChainsKo } from './catalogs/peerChains'
 
-export const en = { ...agentSetupEn, ...coreEn, ...chatEn, ...adminEn, ...guestEn, ...federationEn, ...roomsEn, ...workflowsEn, ...inboxEn, ...projectExecutionsEn, ...taskRecoveryEn, ...budgetsEn, ...campaignsEn, ...apiKeysEn } as const
+export const en = { ...agentSetupEn, ...coreEn, ...chatEn, ...adminEn, ...guestEn, ...federationEn, ...roomsEn, ...workflowsEn, ...inboxEn, ...projectExecutionsEn, ...taskRecoveryEn, ...budgetsEn, ...campaignsEn, ...apiKeysEn, ...agentLinksEn, ...peerChainsEn } as const
 export type MessageKey = keyof typeof en
-export const ko: Record<MessageKey, string> = { ...agentSetupKo, ...coreKo, ...chatKo, ...adminKo, ...guestKo, ...federationKo, ...roomsKo, ...workflowsKo, ...inboxKo, ...projectExecutionsKo, ...taskRecoveryKo, ...budgetsKo, ...campaignsKo, ...apiKeysKo }
+export const ko: Record<MessageKey, string> = { ...agentSetupKo, ...coreKo, ...chatKo, ...adminKo, ...guestKo, ...federationKo, ...roomsKo, ...workflowsKo, ...inboxKo, ...projectExecutionsKo, ...taskRecoveryKo, ...budgetsKo, ...campaignsKo, ...apiKeysKo, ...agentLinksKo, ...peerChainsKo }

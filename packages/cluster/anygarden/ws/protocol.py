@@ -454,6 +454,22 @@ class ParticipantBrief(BaseModel):
     kind: Literal["user", "agent", "guest"]
     agent_id: Optional[str] = None
     description: Optional[str] = None
+    # #1006 — ``"link"``: seated only to answer a question asked through
+    # an agent link. It belongs to that thread, not to the room's members.
+    joined_via: Optional[str] = None
+
+
+class LinkBrief(BaseModel):
+    """An agent another agent may ask from any room (#1006).
+
+    ``agent_id`` is what the asking agent passes to ``ask_peer``;
+    ``when_to_ask`` is the link's instruction for when to use it.
+    """
+
+    agent_id: str
+    display_name: str
+    description: Optional[str] = None
+    when_to_ask: str
 
 
 class WelcomeOut(BaseModel):
@@ -483,6 +499,8 @@ class WelcomeOut(BaseModel):
     # Defaults to an empty list so pre-#221 clients see no change in
     # semantics when the server is rolled forward first.
     participants: list[ParticipantBrief] = []
+    # #1006 — each agent participant's outgoing links, keyed by agent id.
+    agent_links: dict[str, list[LinkBrief]] = {}
     # Issue #237 — ephemeral toggle: when True the agent's system
     # prompt gets a directive to skip writing to memory/notes.md.
     # Trust-model signal (see plan §3.2 decision 3). Default False
@@ -539,6 +557,9 @@ class RoomSettingsChangedOut(BaseModel):
     # change" semantics so a settings-only PATCH doesn't wipe a
     # receiver's roster.
     participants: Optional[list[ParticipantBrief]] = None
+    # #1006 — rides with every roster snapshot: each agent participant's
+    # outgoing links, keyed by agent id. ``None`` = not part of this change.
+    agent_links: Optional[dict[str, list[LinkBrief]]] = None
 
 
 class ErrorOut(BaseModel):

@@ -21,6 +21,7 @@ import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
 import { taskPresentation } from '@/lib/taskPresentation'
 import { autoRouteUnassigned } from '@/lib/routing'
 import type { Participant } from '@/pages/ChatPage'
+import { isLinkParticipant } from '@/lib/participants'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
@@ -149,7 +150,8 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
   const agentParticipants = useMemo<Participant[]>(
     () =>
       Object.values(participants)
-        .filter((p) => p.kind === 'agent')
+        // #1006 — link-only agents answer peer questions, not tasks.
+        .filter((p) => p.kind === 'agent' && !isLinkParticipant(p))
         .sort((a, b) => a.display_name.localeCompare(b.display_name)),
     [participants],
   )

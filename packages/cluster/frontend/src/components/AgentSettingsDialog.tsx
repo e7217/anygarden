@@ -32,6 +32,7 @@ import type { EngineChange } from '@/components/agent-settings/EngineChangeDialo
 import ModelConnectionPanel, { type ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
+import AgentLinksPanel from '@/components/agent-settings/AgentLinksPanel'
 import MemoryPanel from '@/components/agent-settings/MemoryPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
 import RecentTurnSummary from '@/components/agent-settings/RecentTurnSummary'
@@ -149,6 +150,7 @@ const SECTION_TAB: Record<string, SettingsTab> = {
   // #908 — instructions live with the agent's files on its machine.
   manifest: 'workspace',
   rooms: 'work',
+  links: 'work',
   memory: 'work',
   goals: 'work',
   tasks: 'work',
@@ -358,6 +360,16 @@ export default function AgentSettingsDialog({
               <Section id="rooms" title={t('admin.agentSettings.rooms')}>
                 <RoomsPanel agentId={agent?.id ?? null} onChange={onRoomsChange} />
               </Section>
+
+              {/* #1006 — outgoing agent links: who this agent may ask, and when. */}
+              {agent && <Section id="links" title={t('agentLinks.settingsTitle')}>
+                <AgentLinksPanel
+                  key={agent.id}
+                  agentId={agent.id}
+                  agentName={agent.name}
+                  onNavigateAway={() => onOpenChange(false)}
+                />
+              </Section>}
 
               {agent && <Section id="memory" title={t('agentMemory.title')}>
                 <MemoryPanel key={agent.id} agentId={agent.id} active={open} />

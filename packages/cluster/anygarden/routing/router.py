@@ -141,7 +141,7 @@ async def auto_route_unassigned(
         await db.execute(
             select(Agent, Participant.id)
             .join(Participant, Participant.agent_id == Agent.id)
-            .where(Participant.room_id == room_id)
+            .where(Participant.room_id == room_id, Participant.joined_via.is_(None))
         )
     ).all()
     if not agent_rows:

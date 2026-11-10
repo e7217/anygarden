@@ -6,6 +6,7 @@ import type { PresenceMap } from '@/hooks/useParticipantPresence'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import { Select } from '@/components/ui/select'
+import { isLinkParticipant } from '@/lib/participants'
 
 interface Props {
   participants: Record<string, Participant>
@@ -68,7 +69,9 @@ export default function ParticipantListPopover({
   // registered users alpha, then guests alpha. Keeps the layout
   // from shuffling when a new guest joins.
   const sorted = useMemo(() => {
-    const list = Object.values(participants)
+    // #1006 — agents that joined only to answer through an agent link
+    // are not members; callers may pass the full roster.
+    const list = Object.values(participants).filter(p => !isLinkParticipant(p))
     const groupRank = (p: Participant): number => {
       if (p.kind === 'agent') return 0
       if (p.is_anonymous) return 2

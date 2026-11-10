@@ -21,6 +21,8 @@ import { activeTurnByParticipant, placeWorkingParticipants, threadTurnIds, type 
 import { isHiddenSystemMessage } from '@/lib/systemMessages'
 import { alignsRight } from '@/lib/messageLayout'
 import { useLocale } from '@/i18n/LocaleProvider'
+import PeerChainProgressCard from '@/components/peer-chains/PeerChainProgressCard'
+import { activeChainsForMessage, type PeerChain } from '@/lib/peerChains'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -53,6 +55,10 @@ interface ChatAreaProps {
    *  at the bottom of the timeline. */
   openTurns?: OpenTurn[]
   onCancelTurns?: (requestIds: string[]) => Promise<boolean>
+  /** #1006 — the room's agent question chains (``usePeerChains``). A
+   *  running one shows a progress card under the message it hangs off. */
+  peerChains?: PeerChain[]
+  onCancelPeerChain?: (chainId: string) => Promise<boolean>
 }
 
 export default function ChatArea({
@@ -71,6 +77,8 @@ export default function ChatArea({
   canCancelTurns = true,
   openTurns = [],
   onCancelTurns,
+  peerChains = [],
+  onCancelPeerChain,
 }: ChatAreaProps) {
   const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -314,6 +322,18 @@ export default function ChatArea({
                     onStop={onCancelTurns}
                   />
                 )}
+                {activeChainsForMessage(peerChains, msg.id).map(chain => (
+                  <PeerChainProgressCard
+                    key={chain.id}
+                    chain={chain}
+                    // Opens only: unlike the reply row, this button never
+                    // closes a thread that is already showing.
+                    onOpenThread={threadIndex && onOpenThread
+                      ? id => { if (activeThreadRootId !== id) onOpenThread(id) }
+                      : undefined}
+                    onCancel={canCancelTurns ? onCancelPeerChain : undefined}
+                  />
+                ))}
               </div>
             )
           })}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { X, MessagesSquare } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
@@ -14,6 +14,17 @@ import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
 import BrailleSpinner from '@/components/BrailleSpinner'
 import TurnCancelControl from '@/components/TurnCancelControl'
 import Elapsed from '@/components/Elapsed'
+import { Button } from '@/components/ui/button'
+import PeerChainTree, { rowLabel } from '@/components/peer-chains/PeerChainTree'
+import PeerMessagePath from '@/components/peer-chains/PeerMessagePath'
+import {
+  branchMessageIds,
+  buildChainTree,
+  chainsForThread,
+  messagePlacements,
+  primaryChain,
+  type PeerChain,
+} from '@/lib/peerChains'
 
 /** ENG-09 — an agent answering inside this thread. */
 export interface ThreadWorker {
@@ -48,6 +59,11 @@ interface ThreadPanelProps {
   workers?: ThreadWorker[]
   /** Cancels turns; omitted when the viewer may not stop agents. */
   onCancelTurns?: (requestIds: string[]) => Promise<boolean>
+  /** #1006 — the room's agent question chains; the ones rooted at this
+   *  thread show a call tree above it and label their messages. */
+  peerChains?: PeerChain[]
+  /** Stops a chain; omitted when the viewer may not stop agents. */
+  onCancelPeerChain?: (chainId: string) => Promise<boolean>
 }
 
 /**
@@ -79,12 +95,29 @@ export default function ThreadPanel({
   onClose,
   workers = [],
   onCancelTurns,
+  peerChains = [],
+  onCancelPeerChain,
 }: ThreadPanelProps) {
   const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
   const { width } = useRightSidebarLayout()
   const { files: roomFiles } = useRoomFiles(roomId)
+
+  // #1006 — question chains asked under this thread's root.
+  const threadChains = useMemo(() => chainsForThread(peerChains, root.id), [peerChains, root.id])
+  const chain = primaryChain(threadChains)
+  const chainTree = useMemo(() => (chain ? buildChainTree(chain) : null), [chain])
+  const placements = useMemo(() => messagePlacements(threadChains), [threadChains])
+  // The branch filter belongs to one thread; switching threads drops it.
+  const [branch, setBranch] = useState<{ rootId: string; nodeId: string } | null>(null)
+  const branchEntry = branch?.rootId === root.id ? chainTree?.byId.get(branch.nodeId) ?? null : null
+  const branchIds = useMemo(
+    () => (branchEntry && chainTree ? branchMessageIds(chainTree, branchEntry.node.id) : null),
+    [branchEntry, chainTree],
+  )
+  const shownReplies = branchIds ? replies.filter(msg => branchIds.has(msg.id)) : replies
+  const selectBranch = (nodeId: string | null) => setBranch(nodeId ? { rootId: root.id, nodeId } : null)
 
   // ESC closes the panel, matching the rail's drawer behaviour.
   useEffect(() => {
@@ -157,6 +190,15 @@ export default function ThreadPanel({
 
         <ScrollArea className="min-w-0 flex-1">
           <div className="flex flex-col gap-4 px-6 py-4">
+            {chain && (
+              <PeerChainTree
+                key={chain.id}
+                chain={chain}
+                selectedNodeId={branchEntry?.node.id ?? null}
+                onSelect={selectBranch}
+                onCancel={onCancelPeerChain}
+              />
+            )}
             <div data-message-id={root.id}>
               <MessageBubble
                 message={root}
@@ -176,16 +218,39 @@ export default function ThreadPanel({
               <span className="h-px flex-1 bg-[var(--color-border)]" />
             </div>
 
-            {replies.map(msg => (
-              <div key={msg.id} data-message-id={msg.id}>
+            {branchEntry && (
+              <div
+                data-testid="peer-branch-filter"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-selected)] px-3 py-1"
+              >
+                <p className="min-w-0 text-caption text-[var(--color-foreground)]">
+                  {t('peerChains.tree.filtering', { label: rowLabel(branchEntry) })}
+                </p>
+                <Button type="button" variant="ghost" size="sm" onClick={() => selectBranch(null)}>
+                  <span className="text-caption">{t('peerChains.tree.showAll')}</span>
+                </Button>
+              </div>
+            )}
+            {branchEntry && shownReplies.length === 0 && (
+              <p className="text-caption text-[var(--color-foreground-muted)]">{t('peerChains.tree.branchEmpty')}</p>
+            )}
+
+            {shownReplies.map(msg => {
+              const bubble = (
                 <MessageBubble
                   message={msg}
                   participants={participants}
                   isMine={msg.participant_id === myParticipantId}
                   roomFiles={roomFiles}
                 />
-              </div>
-            ))}
+              )
+              const placement = placements.get(msg.id)
+              return (
+                <div key={msg.id} data-message-id={msg.id}>
+                  {placement ? <PeerMessagePath placement={placement}>{bubble}</PeerMessagePath> : bubble}
+                </div>
+              )
+            })}
             {workers.length > 0 && (
               <ul className="flex flex-col gap-1" data-testid="thread-workers">
                 {workers.map(worker => (

@@ -304,17 +304,15 @@ class TestAskPeerPostsAtOnce:
         assert "while you are answering" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
-    async def test_ask_beyond_the_budget_is_rejected(self, ws_env) -> None:
-        from anygarden.orchestration.rules import PeerHandoffBudget
-
+    async def test_ask_beyond_a_configured_cap_is_rejected(self, ws_env, monkeypatch) -> None:
+        """#1006 — no cap by default; the env cap counts the whole chain."""
+        monkeypatch.setenv("ANYGARDEN_ASK_PEER_MAX_CALLS", "1")
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
         other_pid = await _add_running_agent(sf, room, "agent01")
-        app.state.peer_handoff_budget = PeerHandoffBudget(capacity=1)
 
         with TestClient(app) as client:
             _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 다들?")
-            app.state.peer_handoff_budget = PeerHandoffBudget(capacity=1)
             result = _ask_peer(client, sender_token, room.id, [(other_pid, "q1"), (peer_pid, "q2")])
 
         by_pid = {t["participant_id"]: t for t in result["structuredContent"]["targets"]}
@@ -685,7 +683,9 @@ class TestFanIn:
         assert (await _group(sf)).state == "ready"
 
     @pytest.mark.asyncio
-    async def test_hop2_ask_is_forwarded_to_the_caller(self, ws_env) -> None:
+    async def test_hop2_ask_is_forwarded_to_the_caller(self, ws_env, monkeypatch) -> None:
+        """Only under a configured depth cap (#1006: none by default)."""
+        monkeypatch.setenv("ANYGARDEN_ASK_PEER_MAX_DEPTH", "1")
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
         other_pid = await _add_running_agent(sf, room, "agent01")

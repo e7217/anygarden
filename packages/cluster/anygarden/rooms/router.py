@@ -199,6 +199,9 @@ class ParticipantOut(BaseModel):
     # ``/api/v1/agents``.
     avatar_kind: Optional[str] = None
     avatar_value: Optional[str] = None
+    # #1006 — "link": seated only to answer a linked question in a thread;
+    # clients keep it for names but leave it out of member lists.
+    joined_via: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -576,6 +579,7 @@ async def get_room(
                 engine=engine,
                 avatar_kind=avatar_kind,
                 avatar_value=avatar_value,
+                joined_via=p.joined_via,
             )
         )
 

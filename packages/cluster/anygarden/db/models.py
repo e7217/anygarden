@@ -839,6 +839,13 @@ class Participant(Base):
     last_read_message_seq: Mapped[Optional[int]] = mapped_column(
         BigInteger, nullable=True, default=None
     )
+    # #1006 — ``"link"`` when an agent was seated only to answer a peer
+    # question it was asked through an agent link. Such a participant
+    # lives in the question's thread: it is left out of member lists,
+    # ``@everyone``, the one-agent room rule and the representative slot.
+    joined_via: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, default=None
+    )
 
     room: Mapped["Room"] = relationship(
         "Room",
@@ -2393,6 +2400,18 @@ class PeerAskGroup(Base):
     woken_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
+    # #1006 — question chains. A caller that was itself asked a question
+    # answers ``parent_target_id``; its group sits one level deeper. Every
+    # group of one chain shares ``chain_id`` (the root group's id).
+    parent_target_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    chain_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None, index=True
+    )
+    depth: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
@@ -2429,10 +2448,48 @@ class PeerAskTarget(Base):
     # ``ask_peer`` calls the peer made at hop 2, handed back to the caller:
     # ``[{"participant_id", "question"}]``.
     forwarded_requests: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # #1006 — the peer asked on and its turn ended with a draft: this row
+    # waits for that group, then follows the peer's wake turn.
+    awaiting_group_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
     finished_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class AgentLink(Base):
+    """One agent may ask another, from any room (#1006).
+
+    Links are global and one-directional; ``when_to_ask`` is shown to the
+    asking agent so it can pick whom to ask. A link lets ``ask_peer`` reach
+    an agent that is not a member of the room: it is seated for the
+    question's thread only (``Participant.joined_via == "link"``).
+    """
+
+    __tablename__ = "agent_links"
+    __table_args__ = (
+        UniqueConstraint("from_agent_id", "to_agent_id", name="uq_agent_links_pair"),
+        CheckConstraint("from_agent_id <> to_agent_id", name="ck_agent_links_not_self"),
+        Index("ix_agent_links_from", "from_agent_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    from_agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
+    )
+    to_agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
+    )
+    when_to_ask: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
 
 
 class Goal(Base):
