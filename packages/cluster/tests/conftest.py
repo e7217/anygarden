@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import secrets
 from typing import AsyncIterator
@@ -9,10 +10,21 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 import structlog
+from fastapi import FastAPI
+from fastapi.routing import (
+    APIRoute,
+    APIRouter,
+    APIWebSocketRoute,
+    _merge_lifespan_context,
+    get_websocket_app,
+    request_response,
+    websocket_session,
+)
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.routing import BaseRoute
 
 from anygarden.app import create_app
 from anygarden.config import AnygardenSettings
@@ -38,6 +50,59 @@ def _skip_sqlite_fsync(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA synchronous=OFF")
     cursor.close()
+
+
+_included_routes: dict[int, tuple[APIRouter, int, list[BaseRoute]]] = {}
+_fastapi_include_router = FastAPI.include_router
+
+
+def _include_router_once(app: FastAPI, router: APIRouter, **options) -> None:
+    """Build each module router's routes once per worker, not once per app (#1001).
+
+    ``create_app`` runs for most tests (~1,300 per suite run). Each run
+    rebuilt all ~250 routes: FastAPI's ``include_router`` re-analyses every
+    endpoint's dependencies and regenerates its pydantic response schema,
+    about a quarter of the suite's time. None of that depends on the app.
+    The one app-specific part is the request handler, which looks
+    ``dependency_overrides`` up on the app it was built for. So copy the
+    routes built for the first app and give each copy a handler bound to
+    the new app.
+
+    Startup hooks and lifespans are merged as ``include_router`` does.
+    Includes with options (prefix, tags, ...) take the normal path.
+    """
+    if options:
+        _fastapi_include_router(app, router, **options)
+        return
+    cached = _included_routes.get(id(router))
+    if cached is None or cached[0] is not router or cached[1] != len(router.routes):
+        start = len(app.router.routes)
+        _fastapi_include_router(app, router)
+        _included_routes[id(router)] = (router, len(router.routes), app.router.routes[start:])
+        return
+    for route in cached[2]:
+        if isinstance(route, APIRoute):
+            route = copy.copy(route)
+            route.dependency_overrides_provider = app
+            route.app = request_response(route.get_route_handler())
+        elif isinstance(route, APIWebSocketRoute):
+            route = copy.copy(route)
+            route.app = websocket_session(
+                get_websocket_app(
+                    dependant=route.dependant,
+                    dependency_overrides_provider=app,
+                    embed_body_fields=route._embed_body_fields,
+                )
+            )
+        app.router.routes.append(route)
+    app.router.on_startup.extend(router.on_startup)
+    app.router.on_shutdown.extend(router.on_shutdown)
+    app.router.lifespan_context = _merge_lifespan_context(
+        app.router.lifespan_context, router.lifespan_context
+    )
+
+
+FastAPI.include_router = _include_router_once
 
 
 @pytest.fixture(autouse=True)
