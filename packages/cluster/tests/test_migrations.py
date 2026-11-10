@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "105_agent_links"
+                assert version == "106_agent_links_autonomous"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "105_agent_links"
+                assert version == "106_agent_links_autonomous"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -621,7 +621,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "105_agent_links"
+                assert version == "106_agent_links_autonomous"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -723,7 +723,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "105_agent_links"
+                assert version == "106_agent_links_autonomous"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -763,7 +763,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "105_agent_links"
+                assert version == "106_agent_links_autonomous"
             sync_engine.dispose()
         finally:
             try:
@@ -797,7 +797,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "105_agent_links"
+            assert head == "106_agent_links_autonomous"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -899,7 +899,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "105_agent_links"
+                assert version == "106_agent_links_autonomous"
             sync_engine.dispose()
         finally:
             try:
@@ -1656,4 +1656,37 @@ def test_100_adds_workspace_tools_and_requests(tmp_path) -> None:
         assert "workspace_tools" not in columns
         tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
         assert "workspace_action_requests" not in tables
+    engine.dispose()
+
+
+@pytest.mark.req('COL-14')
+def test_106_removes_conditions_and_preserves_links(tmp_path):
+    from sqlalchemy.exc import IntegrityError
+
+    path = str(tmp_path / 'links.db')
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, '105_agent_links')
+    engine = create_engine(f'sqlite:///{path}')
+    with engine.begin() as conn:
+        _insert_agent(conn, 'a')
+        _insert_agent(conn, 'b')
+        conn.execute(text("INSERT INTO agent_links (id,from_agent_id,to_agent_id,when_to_ask,created_at,updated_at) VALUES ('l','a','b','Old condition',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        before = conn.execute(text('SELECT id,from_agent_id,to_agent_id,created_by,created_at,updated_at FROM agent_links')).one()
+    for target in ['106_agent_links_autonomous', '105_agent_links', '106_agent_links_autonomous']:
+        if target == '105_agent_links':
+            command.downgrade(cfg, target)
+        else:
+            command.upgrade(cfg, target)
+        with engine.connect() as conn:
+            assert conn.execute(text('SELECT id,from_agent_id,to_agent_id,created_by,created_at,updated_at FROM agent_links')).one() == before
+            columns = {r[1] for r in conn.execute(text('PRAGMA table_info(agent_links)'))}
+            assert ('when_to_ask' in columns) == (target == '105_agent_links')
+    with engine.begin() as conn:
+        conn.execute(text("PRAGMA foreign_keys=ON"))
+        with pytest.raises(IntegrityError):
+            conn.execute(text("INSERT INTO agent_links (id,from_agent_id,to_agent_id) VALUES ('dupe','a','b')"))
+        with pytest.raises(IntegrityError):
+            conn.execute(text("INSERT INTO agent_links (id,from_agent_id,to_agent_id) VALUES ('self','a','a')"))
+        conn.execute(text("DELETE FROM agents WHERE id='b'"))
+        assert conn.execute(text('SELECT count(*) FROM agent_links')).scalar_one() == 0
     engine.dispose()

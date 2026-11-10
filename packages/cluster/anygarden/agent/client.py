@@ -708,14 +708,16 @@ class ChatClient:
         lines = []
         for e in entries:
             name = e.get("display_name") or "?"
-            when = (e.get("when_to_ask") or "").replace("\n", " ").strip()[:300]
+            desc = " ".join((e.get("description") or "").split())[:200]
+            introduction = f" — {desc}" if desc else ""
             if e["agent_id"] in member_agent_ids:
-                lines.append(f"- {name} (in this room) — ask when: {when}")
+                lines.append(f"- {name} (in this room){introduction}")
             else:
-                lines.append(f"- {name} (agent id: {e['agent_id']}) — ask when: {when}")
+                lines.append(f"- {name} (agent id: {e['agent_id']}){introduction}")
         return (
             "\n\nAgents you are linked to — you may ask them from any room. "
-            "Ask one only when its condition fits; for one that is not in "
+            "Use their described expertise and the current task to decide whether "
+            "help is needed; a link does not require you to ask. For one not in "
             "this room, pass its agent id as agent_id in ask_peer (instead "
             "of participant_id). It answers in the thread and does not see "
             "this conversation, so put the context it needs in the question.\n"

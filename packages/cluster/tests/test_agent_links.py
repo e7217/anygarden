@@ -58,9 +58,9 @@ async def _agent_of(sf, pid: str) -> str:
         return (await db.get(Participant, pid)).agent_id
 
 
-async def _link(sf, from_agent: str, to_agent: str, when: str = "필요할 때") -> None:
+async def _link(sf, from_agent: str, to_agent: str) -> None:
     async with sf() as db:
-        db.add(AgentLink(from_agent_id=from_agent, to_agent_id=to_agent, when_to_ask=when))
+        db.add(AgentLink(from_agent_id=from_agent, to_agent_id=to_agent))
         await db.commit()
 
 
@@ -91,7 +91,7 @@ def _auth(token: str) -> dict:
 class TestLinkApi:
     @pytest.mark.asyncio
     @pytest.mark.req("COL-14")
-    async def test_create_list_update_delete(self, ws_env) -> None:
+    async def test_create_list_delete_without_conditions(self, ws_env) -> None:
         app, sf = ws_env["app"], ws_env["session_factory"]
         a = await _add_outside_agent(sf, "기획자")
         b = await _add_outside_agent(sf, "리뷰어")
@@ -100,11 +100,11 @@ class TestLinkApi:
             created = client.post(
                 "/api/v1/agent-links",
                 headers=_auth(ws_env["token"]),
-                json={"from_agent_id": a, "to_agent_id": b, "when_to_ask": "  검토가 필요할 때 "},
+                json={"from_agent_id": a, "to_agent_id": b},
             )
             assert created.status_code == 201, created.text
             link = created.json()
-            assert link["when_to_ask"] == "검토가 필요할 때"
+            assert "when_to_ask" not in link
 
             listed = client.get("/api/v1/agent-links", headers=_auth(ws_env["token"])).json()
             assert [ln["id"] for ln in listed["links"]] == [link["id"]]
@@ -115,7 +115,7 @@ class TestLinkApi:
                 headers=_auth(ws_env["token"]),
                 json={"when_to_ask": "PR을 올리기 전에"},
             )
-            assert patched.json()["when_to_ask"] == "PR을 올리기 전에"
+            assert patched.status_code == 405
 
             assert client.delete(
                 f"/api/v1/agent-links/{link['id']}", headers=_auth(ws_env["token"])
@@ -136,12 +136,12 @@ class TestLinkApi:
             ).status_code
 
         with TestClient(app) as client:
-            assert post({"from_agent_id": a, "to_agent_id": a, "when_to_ask": "x"}) == 400
-            assert post({"from_agent_id": a, "to_agent_id": "nope", "when_to_ask": "x"}) == 404
+            assert post({"from_agent_id": a, "to_agent_id": a}) == 400
+            assert post({"from_agent_id": a, "to_agent_id": "nope"}) == 404
             assert post({"from_agent_id": a, "to_agent_id": b, "when_to_ask": "  "}) == 422
             assert post({"from_agent_id": a, "to_agent_id": b, "when_to_ask": "x" * 301}) == 422
-            assert post({"from_agent_id": a, "to_agent_id": b, "when_to_ask": "x"}) == 201
-            assert post({"from_agent_id": a, "to_agent_id": b, "when_to_ask": "y"}) == 409
+            assert post({"from_agent_id": a, "to_agent_id": b}) == 201
+            assert post({"from_agent_id": a, "to_agent_id": b}) == 409
 
     @pytest.mark.asyncio
     async def test_agents_cannot_edit_links(self, ws_env) -> None:
@@ -155,7 +155,6 @@ class TestLinkApi:
                 json={
                     "from_agent_id": await _agent_of(sf, sender_pid),
                     "to_agent_id": await _agent_of(sf, peer_pid),
-                    "when_to_ask": "x",
                 },
             )
         assert resp.status_code == 403
@@ -166,7 +165,7 @@ class TestLinkApi:
         _token, sender_pid, _peer_pid = await _seed_sender_and_peer(sf, room)
         sender = await _agent_of(sf, sender_pid)
         outside = await _add_outside_agent(sf, "보안 담당")
-        await _link(sf, sender, outside, "인증이 걸리면")
+        await _link(sf, sender, outside)
 
         with TestClient(app) as client, client.websocket_connect(
             f"/ws/rooms/{room.id}",
@@ -178,7 +177,6 @@ class TestLinkApi:
             "agent_id": outside,
             "display_name": "보안 담당",
             "description": None,
-            "when_to_ask": "인증이 걸리면",
         }]
 
 

@@ -1,8 +1,8 @@
 /**
  * Agent links (#1006) — global, one-directional "A may ask B" edges.
  *
- * A link carries a sentence (``when_to_ask``) telling the asking agent
- * when the target is worth a question. The REST surface is
+ * Agents use their peers' public descriptions to decide when to ask.
+ * The REST surface is
  * ``/api/v1/agent-links``; any signed-in user may edit it for now.
  *
  * The graph helpers below are pure so the relationship map's
@@ -11,13 +11,10 @@
  */
 import { apiFetch } from '@/lib/api'
 
-export const WHEN_TO_ASK_MAX = 300
-
 export interface AgentLink {
   id: string
   from_agent_id: string
   to_agent_id: string
-  when_to_ask: string
   created_at: string
   updated_at: string
 }
@@ -65,20 +62,10 @@ export async function fetchAgentLinkGraph(signal?: AbortSignal): Promise<AgentLi
 export async function createAgentLink(input: {
   from_agent_id: string
   to_agent_id: string
-  when_to_ask: string
 }): Promise<AgentLink> {
   const response = await apiFetch('/api/v1/agent-links', {
     method: 'POST',
     body: JSON.stringify(input),
-  })
-  if (!response.ok) throw await failure(response)
-  return response.json()
-}
-
-export async function updateAgentLink(id: string, whenToAsk: string): Promise<AgentLink> {
-  const response = await apiFetch(`/api/v1/agent-links/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ when_to_ask: whenToAsk }),
   })
   if (!response.ok) throw await failure(response)
   return response.json()
@@ -215,4 +202,10 @@ function cycleThrough(component: string[], outgoing: Map<string, string[]>): str
     }
   }
   return [start]
+}
+
+/** Small, capped visual emphasis; incoming and indirect links do not count. */
+export function agentNodeSize(outgoingCount: number) {
+  const count = Math.min(4, Math.max(0, outgoingCount))
+  return { width: 96 + count * 8, height: 44 + count * 2 }
 }

@@ -76,3 +76,12 @@ Machines is an administrator's execution-environment page. Registration leads to
 CreateAgentDialog owns the initial identity, engine/model, permission and room draft. The selected machine is passed to the server and validated before placement; older API clients may omit it for automatic placement. Description is distinct from optional AGENTS.md instructions. Successful creation leads to agent settings; a partially configured credential never silently creates a duplicate agent on retry.
 
 Agent settings keeps existing sections mounted to preserve unsaved edits and offers direct navigation to overview, connection, instructions, rooms, workspace, responsibilities, tasks and activity. Workspace access follows the existing room/global/local approval model and references registered workspace IDs rather than host paths. Empty states, failure states and retries must remain explicit.
+
+
+## 10. Agent relationships
+
+Agent links use the existing React Flow canvas with left-to-right arrows. A right-hand handle connects to another agent; dropping creates the relationship immediately. A keyboard and touch alternative offers source/target selectors. Links have no user-authored conditions: the agent uses each peer's public description and the current task to choose help.
+
+Nodes display only the actual agent name, with a full-name tooltip for truncation. Direct outgoing connections add a small, capped size difference (96–128px wide and 44–52px high); font size stays constant. Do not repeat roles or connection counts on nodes or add condition labels to edges. Edges remain focusable, selectable and removable through a confirmed action in details.
+
+Selecting an agent opens its name/description, an administrator's New conversation action, accessible previous DM conversations, and relationships. Selecting a conversation opens that specific existing room; selecting an agent alone never creates a room. Loading, failed and empty history are distinct states. Node positions and viewport are local to the signed-in user and restored when returning from a conversation. At narrow widths details sit below a resized canvas and scroll independently, keeping the selected graph visible.

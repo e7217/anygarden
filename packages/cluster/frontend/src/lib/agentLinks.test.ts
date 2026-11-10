@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentLinkError, createAgentLink, deleteAgentLink, fetchAgentLinkGraph, findCycles, reachableFrom, type AgentLink } from './agentLinks'
+import { AgentLinkError, createAgentLink, deleteAgentLink, fetchAgentLinkGraph, findCycles, reachableFrom, agentNodeSize, type AgentLink } from './agentLinks'
 import { isLinkParticipant, roomMembers, type Participant } from './participants'
 import { apiFetch } from './api'
 
@@ -8,7 +8,7 @@ const fetchMock = vi.mocked(apiFetch)
 afterEach(() => vi.resetAllMocks())
 
 function link(from: string, to: string): AgentLink {
-  return { id: `${from}>${to}`, from_agent_id: from, to_agent_id: to, when_to_ask: 'x', created_at: '', updated_at: '' }
+  return { id: `${from}>${to}`, from_agent_id: from, to_agent_id: to, created_at: '', updated_at: '' }
 }
 
 describe('reachableFrom', () => {
@@ -71,7 +71,7 @@ describe('agent link requests', () => {
 
   it('carries status and string detail of a failed write', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ detail: 'duplicate link' }), { status: 409 }))
-    const error = await createAgentLink({ from_agent_id: 'a', to_agent_id: 'b', when_to_ask: 'x' }).catch(e => e)
+    const error = await createAgentLink({ from_agent_id: 'a', to_agent_id: 'b' }).catch(e => e)
     expect(error).toBeInstanceOf(AgentLinkError)
     expect(error.status).toBe(409)
     expect(error.detail).toBe('duplicate link')
@@ -79,7 +79,7 @@ describe('agent link requests', () => {
 
   it('drops a non-string 422 detail', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ detail: [{ msg: 'too long' }] }), { status: 422 }))
-    const error = await createAgentLink({ from_agent_id: 'a', to_agent_id: 'b', when_to_ask: 'x' }).catch(e => e)
+    const error = await createAgentLink({ from_agent_id: 'a', to_agent_id: 'b' }).catch(e => e)
     expect(error.status).toBe(422)
     expect(error.detail).toBeNull()
   })
@@ -100,4 +100,11 @@ describe('room members', () => {
     expect(Object.keys(roomMembers(roster))).toEqual(['p1', 'p2'])
     expect(isLinkParticipant(roster.p3)).toBe(true)
   })
+})
+
+it('keeps nodes compact and caps emphasis for many outgoing links', () => {
+  expect(agentNodeSize(0).height).toBeGreaterThanOrEqual(44)
+  expect(agentNodeSize(2).width).toBeGreaterThan(agentNodeSize(0).width)
+  expect(agentNodeSize(20)).toEqual(agentNodeSize(4))
+  expect(agentNodeSize(20).width).toBeLessThanOrEqual(128)
 })

@@ -2462,8 +2462,8 @@ class PeerAskTarget(Base):
 class AgentLink(Base):
     """One agent may ask another, from any room (#1006).
 
-    Links are global and one-directional; ``when_to_ask`` is shown to the
-    asking agent so it can pick whom to ask. A link lets ``ask_peer`` reach
+    Links are global and one-directional. The target's public description
+    helps the asking agent decide whom to ask. A link lets ``ask_peer`` reach
     an agent that is not a member of the room: it is seated for the
     question's thread only (``Participant.joined_via == "link"``).
     """
@@ -2482,7 +2482,6 @@ class AgentLink(Base):
     to_agent_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
     )
-    when_to_ask: Mapped[str] = mapped_column(Text, nullable=False)
     created_by: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
