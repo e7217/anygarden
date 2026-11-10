@@ -24,20 +24,21 @@ interface Props {
   onSelect: (selection: LinkSelection) => void
   onConnect: (fromId: string, toId: string) => void
 }
-type Emphasis = 'reach' | 'dim' | 'none'
+type Emphasis = 'reach' | 'none'
 interface AgentNodeData extends Record<string, unknown> {
   name: string; emphasis: Emphasis; width: number; height: number
 }
 function viewportDuration() { return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 220 }
 const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData>>) {
   const connecting = useConnection(connection => connection.inProgress)
+  const connectingFrom = useConnection(connection => connection.fromNode?.id === id)
   const updateInternals = useUpdateNodeInternals()
   // React Flow must remeasure handles as a link changes the source's size.
   useEffect(() => { updateInternals(id) }, [id, data.width, data.height, updateInternals])
   return <div className={`agent-link-node${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
     <span className="agent-link-node__name">{data.name}</span>
     <Handle type="target" position={Position.Left} isConnectableStart={false} className={`agent-link-node__target${connecting ? ' is-active' : ''}`} />
-    <Handle type="source" position={Position.Right} className="agent-link-node__source"><span aria-hidden="true">+</span></Handle>
+    <Handle type="source" position={Position.Right} isConnectableEnd={false} className={`agent-link-node__source${connectingFrom ? ' is-connecting' : ''}`} />
   </div>
 })
 const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style }: EdgeProps) {
@@ -49,6 +50,8 @@ const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY
     : bezier
   return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} interactionWidth={28} />
 })
+// Reserve room for the top-right tools and bottom-left zoom controls.
+const fitViewOptions = { padding: { top: '64px', bottom: '24px', left: '64px', right: '24px' }, maxZoom: 1 } as const
 const nodeTypes: NodeTypes = { agent: LinkAgentNode }
 const edgeTypes: EdgeTypes = { link: LinkEdge }
 
@@ -71,8 +74,9 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
   const initialView = useRef(view)
   const initialized = useNodesInitialized()
   const restored = useRef(false)
+  const canvasWidth = useStore(state => state.width)
   const canvasHeight = useStore(state => state.height)
-  const previousHeight = useRef(0)
+  const previousSize = useRef({ width: 0, height: 0 })
   const selectionRef = useRef(selection)
   selectionRef.current = selection
   const select = useCallback((next: LinkSelection) => { selectionRef.current = next; onSelect(next) }, [onSelect])
@@ -100,23 +104,23 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
     if (!initialized || restored.current) return
     restored.current = true
     if (initialView.current.viewport) void rf.setViewport(initialView.current.viewport)
-    else void rf.fitView({ padding: 0.25, maxZoom: 1 })
+    else void rf.fitView(fitViewOptions)
   }, [initialized, rf])
   useEffect(() => {
-    const previous = previousHeight.current
-    previousHeight.current = canvasHeight
-    // A narrow-screen details panel resizes the map instead of hiding its nodes.
-    // Initial height must not overwrite a restored user viewport.
-    if (previous > 0 && previous !== canvasHeight && restored.current && window.matchMedia('(max-width: 1023px)').matches) {
-      void rf.fitView({ padding: 0.25, maxZoom: 1 })
+    const previous = previousSize.current
+    previousSize.current = { width: canvasWidth, height: canvasHeight }
+    // Details shrink the map horizontally on desktop and vertically on mobile.
+    // Initial dimensions must not overwrite a restored user viewport.
+    if (previous.width > 0 && previous.height > 0 && restored.current
+      && (previous.width !== canvasWidth || previous.height !== canvasHeight)) {
+      void rf.fitView(fitViewOptions)
     }
-  }, [canvasHeight, rf])
+  }, [canvasWidth, canvasHeight, rf])
   const reach = useMemo(() => selection?.kind === 'agent' ? reachableFrom(selection.id, links) : null, [selection, links])
   const names = useMemo(() => new Map(agents.map(a => [a.id, a.name])), [agents])
   const nodes = useMemo(() => localNodes.map(node => {
-    const emphasis: Emphasis = !reach ? 'none' : reach.agents.has(node.id) ? 'reach' : 'dim'
+    const emphasis: Emphasis = reach?.agents.has(node.id) ? 'reach' : 'none'
     return { ...node, selected: selection?.kind === 'agent' && selection.id === node.id,
-      className: emphasis === 'dim' ? 'is-dimmed' : undefined,
       ariaLabel: t('agentLinks.agentNode', { name: node.data.name }), data: { ...node.data, emphasis } }
   }), [localNodes, selection, reach, t])
   const edges = useMemo<Edge[]>(() => links.map(l => {
@@ -125,8 +129,10 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
     return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link',
       selected: selection?.kind === 'link' && selection.id === l.id, focusable: true,
       ariaLabel: t('agentLinks.linkLabel', { from: names.get(l.from_agent_id) ?? '?', to: names.get(l.to_agent_id) ?? '?' }),
-      className: reach && !reach.links.has(l.id) ? 'is-dimmed' : undefined,
-      markerEnd: { type: MarkerType.ArrowClosed, color, width: 18, height: 18 }, style: { stroke: color, strokeWidth: emphasized ? 2 : 1.5 } }
+      className: emphasized ? 'is-emphasized' : undefined,
+      // The built-in symbol occupies 8 of its 20 viewBox units: 16 gives a 6.4px chevron.
+      markerEnd: { type: MarkerType.Arrow, color, width: 16, height: 16, markerUnits: 'userSpaceOnUse', strokeWidth: 1.5 },
+      style: { stroke: color } }
   }), [links, selection, reach, names, t])
   const onNodesChange = useCallback((changes: NodeChange<Node<AgentNodeData>>[]) => {
     const rest: NodeChange<Node<AgentNodeData>>[] = []
@@ -148,7 +154,7 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
     reset()
     setLocalNodes(nodes => nodes.map(node => ({ ...node, position: positions.get(node.id) ?? node.position })))
     for (const [id, pos] of positions) savePosition(id, pos)
-    requestAnimationFrame(() => { void rf.fitView({ padding: 0.25, maxZoom: 1, duration: viewportDuration() }) })
+    requestAnimationFrame(() => { void rf.fitView({ ...fitViewOptions, duration: viewportDuration() }) })
   }, [reset, positions, savePosition, rf, setLocalNodes])
   return <div className="agent-links-root relative h-full w-full" role="application" aria-label={t('agentLinks.canvasLabel')} onKeyDown={e => { if (e.key === 'Escape') select(null) }}>
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
@@ -157,13 +163,14 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
       onNodeDragStop={(_, node) => savePosition(node.id, node.position)}
       onMoveEnd={(_, viewport) => { if (restored.current) saveViewport(viewport) }}
       onPaneClick={() => select(null)} deleteKeyCode={null} connectionRadius={32}
+      connectionLineStyle={{ stroke: 'var(--color-brand-text)', strokeWidth: 1.5 }}
       minZoom={0.3} maxZoom={2} proOptions={{ hideAttribution: true }}>
       <Background color="var(--color-border-subtle)" gap={16} size={1} />
       <Controls showInteractive={false} showFitView={false} />
     </ReactFlow>
     <div className="absolute right-3 top-3 z-10 flex gap-2">
       <Button variant="outline" size="icon" onClick={rearrange} aria-label={t('agentLinks.rearrange')} title={t('agentLinks.rearrange')}><LayoutGrid /></Button>
-      <Button variant="outline" size="icon" onClick={() => void rf.fitView({ padding: 0.25, maxZoom: 1, duration: viewportDuration() })} aria-label={t('agentLinks.fitView')} title={t('agentLinks.fitView')}><Maximize2 /></Button>
+      <Button variant="outline" size="icon" onClick={() => void rf.fitView({ ...fitViewOptions, duration: viewportDuration() })} aria-label={t('agentLinks.fitView')} title={t('agentLinks.fitView')}><Maximize2 /></Button>
     </div>
   </div>
 }
