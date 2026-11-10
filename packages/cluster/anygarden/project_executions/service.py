@@ -51,6 +51,13 @@ ACTIVE_EXECUTION_STATES = frozenset({"planning", "running", "waiting_children"})
 log = logging.getLogger(__name__)
 CHILD_HANDOFF_EVENT = "task_child_result_handoff"
 CHILD_HANDOFF_ORIGIN = "project_execution_child_handoff"
+# #994 — a lead woken about a stuck task may only resume it from a turn bound
+# to the execution. Name the one place where the user's answer gives it such a
+# turn (see ``authorization.lead_reply_root_task``).
+_ASK_USER_IN_THREAD = (
+    "ask the user for what is missing in this thread (when the user answers in this thread "
+    "and mentions you, call resume_project_task in that turn)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1801,7 +1808,8 @@ async def reconcile_execution(
                 "resume_project_task(execution_id, task_id, guidance) — at most "
                 f"{MAX_LEAD_RESUMES_PER_TASK - used} more time(s) for this task — giving guidance "
                 "such as that the previous attempt failed in the engine and what to focus on; "
-                "or ask the user; or stop. Do not create a new task or re-delegate to retry it.\n"
+                f"or {_ASK_USER_IN_THREAD}; or stop. Do not create a new task or re-delegate "
+                "to retry it.\n"
             )
         else:
             text += (
@@ -1827,8 +1835,8 @@ async def reconcile_execution(
                 "The assignee stopped this task and explained why in its own thread. "
                 "Decide once: continue this same task with resume_project_task(execution_id, "
                 "task_id, guidance) giving the assignee concrete guidance (re-delegating with the "
-                "same delegation_key only replays the blocked task), ask the user for what is "
-                "missing, or stop.\n"
+                f"same delegation_key only replays the blocked task), {_ASK_USER_IN_THREAD}, "
+                "or stop.\n"
             )
     if repair is not None:
         text += f"Automatic QA repair state: {repair}\n"

@@ -2102,6 +2102,22 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             rid = str(uuid4())
                             from anygarden.turns.service import create_turn
 
+                            # #994 — the owner answering the lead in the
+                            # execution's own thread gives the lead a turn
+                            # bound to it, so the lead can resume or stop.
+                            execution_task_id = None
+                            if identity.kind == "user" and is_thread_reply:
+                                from anygarden.project_executions.authorization import (
+                                    lead_reply_root_task,
+                                )
+
+                                execution_task_id = await lead_reply_root_task(
+                                    db,
+                                    room_id=room_id,
+                                    thread_root_id=msg.root_message_id,
+                                    participant_id=pid,
+                                    agent_id=aid,
+                                )
                             turn = await create_turn(
                                 db,
                                 room_id=room_id,
@@ -2110,6 +2126,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 trigger_message_id=msg.id,
                                 thread_root_id=msg.root_message_id,
                                 request_id=rid,
+                                task_id=execution_task_id,
                             )
                             if turn.state == "pending":
                                 request_id_by_participant[pid] = rid
