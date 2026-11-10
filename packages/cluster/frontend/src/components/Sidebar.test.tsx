@@ -464,12 +464,21 @@ describe('Sidebar — project order (#995)', () => {
     ]
   })
 
-  it('[ROOM-14] gives every project a drag handle named after it', () => {
+  it('opens a project from its name or the chevron at the row end', () => {
     renderSidebar()
 
-    for (const name of ['Zero', 'One', 'Two']) {
-      expect(screen.getByRole('button', { name: `Reorder ${name}` })).toBeInTheDocument()
-    }
+    const name = screen.getByRole('button', { name: 'One' })
+    expect(name).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(name)
+    expect(name).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(screen.getByTestId('sidebar-project-chevron-p1'))
+    expect(name).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('has no separate drag handle on project rows', () => {
+    renderSidebar()
+
+    expect(screen.queryByRole('button', { name: /^Reorder / })).not.toBeInTheDocument()
   })
 
   it('[ROOM-14] moves a project down from its menu', () => {
@@ -506,7 +515,6 @@ describe('Sidebar — project order (#995)', () => {
     renderSidebar()
 
     expect(screen.queryByTestId('sidebar-project-menu-p0')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Reorder Zero' })).not.toBeInTheDocument()
   })
 })
 

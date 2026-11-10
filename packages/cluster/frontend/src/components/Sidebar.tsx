@@ -224,6 +224,19 @@ export default function Sidebar({
   // ``reorderProjects``; tell the user the order was not kept.
   const projectIds = useMemo(() => projects.map(p => p.id), [projects])
   const canReorderProjects = projects.length > 1
+  // Pointer only: the drag source is the name button, where Space/Enter
+  // must keep toggling the project. Keyboard reordering goes through
+  // the project menu.
+  const projectSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  )
+  // The click that ends a drag lands on the dragged name button; skip it
+  // so a drop does not also open or close the project. Cleared after
+  // that click has been dispatched.
+  const projectDragRef = useRef(false)
+  const releaseProjectDrag = () => {
+    setTimeout(() => { projectDragRef.current = false }, 0)
+  }
   const moveProject = (from: number, to: number) => {
     reorderProjects(arrayMove(projectIds, from, to)).catch(() => {
       notify({ message: t('chat.projectOrderFailed'), tone: 'error' })
@@ -530,10 +543,10 @@ export default function Sidebar({
               data-testid="sidebar-projects-toggle"
               className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
             >
+              <span className="min-w-0 truncate">{t('chat.projects')}</span>
               {projectsCollapsed
-                ? <ChevronRight className="h-3 w-3" />
-                : <ChevronDown className="h-3 w-3" />}
-              {t('chat.projects')}
+                ? <ChevronRight className="ml-auto h-3 w-3 shrink-0" />
+                : <ChevronDown className="ml-auto h-3 w-3 shrink-0" />}
             </button>
             <button
               type="button"
@@ -597,9 +610,12 @@ export default function Sidebar({
                   ``DndContext`` from the pinned section so the two
                   lists never reorder each other. */}
               <DndContext
-                sensors={sensors}
+                sensors={projectSensors}
                 collisionDetection={closestCenter}
+                onDragStart={() => { projectDragRef.current = true }}
+                onDragCancel={releaseProjectDrag}
                 onDragEnd={(event: DragEndEvent) => {
+                  releaseProjectDrag()
                   const { active, over } = event
                   if (!over || active.id === over.id) return
                   const from = projectIds.indexOf(String(active.id))
@@ -610,8 +626,8 @@ export default function Sidebar({
               >
                 <SortableContext items={projectIds} strategy={verticalListSortingStrategy}>
                   {projects.map((project, index) => (
-                    <SortableProject key={project.id} id={project.id}>
-                      {handle => (
+                    <SortableProject key={project.id} id={project.id} disabled={!canReorderProjects}>
+                      {dragListeners => (
                         <>
                           {/* Project header row: the expand/collapse <button>
                               and the overflow-menu trigger live side-by-side
@@ -620,27 +636,21 @@ export default function Sidebar({
                               (which would be invalid HTML). ``relative`` anchors
                               the menu's absolute-positioned popover. */}
                           <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] transition-colors">
-                            {canReorderProjects && (
-                              <button
-                                type="button"
-                                {...handle}
-                                title={t('chat.dragToReorder')}
-                                aria-label={t('chat.reorderProject', { name: project.name })}
-                                data-testid={`sidebar-project-drag-${project.id}`}
-                                className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 cursor-grab touch-none items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] focus:opacity-100 active:cursor-grabbing md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-                              >
-                                <GripVertical className="h-3 w-3" />
-                              </button>
-                            )}
+                            {/* The name button both toggles the project and, with a
+                                pointer, drags it (#995): a drag starts only after 6px
+                                of movement, so a plain click still toggles. Keyboard
+                                and touch users move projects from the menu. */}
                             <button
-                              onClick={() => toggleProject(project.id)}
+                              type="button"
+                              {...dragListeners}
+                              onClick={() => {
+                                if (projectDragRef.current) return
+                                toggleProject(project.id)
+                              }}
                               aria-expanded={expandedProjects.has(project.id)}
-                              className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
+                              data-testid={`sidebar-project-${project.id}`}
+                              className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-left text-[var(--color-foreground)]"
                             >
-                              {expandedProjects.has(project.id)
-                                ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                                : <ChevronRight className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                              }
                               <span className="truncate">{project.name}</span>
                             </button>
                             {/* Move actions are there whenever there is something to
@@ -660,6 +670,19 @@ export default function Sidebar({
                                   : undefined}
                               />
                             )}
+                            {/* Open/closed state at the row's right edge. The name
+                                button carries ``aria-expanded`` for assistive tech,
+                                so this is a pointer-only extra target. */}
+                            <span
+                              aria-hidden="true"
+                              onClick={() => toggleProject(project.id)}
+                              data-testid={`sidebar-project-chevron-${project.id}`}
+                              className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 cursor-pointer items-center justify-center text-[var(--color-foreground-subtle)]"
+                            >
+                              {expandedProjects.has(project.id)
+                                ? <ChevronDown className="h-4 w-4" />
+                                : <ChevronRight className="h-4 w-4" />}
+                            </span>
                           </div>
 
                           {expandedProjects.has(project.id) && (
@@ -739,10 +762,10 @@ export default function Sidebar({
                   aria-controls="sidebar-agents-list"
                   className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                 >
+                  <span className="min-w-0 truncate">{t('chat.agents')}</span>
                   {agentsCollapsed
-                    ? <ChevronRight className="h-3 w-3" />
-                    : <ChevronDown className="h-3 w-3" />}
-                  {t('chat.agents')}
+                    ? <ChevronRight className="ml-auto h-3 w-3 shrink-0" />
+                    : <ChevronDown className="ml-auto h-3 w-3 shrink-0" />}
                 </button>
                 {isAdmin && (
                   <button
@@ -1603,19 +1626,22 @@ function AgentDMListAdmin({
 }
 
 /** One sortable project block in the sidebar (#995). The whole block,
- *  rooms included, moves while dragging; only the handle that the
- *  render prop receives starts a drag, so the header row still toggles
- *  on click. */
+ *  rooms included, moves while dragging; a drag starts only from the
+ *  element that spreads the listeners the render prop receives. The
+ *  sortable ``attributes`` are left off on purpose: that element is the
+ *  project's toggle button and keeps its own role and name. */
 function SortableProject({
   id,
+  disabled,
   children,
 }: {
   id: string
-  children: (handle: Record<string, unknown>) => ReactNode
+  disabled: boolean
+  children: (dragListeners: Record<string, unknown>) => ReactNode
 }) {
   const {
-    attributes, listeners, setNodeRef, transform, transition, isDragging,
-  } = useSortable({ id })
+    listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({ id, disabled })
   return (
     <div
       ref={setNodeRef}
@@ -1626,7 +1652,7 @@ function SortableProject({
       }}
       className="mb-1"
     >
-      {children({ ...attributes, ...listeners })}
+      {children({ ...listeners })}
     </div>
   )
 }
