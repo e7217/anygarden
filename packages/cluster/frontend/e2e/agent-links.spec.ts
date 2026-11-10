@@ -6,8 +6,8 @@ import { expect, test, type Locator, type Page, type Route } from '@playwright/t
  * The link map is a React Flow canvas: component tests mock it away, so
  * this suite checks that the graph actually renders agents and arrows and
  * that the keyboard path (header "Add link") posts the link. The chain
- * half checks that a running chain shows its progress card under the
- * person's message and its call tree in the thread.
+ * half checks that a running chain shows its progress on the person's
+ * thread reply row (#1013) and its call tree in the thread.
  *
  * REST is stubbed and ``window.WebSocket`` is a silent fake, like
  * ``threads.spec.ts``.
@@ -87,7 +87,7 @@ const HISTORY = [
   }),
 ]
 
-async function stubApi(page: Page, posted: unknown[], dmPosts: string[] = [], isAdmin = true) {
+async function stubApi(page: Page, posted: unknown[], dmPosts: string[] = [], isAdmin = true, history = HISTORY) {
   await page.route('**/api/v1/**', async route => {
     const request = route.request()
     const { pathname, searchParams } = new URL(request.url())
@@ -144,8 +144,8 @@ async function stubApi(page: Page, posted: unknown[], dmPosts: string[] = [], is
     if (pathname === `/api/v1/rooms/${ROOM_ID}/peer-chains`) {
       return fulfillJson(route, 200, { chains: [chain()] })
     }
-    if (pathname === `/api/v1/rooms/${ROOM_ID}/messages`) return fulfillJson(route, 200, HISTORY)
-    if (pathname.startsWith(`/api/v1/rooms/${ROOM_ID}/messages/`)) return fulfillJson(route, 200, HISTORY)
+    if (pathname === `/api/v1/rooms/${ROOM_ID}/messages`) return fulfillJson(route, 200, history)
+    if (pathname.startsWith(`/api/v1/rooms/${ROOM_ID}/messages/`)) return fulfillJson(route, 200, history)
     return fulfillJson(route, 200, [])
   })
 }
@@ -495,19 +495,41 @@ test.describe('agent links', () => {
 })
 
 test.describe('question chains', () => {
-  test('[COL-17] a running chain shows its card and its call tree in the thread', async ({ page }) => {
+  test('[COL-17] a running chain shows on the thread reply row and its call tree in the thread', async ({ page }) => {
     await stubWebSocket(page)
     await stubApi(page, [])
     await signIn(page)
     await page.goto(`/rooms/${ROOM_ID}`)
     await expect(page.getByText('Please check the release')).toBeVisible()
 
-    const card = page.getByTestId('peer-chain-progress').or(
-      page.getByText(/Developer.*(collecting|gathering)/i),
-    ).first()
-    await expect(card).toBeVisible()
-    await page.getByRole('button', { name: /Open thread/i }).first().click()
+    // #1013 — the thread reply row carries the progress; no separate card.
+    await expect(page.getByTestId('thread-working')).toHaveText('Security answering')
+    await expect(page.getByTestId('peer-chain-progress')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /^Stop/ })).toHaveCount(1)
+    const row = page.locator(`[data-thread-trigger="${ROOT_ID}"]`)
+    await row.hover()
+    await expect(page.getByTestId('peer-chain-hover')).toContainText('Reviewer → Security')
+    await row.click()
 
     await expect(page.getByText('Reviewer → Security').first()).toBeVisible()
+  })
+
+  test('a thread with long questions opens scrolled to its end, without shifting the panel', async ({ page }) => {
+    // #1013 — following the newest reply used scrollIntoView, whose default
+    // block "start" could not be met by the viewport alone, so the browser
+    // scrolled the overflow-hidden ScrollArea root too: the top slid under
+    // the header and the bottom went blank.
+    const long = 'The release notes, the audit log and the token check all need a look. '.repeat(40)
+    const history = HISTORY.map(msg => (msg.id === ROOT_ID ? msg : { ...msg, content: `${msg.content} ${long}` }))
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await stubWebSocket(page)
+    await stubApi(page, [], [], true, history)
+    await signIn(page)
+    await page.goto(`/rooms/${ROOM_ID}`)
+    await page.locator(`[data-thread-trigger="${ROOT_ID}"]`).first().click()
+
+    const viewport = page.getByTestId('thread-panel-root').locator('[data-radix-scroll-area-viewport]')
+    await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2)
+    expect(await viewport.evaluate(el => (el.parentElement as HTMLElement).scrollTop)).toBe(0)
   })
 })

@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { MessageSquareReply } from 'lucide-react'
 import BrailleSpinner from '@/components/BrailleSpinner'
 import TurnCancelControl from '@/components/TurnCancelControl'
@@ -8,6 +9,10 @@ import type { Participant } from '@/pages/ChatPage'
 import { formatMessageTimestamp } from '@/lib/datetime'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { replyCount, lastReplyAt, threadParticipantIds, type ThreadIndex } from '@/lib/threads'
+import { currentActivity, primaryChain, type PeerChain } from '@/lib/peerChains'
+import { activityText } from '@/components/peer-chains/PeerChainProgressCard'
+import PeerChainStopButton from '@/components/peer-chains/PeerChainStopButton'
+import PeerChainHoverSummary from '@/components/peer-chains/PeerChainHoverSummary'
 
 /** Avatars shown before the count collapses into "+N". */
 const MAX_AVATARS = 3
@@ -28,6 +33,12 @@ interface ThreadReplyAffordanceProps {
   /** Open turns in this thread; one stop control cancels them all. */
   stopTurnIds?: string[]
   onStop?: (requestIds: string[]) => Promise<boolean>
+  /** #1013 — running question chains whose questions live in this thread.
+   *  The row then reports the chain's progress (including agents working
+   *  outside this room) and its one stop ends the chains too. */
+  chains?: PeerChain[]
+  /** Stops one chain; omitted when the viewer may not stop agents. */
+  onCancelChain?: (chainId: string) => Promise<boolean>
 }
 
 /**
@@ -38,6 +49,10 @@ interface ThreadReplyAffordanceProps {
  * the reader can decide whether to open it without doing so. A thread
  * with none is just an offer, and stays quiet until hover so an empty
  * room doesn't read as a wall of buttons.
+ *
+ * #1013 — while agents ask agents under this message, the row is also
+ * where that shows: one progress line, one stop, and on hover who asked
+ * whom. A separate progress card used to repeat all three.
  */
 export default function ThreadReplyAffordance({
   root,
@@ -50,11 +65,30 @@ export default function ThreadReplyAffordance({
   workingSince,
   stopTurnIds = [],
   onStop,
+  chains = [],
+  onCancelChain,
 }: ThreadReplyAffordanceProps) {
   const { locale, t } = useLocale()
+  const summaryId = useId()
   const count = replyCount(index, root.id)
   const align = isMine ? 'justify-end' : 'justify-start'
-  const working = workingNames.length > 0
+  const running = chains.filter(chain => chain.state === 'active')
+  const chain = primaryChain(running)
+  const working = workingNames.length > 0 || chain !== null
+  const workingText = chain
+    ? activityText(t, currentActivity(chain))
+    : t('chat.threadWorking', { names: workingNames.join(', ') })
+  // A chain working only outside this room has no thread typing to time.
+  const since = workingSince ?? (chain ? Date.parse(chain.started_at) : undefined)
+
+  // Stopping a chain ends its turns; the thread's other work goes too, so
+  // nothing is left running under a row whose only stop was pressed.
+  const stopChains = async () => {
+    if (!onCancelChain) return false
+    const results = await Promise.all(running.map(item => onCancelChain(item.id)))
+    if (stopTurnIds.length > 0 && onStop) await onStop(stopTurnIds)
+    return results.every(Boolean)
+  }
 
   // A thread with work under way advertises itself even before its
   // first reply lands, so the reader can see and stop it from here.
@@ -88,63 +122,75 @@ export default function ThreadReplyAffordance({
 
   return (
     <div className={`mt-1.5 flex flex-wrap items-center gap-1 ${align}`}>
-      <button
-        type="button"
-        onClick={() => onOpen(root.id)}
-        data-thread-trigger={root.id}
-        aria-label={t(count === 1 ? 'chat.openThreadReply' : 'chat.openThreadReplies', { count })}
-        aria-expanded={active}
-        className={`
-          flex min-h-[var(--control-sm-height)] max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-2 py-1
-          text-badge transition-colors
-          focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
-          ${active
-            ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
-            : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground-muted)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-alt)]'}
-        `}
-      >
-        <span className="flex -space-x-1.5">
-          {shown.map(pid => {
-            const p = participants[pid]
-            return (
-              <span key={pid} className="ring-2 ring-[var(--color-surface)] rounded-full">
-                <EntityAvatar
-                  id={pid}
-                  name={p?.display_name ?? pid.slice(0, 8)}
-                  kind={(p?.kind as EntityKind) ?? 'user'}
-                  size="xs"
-                />
-              </span>
-            )
-          })}
-        </span>
-        {count > 0 && (
-          <span className="font-medium text-[var(--color-brand-text)]">
-            {t(count === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count })}
+      <div className="group/chain relative min-w-0 max-w-full">
+        <button
+          type="button"
+          onClick={() => onOpen(root.id)}
+          data-thread-trigger={root.id}
+          aria-label={t(count === 1 ? 'chat.openThreadReply' : 'chat.openThreadReplies', { count })}
+          aria-describedby={chain ? summaryId : undefined}
+          aria-expanded={active}
+          className={`
+            flex min-h-[var(--control-sm-height)] max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-2 py-1
+            text-badge transition-colors
+            focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
+            ${active
+              ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
+              : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground-muted)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-alt)]'}
+          `}
+        >
+          <span className="flex -space-x-1.5">
+            {shown.map(pid => {
+              const p = participants[pid]
+              return (
+                <span key={pid} className="ring-2 ring-[var(--color-surface)] rounded-full">
+                  <EntityAvatar
+                    id={pid}
+                    name={p?.display_name ?? pid.slice(0, 8)}
+                    kind={(p?.kind as EntityKind) ?? 'user'}
+                    size="xs"
+                  />
+                </span>
+              )
+            })}
           </span>
-        )}
-        {overflow > 0 && (
-          <span className="text-[var(--color-foreground-subtle)]">
-            +{overflow}
-          </span>
-        )}
-        {working ? (
-          <span className="flex min-w-0 items-center gap-1.5 text-[var(--color-foreground-muted)]">
-            <BrailleSpinner />
-            <span className="truncate">{t('chat.threadWorking', { names: workingNames.join(', ') })}</span>
-            {workingSince !== undefined && (
-              <span className="shrink-0 whitespace-pre">
-                {'· '}<Elapsed since={workingSince} />
-              </span>
-            )}
-          </span>
-        ) : last && (
-          <span className="truncate text-[var(--color-foreground-subtle)]">
-            {formatMessageTimestamp(last, new Date(), locale)}
-          </span>
-        )}
-      </button>
-      {working && onStop && (
+          {count > 0 && (
+            <span className="font-medium text-[var(--color-brand-text)]">
+              {t(count === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count })}
+            </span>
+          )}
+          {overflow > 0 && (
+            <span className="text-[var(--color-foreground-subtle)]">
+              +{overflow}
+            </span>
+          )}
+          {working ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-[var(--color-foreground-muted)]">
+              <BrailleSpinner />
+              <span className="truncate" data-testid="thread-working">{workingText}</span>
+              {since !== undefined && !Number.isNaN(since) && (
+                <span className="shrink-0 whitespace-pre">
+                  {'· '}<Elapsed since={since} />
+                </span>
+              )}
+            </span>
+          ) : last && (
+            <span className="truncate text-[var(--color-foreground-subtle)]">
+              {formatMessageTimestamp(last, new Date(), locale)}
+            </span>
+          )}
+        </button>
+        {chain && <PeerChainHoverSummary chain={chain} id={summaryId} alignEnd={isMine} />}
+      </div>
+      {chain ? onCancelChain && (
+        <PeerChainStopButton
+          chain={chain}
+          onCancel={stopChains}
+          text={t('peerChains.stop')}
+          label={t('peerChains.stopLabel')}
+          description={t('peerChains.stopThreadDescription', { name: chain.root.name })}
+        />
+      ) : working && onStop && (
         <TurnCancelControl
           requestIds={stopTurnIds}
           label={t('chat.stopThreadLabel')}

@@ -54,4 +54,24 @@ const ScrollBar = React.forwardRef<
 ))
 ScrollBar.displayName = ScrollAreaPrimitive.ScrollAreaScrollbar.displayName
 
-export { ScrollArea, ScrollBar }
+/**
+ * #1013 — scrolls the ScrollArea that holds ``anchor`` to its end.
+ *
+ * ``anchor.scrollIntoView()`` aligns to the viewport's top by default;
+ * when the viewport alone cannot do that it scrolls every ancestor too,
+ * including the ``overflow-hidden`` root above, which then slides the
+ * whole viewport up and leaves the panel half blank. Scrolling the
+ * viewport itself never touches an ancestor.
+ */
+function scrollToEnd(anchor: HTMLElement | null, behavior: ScrollBehavior = "smooth") {
+  if (!anchor) return
+  const viewport = anchor.closest<HTMLElement>("[data-radix-scroll-area-viewport]")
+  if (!viewport) {
+    anchor.scrollIntoView?.({ behavior, block: "end" })
+    return
+  }
+  if (typeof viewport.scrollTo === "function") viewport.scrollTo({ top: viewport.scrollHeight, behavior })
+  else viewport.scrollTop = viewport.scrollHeight
+}
+
+export { ScrollArea, ScrollBar, scrollToEnd }

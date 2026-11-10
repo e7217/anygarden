@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { ScrollArea } from './scroll-area'
+import { ScrollArea, scrollToEnd } from './scroll-area'
 
 afterEach(() => cleanup())
 
@@ -31,5 +31,31 @@ describe('ScrollArea viewport substrate (#336)', () => {
     expect(viewport).not.toBeNull()
     expect(viewport!.className).toContain('[&>div]:!block')
     expect(viewport!.className).toContain('[&>div]:!min-w-full')
+  })
+})
+
+describe('scrollToEnd (#1013)', () => {
+  it('scrolls the viewport itself, never the anchor into view', () => {
+    const { container } = render(
+      <ScrollArea>
+        <div data-testid="bottom" />
+      </ScrollArea>,
+    )
+    const viewport = container.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+    const bottom = container.querySelector('[data-testid="bottom"]') as HTMLElement
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 500 })
+    const scrollTo = vi.fn()
+    viewport.scrollTo = scrollTo as unknown as typeof viewport.scrollTo
+    const scrollIntoView = vi.fn()
+    bottom.scrollIntoView = scrollIntoView
+
+    scrollToEnd(bottom)
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'smooth' })
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('ignores a missing anchor', () => {
+    expect(() => scrollToEnd(null)).not.toThrow()
   })
 })

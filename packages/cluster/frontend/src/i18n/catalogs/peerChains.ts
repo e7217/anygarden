@@ -1,11 +1,11 @@
-// #1006 — agents asking agents: the progress card under a message, the call
-// tree in the thread panel, and path labels on question/answer messages.
+// #1006 — agents asking agents: the progress on a message's thread reply row
+// (#1013; a card only where that row cannot show), the call tree in the thread
+// panel, and path labels on question/answer messages.
 export const peerChainsEn = {
   'peerChains.progress.label': 'Agent question chain in progress',
   'peerChains.progress.collecting': '{{name}} is gathering answers',
   'peerChains.progress.agentsOne': '1 agent involved',
   'peerChains.progress.agents': '{{count}} agents involved',
-  'peerChains.progress.depth': 'depth {{depth}}',
   'peerChains.progress.now': 'now: {{activity}}',
   'peerChains.activity.answering': '{{name}} answering',
   'peerChains.activity.answeringMore': '{{name}} and {{count}} more answering',
@@ -18,6 +18,10 @@ export const peerChainsEn = {
   'peerChains.stopTitle': 'Stop the whole question chain?',
   'peerChains.stopDescription': 'Every agent still working on questions started by {{name}} stops now. Answers already posted stay in the thread.',
   'peerChains.stopFailed': 'Could not stop the question chain. Try again.',
+  'peerChains.stop': 'Stop',
+  'peerChains.stopLabel': 'Stop every agent in this thread and its question chain',
+  'peerChains.stopThreadDescription': 'Every agent working in this thread, and every question {{name}} started, stops now. Answers already posted stay in the thread.',
+  'peerChains.hover.label': 'Who asked whom',
   'peerChains.state.pending': 'Not started',
   'peerChains.state.answering': 'Answering',
   'peerChains.state.waiting': 'Waiting for answers',
@@ -49,7 +53,6 @@ export const peerChainsKo: Record<keyof typeof peerChainsEn, string> = {
   'peerChains.progress.collecting': '{{name}} · 답을 모으는 중',
   'peerChains.progress.agentsOne': '1명 관여',
   'peerChains.progress.agents': '{{count}}명 관여',
-  'peerChains.progress.depth': '최대 깊이 {{depth}}',
   'peerChains.progress.now': '지금: {{activity}}',
   'peerChains.activity.answering': '{{name}} 답변 중',
   'peerChains.activity.answeringMore': '{{name}} 외 {{count}}명 답변 중',
@@ -62,6 +65,10 @@ export const peerChainsKo: Record<keyof typeof peerChainsEn, string> = {
   'peerChains.stopTitle': '질문 흐름을 모두 중단할까요?',
   'peerChains.stopDescription': '{{name}}에서 시작된 질문을 처리하던 에이전트가 모두 멈춥니다. 이미 올라온 답은 스레드에 남습니다.',
   'peerChains.stopFailed': '질문 흐름을 중단하지 못했습니다. 다시 시도하세요.',
+  'peerChains.stop': '중지',
+  'peerChains.stopLabel': '이 스레드와 질문 흐름의 에이전트를 모두 중지',
+  'peerChains.stopThreadDescription': '이 스레드에서 일하는 에이전트와 {{name}}에서 시작된 질문이 모두 멈춥니다. 이미 올라온 답은 스레드에 남습니다.',
+  'peerChains.hover.label': '누가 누구에게 물었는지',
   'peerChains.state.pending': '시작 전',
   'peerChains.state.answering': '답변 중',
   'peerChains.state.waiting': '답 기다리는 중',

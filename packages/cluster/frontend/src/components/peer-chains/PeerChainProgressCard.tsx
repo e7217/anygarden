@@ -30,9 +30,13 @@ interface PeerChainProgressCardProps {
 
 /**
  * #1006 — one line under the message that started a running question
- * chain: who is gathering answers, how wide and deep it went, and who is
+ * chain: who is gathering answers, how many agents are in it, and who is
  * working right now. The questions themselves live in the thread; the
  * card disappears once the chain finishes.
+ *
+ * #1013 — only where the message has no thread reply row (a guest view,
+ * a root that cannot host a thread). Elsewhere that row carries the same
+ * progress and a single stop, so the card would repeat it.
  */
 export default function PeerChainProgressCard({ chain, onOpenThread, onCancel }: PeerChainProgressCardProps) {
   const { t } = useLocale()
@@ -40,7 +44,6 @@ export default function PeerChainProgressCard({ chain, onOpenThread, onCancel }:
   const threadRootId = chain.thread_root_id
   const parts = [
     t(chain.agent_count === 1 ? 'peerChains.progress.agentsOne' : 'peerChains.progress.agents', { count: chain.agent_count }),
-    t('peerChains.progress.depth', { depth: chain.max_depth }),
     t('peerChains.progress.now', { activity: activityText(t, currentActivity(chain)) }),
   ]
 
