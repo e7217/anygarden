@@ -1106,7 +1106,11 @@ class TestKillWithLingeringPipes:
         ):
             await spawner.spawn(spawn_msg)
 
-        with patch("anygarden.machine.spawner.terminate_tree"):
+        # Shrink the bound so the test doesn't sit out the real 10 s wait.
+        with (
+            patch("anygarden.machine.spawner.terminate_tree"),
+            patch("anygarden.machine.spawner.PROC_WAIT_TIMEOUT", 0.1),
+        ):
             result = await asyncio.wait_for(
                 spawner.kill("agent-test-001"), timeout=20
             )

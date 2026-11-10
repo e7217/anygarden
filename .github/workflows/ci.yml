@@ -130,6 +130,11 @@ jobs:
         working-directory: packages/cluster/frontend
         run: npm test -- --reporter=default --reporter=junit --outputFile.junit=${{ github.workspace }}/junit/vitest.xml
 
+      # Before E2E: on CI Playwright serves this bundle with ``vite preview``.
+      - name: Build (typecheck + bundle)
+        working-directory: packages/cluster/frontend
+        run: npm run build
+
       - name: Install Playwright Chromium
         working-directory: packages/cluster/frontend
         run: npx playwright install --with-deps chromium
@@ -155,10 +160,6 @@ jobs:
           name: frontend-e2e-artifacts
           path: packages/cluster/frontend/test-results/
           if-no-files-found: ignore
-
-      - name: Build (typecheck + bundle)
-        working-directory: packages/cluster/frontend
-        run: npm run build
 
   # Every requirement in docs/requirements.md must be verified by a passing
   # test in the layer it declares (pytest / vitest / e2e), or be declared
