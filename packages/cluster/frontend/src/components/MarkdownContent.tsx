@@ -1,5 +1,5 @@
 import { Children, memo, type CSSProperties, type ReactElement, type ReactNode } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PluggableList } from 'unified'
 import Anser from 'anser'
@@ -8,9 +8,20 @@ import {
   resolveFileReferenceToken,
   type FileReferenceCandidate,
 } from '@/lib/fileReferences'
-import { resolveOutboxHref, type ArtifactReference } from '@/lib/messageAttachments'
+import {
+  resolveLocalFileHref,
+  type ArtifactReference,
+  type LinkedFile,
+} from '@/lib/messageAttachments'
 
 const plugins: PluggableList = [remarkGfm]
+
+// #1017 — keep ``file:`` links so the link renderer can show them as a
+// local path (text) instead of an empty link; other URLs are sanitised as
+// before.
+function urlTransform(url: string): string {
+  return /^file:/i.test(url) ? url : defaultUrlTransform(url)
+}
 
 // #290 Phase A — codex-cli / claude-code agents sometimes paste raw terminal
 // captures into chat messages with SGR escape sequences embedded. Without
@@ -96,6 +107,9 @@ interface MarkdownContentProps {
    * ``memory/outbox/<room>/<name>`` opens the attached file of that name;
    * without one it is shown as text instead of a broken link. */
   references?: readonly ArtifactReference[]
+  /** #1017 — the reply's links to local files and the files attached for
+   * them. Any other local path is shown as text. */
+  linkedFiles?: readonly LinkedFile[]
 }
 
 function renderInlineTokens(
@@ -195,6 +209,7 @@ function createComponents(
   resolveRoom?: (id: string) => { name: string; id: string } | undefined,
   fileReferenceCandidates: readonly FileReferenceCandidate[] = [],
   references: readonly ArtifactReference[] = [],
+  linkedFiles: readonly LinkedFile[] = [],
 ): Components {
   const inline = (children: ReactNode, keyPrefix: string) =>
     renderInlineChildren(
@@ -208,19 +223,19 @@ function createComponents(
   return {
     ...defaultComponents,
     a: ({ children, href, node: _node, ...props }) => {
-      const outbox = resolveOutboxHref(href, references)
-      if (outbox === null) {
+      const local = resolveLocalFileHref(href, references, linkedFiles)
+      if (local === null) {
         return (
           <AuthenticatedArtifactLink href={href} {...props}>
             {children}
           </AuthenticatedArtifactLink>
         )
       }
-      if (outbox.href === null) {
-        return <span data-outbox-unresolved="" title={href}>{children}</span>
+      if (local.href === null) {
+        return <span data-local-link-unresolved="" title={href}>{children}</span>
       }
       return (
-        <AuthenticatedArtifactLink {...props} href={outbox.href}>
+        <AuthenticatedArtifactLink {...props} href={local.href}>
           {children}
         </AuthenticatedArtifactLink>
       )
@@ -246,12 +261,14 @@ export default memo(function MarkdownContent({
   resolveRoom,
   fileReferenceCandidates = [],
   references = [],
+  linkedFiles = [],
 }: MarkdownContentProps) {
   return (
     <div className="markdown-prose">
       <ReactMarkdown
         remarkPlugins={plugins}
-        components={createComponents(resolveUser, resolveRoom, fileReferenceCandidates, references)}
+        urlTransform={urlTransform}
+        components={createComponents(resolveUser, resolveRoom, fileReferenceCandidates, references, linkedFiles)}
       >
         {content}
       </ReactMarkdown>

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { AlertTriangle, Download, FileText, Image as ImageIcon, ImageOff } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { AlertTriangle, Download, ExternalLink, FileText, Image as ImageIcon, ImageOff } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -89,8 +89,79 @@ function FileCard({ attachment, unavailable = false }: { attachment: ArtifactRef
           {unavailable ? t('chat.attachmentUnavailable') : formatBytes(attachment.sizeBytes)}
         </p>
       </div>
+      {!unavailable && attachment.mime === 'text/html' && <HtmlPreviewButton attachment={attachment} />}
       {!unavailable && <DownloadButton attachment={attachment} />}
     </div>
+  )
+}
+
+/** #1017 — an agent's HTML report opens in place. The frame has no
+ * ``allow-same-origin``, so the page runs with an opaque origin and cannot
+ * read the app's token or call the API as the user. */
+function HtmlPreviewButton({ attachment }: { attachment: ArtifactReference }) {
+  const { t } = useLocale()
+  const [open, setOpen] = useState(false)
+  const [src, setSrc] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    let revoke: (() => void) | null = null
+    setFailed(false)
+    fetchArtifactBlobUrl(attachment.roomId, attachment.id)
+      .then(blob => {
+        if (!active) { blob.revoke(); return }
+        revoke = blob.revoke
+        setSrc(blob.url)
+      })
+      .catch(() => { if (active) setFailed(true) })
+    return () => {
+      active = false
+      revoke?.()
+      setSrc(null)
+    }
+  }, [open, attachment.roomId, attachment.id])
+
+  const label = t('chat.attachmentPreviewHtml', { name: attachment.name })
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label={label}
+        title={label}
+        onClick={() => setOpen(true)}
+      >
+        <ExternalLink className="h-4 w-4 text-[var(--color-foreground-muted)]" aria-hidden="true" />
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-[min(96vw,80rem)]">
+          <DialogHeader>
+            <DialogTitle className="truncate">{attachment.name}</DialogTitle>
+            <DialogDescription>{t('chat.attachmentPreviewHtmlNote')}</DialogDescription>
+          </DialogHeader>
+          {failed ? (
+            <p role="alert" className="text-caption text-[var(--color-danger)]">
+              {t('chat.attachmentPreviewFailed', { name: attachment.name })}
+            </p>
+          ) : src ? (
+            <iframe
+              title={attachment.name}
+              src={src}
+              sandbox="allow-scripts"
+              className="h-[70vh] w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)]"
+            />
+          ) : (
+            <div className="h-[70vh] w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)]" aria-busy="true" />
+          )}
+          <DialogFooter>
+            <DialogDownloadButton attachment={attachment} />
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

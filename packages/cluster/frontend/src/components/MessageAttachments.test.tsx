@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import MessageAttachments from './MessageAttachments'
 import { LocaleProvider } from '@/i18n/LocaleProvider'
@@ -68,6 +68,22 @@ describe('MessageAttachments', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Download report.pdf' }))
     await waitFor(() => expect(startArtifactDownload).toHaveBeenCalled())
     expect(fetchArtifactBlobUrl).toHaveBeenCalledWith('r1', 'a2')
+  })
+
+  it('opens an HTML file in a sandboxed frame [MSG-11]', async () => {
+    renderWith({
+      references: [{
+        type: 'artifact', id: 'a3', room_id: 'r1', name: 'report.html',
+        mime: 'text/html', size_bytes: 100, sha256: 'u',
+      }],
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Open report.html' }))
+    const dialog = await screen.findByRole('dialog')
+    const frame = await within(dialog).findByTitle('report.html')
+    expect(frame.tagName).toBe('IFRAME')
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts')
+    expect(frame).toHaveAttribute('src', 'blob:x')
+    expect(fetchArtifactBlobUrl).toHaveBeenCalledWith('r1', 'a3')
   })
 
   it('marks an image whose file is gone as unavailable', async () => {

@@ -2012,8 +2012,12 @@ async def upload_room_artifact(
             detail=f"artifact exceeds {cap} bytes",
         )
     filename = upload.filename or "upload"
-    mime = upload.content_type or ""
-    if mime not in artifacts_service.ALLOWED_MIME_TYPES:
+    mime = artifacts_service.normalize_mime(upload.content_type)
+    # An agent may send any type (#1017), so only a missing type falls back
+    # to the filename; a person's unlisted type may still be a listed one.
+    if mime == artifacts_service.OCTET_STREAM or (
+        identity.kind != "agent" and mime not in artifacts_service.ALLOWED_MIME_TYPES
+    ):
         guessed, _ = mimetypes.guess_type(filename)
         mime = guessed or mime
 
@@ -2053,9 +2057,8 @@ async def download_room_artifact(
     db: AsyncSession = Depends(get_db),
 ):
     """Stream the artifact bytes back to the requester. Participants
-    only. ``Content-Disposition`` is set so browsers offer a sensible
-    save-as dialog while still rendering inline previews when the MIME
-    permits (image/*, text/*).
+    only. Previewable types open in place and the rest download (#1017);
+    documents that can run script open only inside a CSP sandbox.
     """
     await _require_room_participant(room_id, identity, db, Capability.ARTIFACT_READ)
     row = await artifacts_service.get_artifact(
@@ -2076,15 +2079,13 @@ async def download_room_artifact(
         # so clients can refresh; log the integrity gap on the server.
         raise HTTPException(status_code=404, detail="Artifact bytes missing")
 
-    # ``inline`` lets <img src="..."> work directly from the URL while
-    # still suggesting a filename for explicit Save As.
+    headers = artifacts_service.download_headers(row.mime)
+    headers["Content-Disposition"] += f"; filename*=UTF-8''{quote(row.filename, safe='')}"
+    headers["Content-Length"] = str(row.size_bytes)
     return Response(
         content=body,
-        media_type=row.mime,
-        headers={
-            "Content-Disposition": f"inline; filename*=UTF-8''{quote(row.filename, safe='')}",
-            "Content-Length": str(row.size_bytes),
-        },
+        media_type=artifacts_service.normalize_mime(row.mime),
+        headers=headers,
     )
 
 

@@ -34,7 +34,7 @@ import {
 import type { RoomSharedFile } from '@/lib/roomFiles'
 import { extractUndeliveredCalls } from '@/lib/undeliveredCalls'
 import MessageAttachments from '@/components/MessageAttachments'
-import { extractArtifactReferences } from '@/lib/messageAttachments'
+import { extractArtifactReferences, extractLinkedFiles } from '@/lib/messageAttachments'
 import ExecutionTrace from '@/components/ExecutionTrace'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -200,6 +200,7 @@ export default memo(function MessageBubble({
   // #986 — a ``/clear`` divider, not a participant statement.
   const sessionResetMeta = useMemo(() => parseSessionReset(message), [message])
   const artifactReferences = useMemo(() => extractArtifactReferences(message.metadata), [message])
+  const linkedFiles = useMemo(() => extractLinkedFiles(message.metadata), [message])
   // #938 — an agent's workspace change waiting for approval, and the
   // server's report of how it ended.
   const workspaceRequestMeta = useMemo(() => parseWorkspaceActionRequest(message.metadata), [message])
@@ -601,6 +602,7 @@ export default memo(function MessageBubble({
             resolveRoom={resolveRoom}
             fileReferenceCandidates={fileReferenceCandidates}
             references={artifactReferences}
+            linkedFiles={linkedFiles}
           />
         </div>
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
@@ -636,6 +638,7 @@ export default memo(function MessageBubble({
                 resolveRoom={resolveRoom}
                 fileReferenceCandidates={fileReferenceCandidates}
                 references={artifactReferences}
+            linkedFiles={linkedFiles}
               />
               <MessageReferences metadata={message.metadata} align="end" />
               <MessageAttachments metadata={message.metadata} align="end" />
@@ -687,6 +690,7 @@ export default memo(function MessageBubble({
               resolveRoom={resolveRoom}
               fileReferenceCandidates={fileReferenceCandidates}
               references={artifactReferences}
+            linkedFiles={linkedFiles}
             />
             <MessageReferences metadata={message.metadata} />
             <MessageAttachments metadata={message.metadata} />

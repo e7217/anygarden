@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,51 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset({
     "text/html",
     "application/pdf",
 })
+
+
+# #1017 — what the download serves in place. Other types download.
+INLINE_MIME_TYPES: frozenset[str] = frozenset({
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "application/pdf",
+    "text/html",
+})
+# Documents that can run script: served inline only in a CSP sandbox, so
+# they never act as the app's origin.
+SANDBOXED_MIME_TYPES: frozenset[str] = frozenset({
+    "text/html",
+    "image/svg+xml",
+    "application/xhtml+xml",
+    "application/xml",
+    "text/xml",
+})
+OCTET_STREAM = "application/octet-stream"
+_MIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$")
+
+
+def normalize_mime(value: str | None) -> str:
+    """``type/subtype`` in lower case without parameters, or
+    ``application/octet-stream`` when *value* is not a media type."""
+    mime = (value or "").split(";", 1)[0].strip().lower()
+    return mime if _MIME_PATTERN.match(mime) else OCTET_STREAM
+
+
+def download_headers(mime: str) -> dict[str, str]:
+    """Disposition and safety headers for serving an artifact (#1017)."""
+    mime = normalize_mime(mime)
+    inline = mime in INLINE_MIME_TYPES or mime in SANDBOXED_MIME_TYPES or (
+        mime.startswith("text/")
+    )
+    headers = {
+        "Content-Disposition": "inline" if inline else "attachment",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if mime in SANDBOXED_MIME_TYPES:
+        headers["Content-Security-Policy"] = "sandbox allow-scripts"
+    return headers
 
 
 class ArtifactRejectedError(Exception):
@@ -327,7 +373,8 @@ async def store_uploaded_artifact(
     """Persist an HTTP upload into *room_id* only (#854).
 
     ``agent_id`` is the producing agent, or ``None`` for a person
-    attaching a file to their own message (#873).
+    attaching a file to their own message (#873). An agent may attach any
+    type (#1017); a person's upload keeps :data:`ALLOWED_MIME_TYPES`.
 
     Returns ``(row, created)``. Bytes already in the room — e.g. the
     daemon's outbox poller got there first — return the existing row so
@@ -335,7 +382,8 @@ async def store_uploaded_artifact(
     frame path there is no project fan-out: the upload attaches to one
     message in one room.
     """
-    if mime not in ALLOWED_MIME_TYPES:
+    mime = normalize_mime(mime)
+    if agent_id is None and mime not in ALLOWED_MIME_TYPES:
         raise ArtifactMimeNotAllowedError(f"mime {mime!r} not allowed")
     try:
         safe_name = sanitize_storage_name(filename)

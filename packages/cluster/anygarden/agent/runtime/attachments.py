@@ -2,6 +2,7 @@
 
 Outbox (#854): attach files an agent wrote during a turn to that turn's reply.
 Inbox (#874): download the files a message attaches before the engine runs.
+Linked files (#1017): attach the local files a reply links to.
 
 The agent drops files under ``memory/outbox/<room_id>/``. The supervisor
 snapshots that directory before the engine runs and, once the turn has a
@@ -19,6 +20,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
 import structlog
@@ -80,17 +82,37 @@ def changed_outbox_files(
     return [room_dir / name for name, digest in after.items() if before.get(name) != digest]
 
 
+async def _upload_one(client: Any, room_id: str, path: Path) -> tuple[str | None, str | None]:
+    """Upload *path*; return ``(artifact_id, None)`` or ``(None, reason)``."""
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    try:
+        row = await client.upload_room_artifact(room_id, path, mime)
+    except (ArtifactUploadError, OSError) as exc:
+        status = getattr(exc, "status", None)
+        log.warning(
+            "reply_attachment_upload_failed",
+            room_id=room_id,
+            filename=path.name,
+            status=status,
+        )
+        return None, _UPLOAD_FAILURE_REASONS.get(status, "upload_failed")
+    return row["id"], None
+
+
 async def upload_reply_attachments(
     client: Any,
     room_id: str,
     paths: list[Path],
     *,
     limit: int = REPLY_ATTACHMENT_LIMIT,
+    uploaded: dict[Path, str] | None = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Upload *paths* and return ``(references, undelivered)``.
 
     A failed upload never blocks the reply; it is reported back as an
-    ``undelivered`` entry so the user can see what is missing.
+    ``undelivered`` entry so the user can see what is missing. When
+    *uploaded* is given, each uploaded file's resolved path is recorded
+    with its artifact id.
     """
     references: list[dict[str, str]] = []
     undelivered: list[dict[str, str]] = []
@@ -98,22 +120,150 @@ async def upload_reply_attachments(
         if index >= limit:
             undelivered.append({"name": path.name, "reason": "too_many"})
             continue
-        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        try:
-            row = await client.upload_room_artifact(room_id, path, mime)
-        except (ArtifactUploadError, OSError) as exc:
-            status = getattr(exc, "status", None)
-            reason = _UPLOAD_FAILURE_REASONS.get(status, "upload_failed")
-            log.warning(
-                "reply_attachment_upload_failed",
-                room_id=room_id,
-                filename=path.name,
-                status=status,
-            )
+        artifact_id, reason = await _upload_one(client, room_id, path)
+        if artifact_id is None:
             undelivered.append({"name": path.name, "reason": reason})
             continue
-        references.append({"type": "artifact", "id": row["id"]})
+        references.append({"type": "artifact", "id": artifact_id})
+        if uploaded is not None:
+            uploaded[path.resolve()] = artifact_id
     return references, undelivered
+
+
+# ── Linked files: local paths a reply links to (#1017) ──
+
+# The server's default upload cap; checked first so a huge file is never read.
+LINKED_FILE_MAX_BYTES = 20 * 1024 * 1024
+
+_FENCED_CODE = re.compile(r"^ {0,3}(```|~~~).*?^ {0,3}\1[^\n]*$", re.MULTILINE | re.DOTALL)
+_INLINE_CODE = re.compile(r"(`+)(?:(?!\1).)+?\1", re.DOTALL)
+_MARKDOWN_LINK = re.compile(
+    r"\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^)\s]+))(?:\s+\"[^\"\n]*\")?\s*\)"
+)
+_AUTOLINK = re.compile(r"<([^>\s]+)>")
+_SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
+
+
+def _is_local_href(href: str) -> bool:
+    if not href or href.startswith(("#", "?", "~")):
+        return False
+    scheme = _SCHEME.match(href)
+    return scheme is None or scheme.group(1).lower() == "file"
+
+
+def extract_local_links(text: str) -> list[str]:
+    """Local-path targets of markdown links and autolinks in *text*, in
+    order and without duplicates. Code spans and fenced blocks are skipped
+    — a path quoted as code is an example, not a deliverable."""
+    prose = _INLINE_CODE.sub(" ", _FENCED_CODE.sub(" ", text))
+    found: list[tuple[int, str]] = []
+    for match in _MARKDOWN_LINK.finditer(prose):
+        found.append((match.start(), match.group(1) or match.group(2)))
+    for match in _AUTOLINK.finditer(prose):
+        if _SCHEME.match(match.group(1)) or match.group(1).startswith("/"):
+            found.append((match.start(), match.group(1)))
+    links: list[str] = []
+    for _, href in sorted(found):
+        href = href.strip()
+        if _is_local_href(href) and href not in links:
+            links.append(href)
+    return links
+
+
+def _href_path(href: str) -> str:
+    if _SCHEME.match(href):
+        return unquote(urlsplit(href).path)
+    return unquote(re.split(r"[?#]", href, maxsplit=1)[0])
+
+
+def _is_output_file(path: Path, root: Path) -> bool:
+    """*path* (already resolved) lies in the agent's output areas."""
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    if not parts or parts[0] not in ("workspace", "memory"):
+        return False
+    if any(part.startswith(".") for part in parts):
+        return False
+    if parts[0] == "memory" and len(parts) > 1 and parts[1] in ("inbox", "shared"):
+        return False
+    return path.is_file()
+
+
+def resolve_linked_file(href: str, agent_root: Path) -> Path | None:
+    """The file *href* names when it may be attached, else ``None``.
+
+    Relative paths are tried against ``workspace/`` (the engines' working
+    directory) and then the agent root. Only files in ``workspace/`` and
+    ``memory/`` qualify — not the inbox or shared folders (files a person
+    sent) and never through a hidden component — after symlinks resolve.
+    The supervisor runs outside the engine sandbox, so this is what keeps
+    a link from exposing the agent's credentials, logs or manifest.
+    """
+    if not _is_local_href(href):
+        return None
+    raw = _href_path(href)
+    if not raw:
+        return None
+    root = agent_root.resolve()
+    candidate = Path(raw)
+    bases = [candidate] if candidate.is_absolute() else [
+        agent_root / "workspace" / candidate,
+        agent_root / candidate,
+    ]
+    for base in bases:
+        try:
+            resolved = base.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if _is_output_file(resolved, root):
+            return resolved
+    return None
+
+
+async def upload_linked_files(
+    client: Any,
+    room_id: str,
+    text: str,
+    agent_root: Path,
+    *,
+    uploaded: dict[Path, str],
+    limit: int,
+    max_bytes: int = LINKED_FILE_MAX_BYTES,
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    """Attach the files *text* links to; return ``(references, undelivered,
+    linked)``, where ``linked`` maps each link to its artifact id.
+
+    Files already in *uploaded* (this reply's outbox files, or an earlier
+    link to the same file) are not uploaded again. Links that name no
+    attachable file are left alone: the chat shows them as text.
+    """
+    references: list[dict[str, str]] = []
+    undelivered: list[dict[str, str]] = []
+    linked: list[dict[str, str]] = []
+    refused: set[Path] = set()
+    for href in extract_local_links(text):
+        path = await asyncio.to_thread(resolve_linked_file, href, agent_root)
+        if path is None or path in refused:
+            continue
+        artifact_id = uploaded.get(path)
+        if artifact_id is None:
+            reason = None
+            if len(references) >= limit:
+                reason = "too_many"
+            elif path.stat().st_size > max_bytes:
+                reason = "too_large"
+            else:
+                artifact_id, reason = await _upload_one(client, room_id, path)
+            if artifact_id is None:
+                refused.add(path)
+                undelivered.append({"name": path.name, "reason": reason})
+                continue
+            uploaded[path] = artifact_id
+            references.append({"type": "artifact", "id": artifact_id})
+        linked.append({"href": href, "artifact_id": artifact_id})
+    return references, undelivered, linked
 
 
 # ── Inbox: files a message attaches, downloaded for the engine (#874) ──

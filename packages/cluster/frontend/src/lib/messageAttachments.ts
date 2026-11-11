@@ -76,35 +76,72 @@ export function extractUndeliveredAttachments(
   return out
 }
 
+/** #1017 — a link in the reply body and the file the agent attached for it. */
+export interface LinkedFile {
+  href: string
+  artifactId: string
+}
+
+export function extractLinkedFiles(
+  metadata?: Record<string, unknown> | null,
+): LinkedFile[] {
+  const raw = metadata?.linked_files
+  if (!Array.isArray(raw)) return []
+  const out: LinkedFile[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const { href, artifact_id: artifactId } = item as Record<string, unknown>
+    if (typeof href !== 'string' || !href || typeof artifactId !== 'string' || !artifactId) continue
+    out.push({ href, artifactId })
+  }
+  return out
+}
+
 const OUTBOX_PATH = /(?:^|\/)memory\/outbox\/(?:([^/]+)\/)?([^/?#]+)$/
+// First path segments the app itself serves; any other absolute path in a
+// reply is a path on the agent's machine.
+const APP_ROUTES = /^\/(?:api|rooms|agents|admin|g|inbox|invite|login|topology)(?:[/?#]|$)/
 
 function decode(value: string): string {
   try { return decodeURIComponent(value) } catch { return value }
 }
 
-/** #964 — an agent's reply may link a file by its outbox path
- * (``memory/outbox/<room_id>/<name>``), which is no address in the app.
+/** A path on the agent's machine rather than an address in the app. */
+export function isLocalFileHref(href: string): boolean {
+  if (!href || href.startsWith('#') || href.startsWith('?') || href.startsWith('//')) return false
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase()
+  if (scheme) return scheme === 'file'
+  if (href.startsWith('/')) return href !== '/' && !APP_ROUTES.test(href)
+  return true
+}
+
+function artifactHref(ref: ArtifactReference): string {
+  return `/api/v1/rooms/${encodeURIComponent(ref.roomId)}/artifacts/${encodeURIComponent(ref.id)}`
+}
+
+/** An agent's reply may link a file by its path on the agent's machine,
+ * which is no address in the app.
  *
- * Returns ``null`` for any other link. For an outbox link it returns the
- * attached artifact's download address when the message carries a file of
- * that name (preferring the same room), else ``{ href: null }`` so the
- * link is shown as text. */
-export function resolveOutboxHref(
+ * Returns ``null`` for any other link. For a local path it returns the
+ * attached artifact's download address — the file the agent attached for
+ * that exact link (#1017), else, for an outbox path, the attached file of
+ * that name (#964) — or ``{ href: null }`` so the link is shown as text. */
+export function resolveLocalFileHref(
   href: string | undefined,
   references: readonly ArtifactReference[],
+  linkedFiles: readonly LinkedFile[] = [],
 ): { href: string | null } | null {
-  if (!href) return null
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase()
-  if (scheme && scheme !== 'file') return null
-  const path = href.split(/[?#]/)[0]
-  const match = OUTBOX_PATH.exec(path)
-  if (!match) return null
-  const roomId = match[1] ? decode(match[1]) : null
-  const name = decode(match[2])
-  const named = references.filter(ref => ref.name === name)
-  const ref = named.find(r => roomId !== null && r.roomId === roomId) ?? named[0]
-  if (!ref) return { href: null }
-  return {
-    href: `/api/v1/rooms/${encodeURIComponent(ref.roomId)}/artifacts/${encodeURIComponent(ref.id)}`,
+  if (!href || !isLocalFileHref(href)) return null
+  const linked = linkedFiles.find(item => item.href === href)
+  const linkedRef = linked && references.find(ref => ref.id === linked.artifactId)
+  if (linkedRef) return { href: artifactHref(linkedRef) }
+  const match = OUTBOX_PATH.exec(href.split(/[?#]/)[0])
+  if (match) {
+    const roomId = match[1] ? decode(match[1]) : null
+    const name = decode(match[2])
+    const named = references.filter(ref => ref.name === name)
+    const ref = named.find(r => roomId !== null && r.roomId === roomId) ?? named[0]
+    if (ref) return { href: artifactHref(ref) }
   }
+  return { href: null }
 }

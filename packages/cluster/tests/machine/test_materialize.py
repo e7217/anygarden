@@ -1041,5 +1041,8 @@ class TestOutboxInstructions:
     def test_instructions_describe_reply_attachments(self) -> None:
         text = Spawner._compose_agents_md(_msg())
         assert "attached to that reply" in text
-        assert "PDF" in text
+        assert "Any file type" in text
         assert "20 MiB" in text
+        # #1017 — linking a file elsewhere in the output folders attaches it.
+        assert "markdown link" in text
+        assert "single self-contained file" in text
