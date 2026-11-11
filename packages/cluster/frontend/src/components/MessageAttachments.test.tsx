@@ -4,6 +4,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import MessageAttachments from './MessageAttachments'
 import { LocaleProvider } from '@/i18n/LocaleProvider'
+import { ArtifactExpiredError } from '@/lib/roomArtifacts'
 
 const fetchArtifactBlobUrl = vi.fn()
 const startArtifactDownload = vi.fn()
@@ -90,6 +91,21 @@ describe('MessageAttachments', () => {
     fetchArtifactBlobUrl.mockRejectedValue(new Error('Download failed (HTTP 404)'))
     renderWith({ references: [image] })
     expect(await screen.findByText('File no longer available')).toBeInTheDocument()
+  })
+
+  it('says an image expired with its archived room [ROOM-15]', async () => {
+    fetchArtifactBlobUrl.mockRejectedValue(new ArtifactExpiredError())
+    renderWith({ references: [image] })
+    expect(await screen.findByText('Removed after the room stayed archived')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Download chart.png' })).toBeNull()
+  })
+
+  it('turns a file card into an expired card when its download is gone [ROOM-15]', async () => {
+    fetchArtifactBlobUrl.mockRejectedValue(new ArtifactExpiredError())
+    renderWith({ references: [pdf] })
+    fireEvent.click(screen.getByRole('button', { name: 'Download report.pdf' }))
+    expect(await screen.findByText('Removed after the room stayed archived')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Download report.pdf' })).toBeNull()
   })
 
   it('lists attachments that could not be delivered', () => {

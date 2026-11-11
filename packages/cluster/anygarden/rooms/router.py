@@ -1954,6 +1954,8 @@ class RoomArtifactOut(BaseModel):
     size_bytes: int
     mime: str
     created_at: datetime
+    # #1018 — set when the bytes expired with the archived room.
+    purged_at: Optional[datetime] = None
 
     @classmethod
     def from_row(cls, row: RoomArtifact) -> "RoomArtifactOut":
@@ -1966,6 +1968,7 @@ class RoomArtifactOut(BaseModel):
             size_bytes=row.size_bytes,
             mime=row.mime,
             created_at=row.created_at,
+            purged_at=row.purged_at,
         )
 
 
@@ -2066,6 +2069,12 @@ async def download_room_artifact(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    if row.purged_at is not None:
+        # #1018 — removed after the room stayed archived past retention.
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"code": "ARTIFACT_EXPIRED", "detail": "The file expired with its archived room"},
+        )
 
     config = request.app.state.config
     try:

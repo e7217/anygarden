@@ -275,7 +275,13 @@ INBOX_MAX_BYTES = 10 * 1024 * 1024
 # outgrows this; then the oldest go first.
 INBOX_ROOM_CAP_BYTES = 100 * 1024 * 1024
 
-_DOWNLOAD_FAILURE_REASONS = {413: "too_large", 403: "unavailable", 404: "unavailable"}
+_DOWNLOAD_FAILURE_REASONS = {
+    413: "too_large",
+    403: "unavailable",
+    404: "unavailable",
+    # #1018 — removed after its room stayed archived past retention.
+    410: "expired",
+}
 _NAME_MAX_LEN = 120
 
 

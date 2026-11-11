@@ -1229,6 +1229,17 @@ async def _startup_server(app: FastAPI) -> None:
                 name="orphan_sweeper",
             )
 
+    # #1018 — remove the files of rooms archived past the retention period.
+    # Off unless ``ANYGARDEN_ARCHIVED_ROOM_FILE_RETENTION_DAYS`` is set.
+    if getattr(app.state, "file_retention_task", None) is None:
+        retention_days = app.state.config.archived_room_file_retention_days
+        retention_interval = app.state.config.file_retention_sweep_interval_sec
+        if retention_days > 0 and retention_interval > 0:
+            app.state.file_retention_task = asyncio.create_task(
+                _run_file_retention_sweeper(app, retention_days, retention_interval),
+                name="file_retention_sweeper",
+            )
+
     # Transactional turn outbox + lease recovery. Tests may disable it with 0.
     if getattr(app.state, "turn_recovery_task", None) is None:
         try:
@@ -1361,6 +1372,7 @@ async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
     for attr in (
         "skill_stale_task",
         "orphan_sweeper_task",
+        "file_retention_task",
         "turn_recovery_task",
         "span_reaper_task",
         "delegation_sweeper_task",
@@ -1779,6 +1791,62 @@ def _turn_liveness(app: FastAPI):
     return is_alive
 
 
+async def _run_file_retention_sweeper(
+    app: FastAPI, retention_days: int, interval_seconds: float
+) -> None:
+    """Run :func:`sweep_archived_room_files` until a sweep finds nothing,
+    then sleep. Agents holding a deleted shared file are told to drop it."""
+    import structlog
+
+    from anygarden.rooms import shared_files as shared_files_service
+    from anygarden.rooms.file_retention import sweep_archived_room_files
+
+    log = structlog.get_logger("file_retention")
+    try:
+        await asyncio.sleep(min(60.0, interval_seconds))
+    except asyncio.CancelledError:
+        return
+    while True:
+        try:
+            config = app.state.config
+            factory = app.state.session_factory
+            while True:
+                async with factory() as db:
+                    result = await sweep_archived_room_files(
+                        db,
+                        artifact_files_dir=config.artifact_files_dir,
+                        room_files_dir=config.room_files_dir,
+                        retention_days=retention_days,
+                    )
+                if not result.artifacts and not result.shared_files:
+                    break
+                log.info(
+                    "file_retention.removed",
+                    rooms=len(result.rooms),
+                    artifacts=result.artifacts,
+                    artifact_bytes=result.artifact_bytes,
+                    shared_files=len(result.shared_files),
+                    shared_file_bytes=result.shared_file_bytes,
+                    retention_days=retention_days,
+                )
+                machine_bus = getattr(app.state, "machine_bus", None)
+                if machine_bus is not None:
+                    async with factory() as db:
+                        for room_id, storage_name in result.shared_files:
+                            await shared_files_service.fan_out_delete(
+                                db, machine_bus=machine_bus,
+                                room_id=room_id, storage_name=storage_name,
+                            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning("file_retention.error", error=str(exc))
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            return
+
+
 async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     """Periodically promote stuck ``handler_started`` rows to
     ``handler_orphaned``.
@@ -2056,6 +2124,7 @@ def create_app(
         # degraded, never 503. ──
         for label, attr in (
             ("orphan_sweeper", "orphan_sweeper_task"),
+            ("file_retention", "file_retention_task"),
             ("span_reaper", "span_reaper_task"),
             ("goal_scheduler", "goal_scheduler"),
             ("campaign_scheduler", "campaign_scheduler"),

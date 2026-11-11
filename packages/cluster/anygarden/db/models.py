@@ -1175,6 +1175,11 @@ class RoomArtifact(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     mime: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    # #1018 — when the bytes were removed because the room stayed archived
+    # past the retention period. The row stays so links report the expiry.
+    purged_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
 
     room: Mapped["Room"] = relationship("Room")
 

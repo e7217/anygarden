@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Download, FileText, Image as ImageIcon, Trash2 } from 'lucide-react'
+import { Download, FileText, Image as ImageIcon, ImageOff, Trash2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -183,7 +183,12 @@ export default function RoomArtifactsDialog({
                   key={item.id}
                   className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
                 >
-                  {isImageMime(item.mime) && roomId ? (
+                  {item.purged_at ? (
+                    <div className="flex h-32 w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] px-3 text-center">
+                      <ImageOff className="h-6 w-6 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
+                      <p className="text-caption text-[var(--color-foreground-muted)]">{t('chat.attachmentExpired')}</p>
+                    </div>
+                  ) : isImageMime(item.mime) && roomId ? (
                     <ArtifactImagePreview
                       roomId={roomId}
                       artifactId={item.id}
@@ -214,16 +219,18 @@ export default function RoomArtifactsDialog({
                     </p>
                   </div>
                   <div className="flex justify-end gap-2">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      disabled={downloading}
-                      onClick={() => void handleDownload(item)}
-                      title={t('rooms.download')}
-                      aria-label={t('rooms.download')}
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                    </Button>
+                    {!item.purged_at && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={downloading}
+                        onClick={() => void handleDownload(item)}
+                        title={t('rooms.download')}
+                        aria-label={t('rooms.download')}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"

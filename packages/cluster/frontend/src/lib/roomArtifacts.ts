@@ -15,6 +15,17 @@ export interface RoomArtifact {
   size_bytes: number
   mime: string
   created_at: string
+  /** #1018 — set when the bytes expired with the archived room. */
+  purged_at?: string | null
+}
+
+/** #1018 — the artifact's room stayed archived past the retention period
+ * and its bytes were removed (HTTP 410). */
+export class ArtifactExpiredError extends Error {
+  constructor() {
+    super('Artifact expired (HTTP 410)')
+    this.name = 'ArtifactExpiredError'
+  }
 }
 
 export function formatBytes(bytes: number): string {
@@ -98,6 +109,7 @@ export async function fetchArtifactBlobUrl(
     method: 'GET',
     headers: authHeaders(),
   })
+  if (resp.status === 410) throw new ArtifactExpiredError()
   if (!resp.ok) {
     throw new Error(`Download failed (HTTP ${resp.status})`)
   }
