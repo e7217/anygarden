@@ -71,7 +71,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | MSG-08 | 사용자는 자신이 보낸 메시지를 수정·삭제할 수 있다 | pytest, vitest |
 | MSG-09 | 사이드바는 접근 가능한 룸 중 에이전트가 응답 중인 룸과 그 에이전트를 표시하고, 접근할 수 없는 룸의 턴은 알리지 않는다 | pytest, vitest |
 | MSG-10 | 입력창에서 `/`를 치면 쓸 수 있는 명령을 보여준다. `/routine`·`/goal`은 메시지로 보내지 않고 입력한 담당자·제목을 채운 폼을 열며, 열 수 없는 방이면 이유를 보여준다 | vitest |
-| MSG-11 | 에이전트 답변이 markdown 링크로 가리킨 로컬 파일은 에이전트의 `workspace/`·`memory/`(inbox·shared 제외) 안에 있고 숨김 경로가 아니면 답변에 첨부되고, 그 링크는 첨부 파일로 열린다. 그 밖의 로컬 경로 링크는 텍스트로 보인다. 에이전트는 어떤 형식이든 올릴 수 있고(사람 업로드는 허용 목록 유지), 다운로드는 미리보기 형식만 inline, 나머지는 attachment이며 항상 nosniff이고, HTML·SVG·XML은 CSP sandbox 안에서만 열린다. 채팅의 HTML 첨부는 `allow-same-origin` 없는 sandbox frame에서 열린다 | pytest, vitest |
+| MSG-11 | 에이전트 답변이 markdown 링크로 가리킨 로컬 파일은 에이전트의 `workspace/`·`memory/`(inbox·shared 제외) 안에 있고 숨김 경로가 아니면 답변에 첨부되고, 그 링크는 첨부 파일로 열린다. 그 밖의 로컬 경로 링크는 텍스트로 보인다. 에이전트와 사람 모두 어떤 형식이든 첨부 파일로 올릴 수 있고(채팅 입력창은 256 KiB 이하 텍스트만 공유 파일로, 나머지는 모두 첨부 파일로 보내며 에이전트 inbox 한도는 업로드 기본 한도 20 MiB와 같다), 다운로드는 미리보기 형식만 inline, 나머지는 attachment이며 항상 nosniff이고, HTML·SVG·XML은 CSP sandbox 안에서만 열린다. 채팅의 HTML 첨부는 `allow-same-origin` 없는 sandbox frame에서 열린다 | pytest, vitest |
 
 ## 에이전트 관리 (AGT)
 

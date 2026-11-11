@@ -122,10 +122,6 @@ class ArtifactRejectedError(Exception):
     """
 
 
-class ArtifactMimeNotAllowedError(ArtifactRejectedError):
-    """The upload's MIME type is outside :data:`ALLOWED_MIME_TYPES`."""
-
-
 def _validate_frame(frame: dict[str, Any]) -> tuple[str, str, str, bytes, str, int]:
     """Return ``(agent_id, filename, mime, raw, sha256, size)`` or raise."""
     agent_id = frame.get("agent_id") or ""
@@ -409,8 +405,8 @@ async def store_uploaded_artifact(
     """Persist an HTTP upload into *room_id* only (#854).
 
     ``agent_id`` is the producing agent, or ``None`` for a person
-    attaching a file to their own message (#873). An agent may attach any
-    type (#1017); a person's upload keeps :data:`ALLOWED_MIME_TYPES`.
+    attaching a file to their own message (#873). Either may attach any
+    type (#1017, #1021): :func:`download_headers` keeps the browser safe.
 
     Returns ``(row, created)``. Bytes already in the room — e.g. the
     daemon's outbox poller got there first — return the existing row so
@@ -419,8 +415,6 @@ async def store_uploaded_artifact(
     message in one room.
     """
     mime = normalize_mime(mime)
-    if agent_id is None and mime not in ALLOWED_MIME_TYPES:
-        raise ArtifactMimeNotAllowedError(f"mime {mime!r} not allowed")
     try:
         safe_name = sanitize_storage_name(filename)
     except InvalidFilenameError as exc:

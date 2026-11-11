@@ -270,7 +270,9 @@ async def upload_linked_files(
 
 # Mirrors the reply side: a message brings at most this many files.
 INBOX_ATTACHMENT_LIMIT = REPLY_ATTACHMENT_LIMIT
-INBOX_MAX_BYTES = 10 * 1024 * 1024
+# #1021 — the server's default upload cap, so a file a person could attach
+# always reaches the agent.
+INBOX_MAX_BYTES = 20 * 1024 * 1024
 # Old attachments stay for follow-up questions until a room's inbox
 # outgrows this; then the oldest go first.
 INBOX_ROOM_CAP_BYTES = 100 * 1024 * 1024
