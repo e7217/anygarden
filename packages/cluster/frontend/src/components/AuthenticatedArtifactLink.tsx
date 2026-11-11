@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from 'react'
-import { fetchArtifactBlobUrl, startArtifactDownload } from '@/lib/roomArtifacts'
+import { ArtifactExpiredError, fetchArtifactBlobUrl, startArtifactDownload } from '@/lib/roomArtifacts'
 import { useLocale } from '@/i18n/LocaleProvider'
+
+// #1018 — the linked file expired with its archived room.
+const EXPIRED = 'expired'
 
 function localArtifact(href: string | undefined): { roomId: string; artifactId: string } | null {
   if (!href) return null
@@ -36,13 +39,19 @@ export default function AuthenticatedArtifactLink({ href, children, ...props }: 
         startArtifactDownload(download, download.filename || target.artifactId)
         download = null
       } catch (error) {
-        if (scope.active && currentScope.current === scope) setError(error instanceof Error ? error.message : 'HTTP 500')
+        if (scope.active && currentScope.current === scope) {
+          setError(error instanceof ArtifactExpiredError ? EXPIRED : error instanceof Error ? error.message : 'HTTP 500')
+        }
       } finally {
         download?.revoke()
         scope.downloading = false
         if (scope.active && currentScope.current === scope) setPending(false)
       }
     }}>{children}</a>
-    {error && <span role="alert" className="ml-2 text-xs text-[var(--color-danger)]">{t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '500' })}</span>}
+    {error && <span role="alert" className="ml-2 text-xs text-[var(--color-danger)]">
+      {error === EXPIRED
+        ? t('chat.attachmentExpired')
+        : t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '500' })}
+    </span>}
   </>
 }

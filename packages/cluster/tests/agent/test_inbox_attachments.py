@@ -162,6 +162,13 @@ class TestMaterialize:
         ]
         assert [e.path is None for e in entries] == [True, True, True, False]
 
+    @pytest.mark.req("ROOM-15")
+    async def test_an_expired_file_is_reported_as_expired(self, tmp_path: Path) -> None:
+        """#1018 — the file's room stayed archived past retention (410)."""
+        client = _FakeClient(blobs={}, fail={"old": 410})
+        entries = await materialize_inbox_attachments(client, tmp_path, ROOM, _meta(_ref("old", "a.png")))
+        assert [(e.name, e.reason) for e in entries] == [("a.png", "expired")]
+
     async def test_oversize_by_declared_size_is_not_fetched(self, tmp_path: Path) -> None:
         client = _FakeClient(blobs={"big": b"x" * 64})
         entries = await materialize_inbox_attachments(

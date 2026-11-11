@@ -21,6 +21,7 @@ import {
   type UndeliveredAttachmentReason,
 } from '@/lib/messageAttachments'
 import {
+  ArtifactExpiredError,
   fetchArtifactBlobUrl,
   formatBytes,
   isImageMime,
@@ -34,7 +35,7 @@ const REASON_KEYS: Record<UndeliveredAttachmentReason, MessageKey> = {
   upload_failed: 'chat.attachmentReasonUploadFailed',
 }
 
-function useArtifactDownload() {
+function useArtifactDownload(onExpired?: () => void) {
   const { t } = useLocale()
   const { notify } = useFeedback()
   const [pending, setPending] = useState(false)
@@ -44,8 +45,9 @@ function useArtifactDownload() {
     try {
       const blob = await fetchArtifactBlobUrl(ref.roomId, ref.id)
       startArtifactDownload(blob, blob.filename || ref.name)
-    } catch {
-      notify({ message: t('chat.attachmentDownloadFailed', { name: ref.name }), tone: 'error' })
+    } catch (error) {
+      if (error instanceof ArtifactExpiredError && onExpired) onExpired()
+      else notify({ message: t('chat.attachmentDownloadFailed', { name: ref.name }), tone: 'error' })
     } finally {
       setPending(false)
     }
@@ -53,9 +55,9 @@ function useArtifactDownload() {
   return { download, pending }
 }
 
-function DownloadButton({ attachment }: { attachment: ArtifactReference }) {
+function DownloadButton({ attachment, onExpired }: { attachment: ArtifactReference; onExpired?: () => void }) {
   const { t } = useLocale()
-  const { download, pending } = useArtifactDownload()
+  const { download, pending } = useArtifactDownload(onExpired)
   return (
     <Button
       type="button"
@@ -72,9 +74,19 @@ function DownloadButton({ attachment }: { attachment: ArtifactReference }) {
   )
 }
 
-function FileCard({ attachment, unavailable = false }: { attachment: ArtifactReference; unavailable?: boolean }) {
+type FileCardState = 'ready' | 'unavailable' | 'expired'
+
+function FileCard({ attachment, state = 'ready' }: { attachment: ArtifactReference; state?: FileCardState }) {
   const { t } = useLocale()
-  const Icon = unavailable ? ImageOff : FileText
+  // #1018 — a download can reveal that the file expired with its room.
+  const [expired, setExpired] = useState(false)
+  const current: FileCardState = expired ? 'expired' : state
+  const Icon = current === 'ready' ? FileText : ImageOff
+  const status = current === 'expired'
+    ? t('chat.attachmentExpired')
+    : current === 'unavailable'
+      ? t('chat.attachmentUnavailable')
+      : formatBytes(attachment.sizeBytes)
   return (
     <div
       data-testid="message-attachment-file"
@@ -85,12 +97,10 @@ function FileCard({ attachment, unavailable = false }: { attachment: ArtifactRef
         <p className="truncate text-caption text-[var(--color-foreground)]" title={attachment.name}>
           {attachment.name}
         </p>
-        <p className="text-badge text-[var(--color-foreground-muted)]">
-          {unavailable ? t('chat.attachmentUnavailable') : formatBytes(attachment.sizeBytes)}
-        </p>
+        <p className="text-badge text-[var(--color-foreground-muted)]">{status}</p>
       </div>
-      {!unavailable && attachment.mime === 'text/html' && <HtmlPreviewButton attachment={attachment} />}
-      {!unavailable && <DownloadButton attachment={attachment} />}
+      {current === 'ready' && attachment.mime === 'text/html' && <HtmlPreviewButton attachment={attachment} />}
+      {current === 'ready' && <DownloadButton attachment={attachment} onExpired={() => setExpired(true)} />}
     </div>
   )
 }
@@ -102,20 +112,22 @@ function HtmlPreviewButton({ attachment }: { attachment: ArtifactReference }) {
   const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const [src, setSrc] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [failed, setFailed] = useState<'failed' | 'expired' | null>(null)
 
   useEffect(() => {
     if (!open) return
     let active = true
     let revoke: (() => void) | null = null
-    setFailed(false)
+    setFailed(null)
     fetchArtifactBlobUrl(attachment.roomId, attachment.id)
       .then(blob => {
         if (!active) { blob.revoke(); return }
         revoke = blob.revoke
         setSrc(blob.url)
       })
-      .catch(() => { if (active) setFailed(true) })
+      .catch(error => {
+        if (active) setFailed(error instanceof ArtifactExpiredError ? 'expired' : 'failed')
+      })
     return () => {
       active = false
       revoke?.()
@@ -144,7 +156,9 @@ function HtmlPreviewButton({ attachment }: { attachment: ArtifactReference }) {
           </DialogHeader>
           {failed ? (
             <p role="alert" className="text-caption text-[var(--color-danger)]">
-              {t('chat.attachmentPreviewFailed', { name: attachment.name })}
+              {failed === 'expired'
+                ? t('chat.attachmentExpired')
+                : t('chat.attachmentPreviewFailed', { name: attachment.name })}
             </p>
           ) : src ? (
             <iframe
@@ -170,7 +184,8 @@ function ImageAttachment({ attachment }: { attachment: ArtifactReference }) {
   const image = useArtifactBlobUrl(attachment.roomId, attachment.id)
   const [open, setOpen] = useState(false)
 
-  if (image.status === 'failed') return <FileCard attachment={attachment} unavailable />
+  if (image.status === 'failed') return <FileCard attachment={attachment} state="unavailable" />
+  if (image.status === 'expired') return <FileCard attachment={attachment} state="expired" />
   if (image.status === 'loading') {
     return (
       <div

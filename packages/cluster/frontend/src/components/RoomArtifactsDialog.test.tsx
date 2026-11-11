@@ -94,3 +94,10 @@ it('discards a download that finishes after navigation to another project room',
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test-artifact')
   expect(screen.queryByText('resume.md')).not.toBeInTheDocument()
 })
+
+it('marks an artifact that expired with its archived room and offers no download [ROOM-15]', async () => {
+  vi.mocked(fetch).mockImplementation(async () => json([{ ...artifact, purged_at: '2026-11-01T00:00:00Z' }]))
+  render(<RoomArtifactsDialog {...props} />)
+  expect(await screen.findByText('Removed after the room stayed archived')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+})

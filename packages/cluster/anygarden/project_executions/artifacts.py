@@ -130,6 +130,15 @@ async def publish_artifact(
                 ))
         if artifact is None:
             raise ExecutionConflict("ARTIFACT_STORE_FAILED", "Artifact could not be saved")
+        if artifact.purged_at is not None:
+            # #1018 — same bytes for a row purged while the room was archived.
+            stored = save_bytes(
+                artifact_files_dir=artifact_files_dir, room_id=room_id,
+                file_id=artifact.id, data=raw, max_size_bytes=limit,
+            )
+            artifact.storage_path = stored.storage_path
+            artifact.purged_at = None
+            await db.flush()
         references.append({
             "artifact_id": artifact.id, "room_id": room_id,
             "filename": artifact.filename, "sha256": artifact.sha256,

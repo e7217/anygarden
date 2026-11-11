@@ -310,6 +310,16 @@ async def _insert_artifact(
             sha256=sha256,
             agent_id=agent_id,
         )
+        existing = await _find_by_sha(session, room_id=room_id, sha256=sha256)
+        if existing is not None and existing.purged_at is not None:
+            try:
+                await revive_if_purged(
+                    session, existing, raw=raw,
+                    artifact_files_dir=artifact_files_dir, max_size_bytes=max_size_bytes,
+                )
+            except Exception as exc:  # noqa: BLE001 — dedup stays a no-op
+                await session.rollback()
+                log.error("room_artifact_revive_failed", room_id=room_id, error=str(exc))
         return None
 
     # Disk write happens AFTER the row insert so that a write
@@ -347,6 +357,32 @@ async def _insert_artifact(
         )
         return None
     return artifact
+
+
+async def revive_if_purged(
+    session: AsyncSession,
+    row: RoomArtifact,
+    *,
+    raw: bytes,
+    artifact_files_dir: Path,
+    max_size_bytes: int,
+) -> RoomArtifact:
+    """#1018 — the same bytes arriving for a purged row restore its file
+    and clear ``purged_at``, so links to the old id open again."""
+    if row.purged_at is None:
+        return row
+    stored = artifact_storage.save_bytes(
+        artifact_files_dir=artifact_files_dir,
+        room_id=row.room_id,
+        file_id=row.id,
+        data=raw,
+        max_size_bytes=max_size_bytes,
+    )
+    row.storage_path = stored.storage_path
+    row.purged_at = None
+    await session.commit()
+    await session.refresh(row)
+    return row
 
 
 async def _find_by_sha(
@@ -393,6 +429,10 @@ async def store_uploaded_artifact(
 
     existing = await _find_by_sha(session, room_id=room_id, sha256=sha256)
     if existing is not None:
+        existing = await revive_if_purged(
+            session, existing, raw=raw,
+            artifact_files_dir=artifact_files_dir, max_size_bytes=max_size_bytes,
+        )
         return existing, False
     artifact = await _insert_artifact(
         session,

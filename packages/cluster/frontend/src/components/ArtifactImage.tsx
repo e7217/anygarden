@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { fetchArtifactBlobUrl } from '@/lib/roomArtifacts'
+import { ArtifactExpiredError, fetchArtifactBlobUrl } from '@/lib/roomArtifacts'
 
 export type ArtifactBlobState =
   | { status: 'loading' }
   | { status: 'ready'; src: string }
   | { status: 'failed' }
+  | { status: 'expired' }
 
 /** Fetch artifact bytes through the authenticated endpoint and expose them
  * as a blob: URL, revoked on unmount or when the artifact changes. */
@@ -26,8 +27,12 @@ export function useArtifactBlobUrl(roomId: string, artifactId: string): Artifact
           setState({ key, value: { status: 'ready', src: url } })
         }
       })
-      .catch(() => {
-        if (!cancelled) setState({ key, value: { status: 'failed' } })
+      .catch(error => {
+        if (cancelled) return
+        const value: ArtifactBlobState = error instanceof ArtifactExpiredError
+          ? { status: 'expired' }
+          : { status: 'failed' }
+        setState({ key, value })
       })
     return () => {
       cancelled = true

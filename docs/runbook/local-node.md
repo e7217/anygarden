@@ -146,6 +146,23 @@ the page to load the new interface.
 - The node's own machine and machine links (#848) run inside the node process
   and are updated with it; their per-machine update button is not used.
 
+## Removing files of archived rooms (#1018)
+
+Archiving or deleting a room keeps its history, and its files stay on disk
+until you turn on a retention period:
+
+```bash
+ANYGARDEN_ARCHIVED_ROOM_FILE_RETENTION_DAYS=90 anygarden start
+```
+
+Once a room has been archived for that many days, an hourly sweep removes
+its files. Agent attachments keep their entry and show "removed after the
+room stayed archived" in chat; files people shared with the room are
+deleted, and agents drop their copies. The default `0` keeps everything.
+Removed files cannot be recovered. Unarchiving a room does not bring them
+back, though an agent attaching the same file again restores its old links.
+`ANYGARDEN_FILE_RETENTION_SWEEP_INTERVAL_SEC` changes the interval.
+
 ## Unconfirmed shutdown
 
 After SIGKILL, a crash, malformed ownership evidence or unconfirmed child cleanup,

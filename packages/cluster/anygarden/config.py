@@ -76,6 +76,12 @@ class AnygardenSettings(BaseSettings):
     # reply. The daemon's outbox WS frame stays at 768 KiB; this path has
     # no frame envelope to fit under.
     artifact_upload_max_bytes: int = 20 * 1024 * 1024
+    # #1018 — days a room stays archived before its files are removed
+    # (agent artifacts become "expired", shared files are deleted). ``0``
+    # keeps them forever. Removal cannot be undone.
+    archived_room_file_retention_days: int = 0
+    # How often the retention sweep runs while it is enabled.
+    file_retention_sweep_interval_sec: float = 3600.0
     # #914 — work files larger than one machine frame go over HTTP with a
     # one-time ticket and pass through this spool directory on the server.
     transfer_spool_dir: Path = _DEFAULT_TRANSFER_SPOOL_DIR

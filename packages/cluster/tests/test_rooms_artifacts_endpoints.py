@@ -463,3 +463,29 @@ class TestUpload:
             files={"upload": ("a.txt", b"hi", "text/plain")},
         )
         assert resp.status_code == 403
+
+
+class TestExpired:
+    """#1018 — an artifact purged with its archived room answers 410."""
+
+    @pytest.mark.req("ROOM-15")
+    async def test_purged_artifact_is_gone_and_listed_as_expired(
+        self, client: AsyncClient, env
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from anygarden.db.models import RoomArtifact
+
+        artifact = await _seed_artifact(env)
+        async with env["session_factory"]() as db:
+            row = await db.get(RoomArtifact, artifact.id)
+            row.purged_at = datetime.now(UTC)
+            await db.commit()
+
+        url = f"/api/v1/rooms/{env['room'].id}/artifacts"
+        resp = await client.get(f"{url}/{artifact.id}", headers=_auth(env["owner_token"]))
+        assert resp.status_code == 410
+        assert resp.json()["detail"]["code"] == "ARTIFACT_EXPIRED"
+
+        listed = await client.get(url, headers=_auth(env["owner_token"]))
+        assert listed.json()[0]["purged_at"] is not None
