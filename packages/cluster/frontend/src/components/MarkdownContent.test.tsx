@@ -192,7 +192,7 @@ describe('MarkdownContent — outbox links (#964)', () => {
     )
     expect(screen.queryByRole('link')).toBeNull()
     expect(screen.getByText('notes')).toBeInTheDocument()
-    expect(container.querySelector('[data-outbox-unresolved]')).not.toBeNull()
+    expect(container.querySelector('[data-local-link-unresolved]')).not.toBeNull()
   })
 
   it('leaves other links alone', () => {
@@ -200,5 +200,54 @@ describe('MarkdownContent — outbox links (#964)', () => {
     expect(screen.getByRole('link', { name: 'site' })).toHaveAttribute(
       'href', 'https://example.com/memory/outbox/a.md',
     )
+  })
+})
+
+describe('MarkdownContent — linked local files (#1017)', () => {
+  const refs = [
+    { id: 'art-a', roomId: 'room-1', name: 'report.md', mime: 'text/markdown', sizeBytes: 10 },
+    { id: 'art-b', roomId: 'room-1', name: 'report.md', mime: 'text/markdown', sizeBytes: 12 },
+  ]
+  const linkedFiles = [
+    { href: 'workspace/a/report.md', artifactId: 'art-a' },
+    { href: '/home/me/agent/workspace/b/report.md', artifactId: 'art-b' },
+    { href: 'gone.md', artifactId: 'art-missing' },
+  ]
+
+  it('opens the file the reply attached for that exact link [MSG-11]', () => {
+    render(
+      <MarkdownContent
+        content="[a](workspace/a/report.md) [b](/home/me/agent/workspace/b/report.md)"
+        references={refs}
+        linkedFiles={linkedFiles}
+      />,
+    )
+    expect(screen.getByRole('link', { name: 'a' })).toHaveAttribute('href', '/api/v1/rooms/room-1/artifacts/art-a')
+    expect(screen.getByRole('link', { name: 'b' })).toHaveAttribute('href', '/api/v1/rooms/room-1/artifacts/art-b')
+  })
+
+  it('shows a local path that was not attached as text [MSG-11]', () => {
+    const { container } = render(
+      <MarkdownContent
+        content="[gone](gone.md) [abs](/tmp/out.csv) [file](file:///tmp/x.csv)"
+        references={refs}
+        linkedFiles={linkedFiles}
+      />,
+    )
+    expect(screen.queryByRole('link')).toBeNull()
+    const unresolved = container.querySelectorAll('[data-local-link-unresolved]')
+    expect(unresolved).toHaveLength(3)
+    expect(unresolved[1]).toHaveAttribute('title', '/tmp/out.csv')
+  })
+
+  it('keeps app routes, anchors and web links as links', () => {
+    render(
+      <MarkdownContent
+        content="[room](/rooms/r1) [api](/api/v1/rooms/r1/artifacts/x) [top](#top) [web](https://example.com/a.md) [proto](//cdn.example.com/a.js)"
+        references={refs}
+        linkedFiles={linkedFiles}
+      />,
+    )
+    expect(screen.getAllByRole('link')).toHaveLength(5)
   })
 })

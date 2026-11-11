@@ -43,8 +43,10 @@ import structlog
 
 from anygarden.agent.observability import metrics as _metrics
 from anygarden.agent.runtime.attachments import (
+    REPLY_ATTACHMENT_LIMIT,
     changed_outbox_files,
     snapshot_outbox,
+    upload_linked_files,
     upload_reply_attachments,
 )
 
@@ -303,12 +305,16 @@ class RoomHandlerSupervisor:
         engine_name: str,
         *,
         outbox_dir: Path | None = None,
+        agent_root: Path | None = None,
     ) -> None:
         self._client = client
         self._engine = engine_name
         # #854 — ``memory/outbox``; files written there during a turn are
         # attached to its reply. ``None`` disables attachments.
         self._outbox_dir = outbox_dir
+        # #1017 — files the reply links under the agent root are attached
+        # too. ``None`` disables linked files.
+        self._agent_root = agent_root
         self._room_locks: dict[str, asyncio.Lock] = {}
         self._inflight: dict[str, Optional[str]] = {}
         # #457 — bounded per-room FIFO of deferred follow-ups. Touched only
@@ -741,8 +747,8 @@ class RoomHandlerSupervisor:
         if server_retries:
             pass  # the server's retry or exhaustion notice speaks for it
         elif response:
-            send_metadata = await self._attach_outbox_files(
-                room_id, outbox_before, send_metadata
+            send_metadata = await self._attach_reply_files(
+                room_id, outbox_before, response, send_metadata
             )
             await self._send_room_message(
                 room_id,
@@ -789,30 +795,53 @@ class RoomHandlerSupervisor:
             logger.warning("reply_attachment_snapshot_failed", room_id=room_id)
             return {}
 
-    async def _attach_outbox_files(
+    async def _attach_reply_files(
         self,
         room_id: str,
         before: dict[str, str],
+        response: str,
         metadata: Optional[dict[str, Any]],
     ) -> Optional[dict[str, Any]]:
-        """Upload files written during the turn and reference them (#854)."""
-        if self._outbox_dir is None:
+        """Upload files written to the outbox during the turn (#854) and
+        files the reply links to (#1017), and reference them."""
+        uploaded: dict[Path, str] = {}
+        references: list[dict[str, str]] = []
+        undelivered: list[dict[str, str]] = []
+        if self._outbox_dir is not None:
+            try:
+                changed = await asyncio.to_thread(
+                    changed_outbox_files, self._outbox_dir, room_id, before
+                )
+            except OSError:
+                logger.warning("reply_attachment_scan_failed", room_id=room_id)
+                changed = []
+            if changed:
+                references, undelivered = await upload_reply_attachments(
+                    self._client, room_id, changed, uploaded=uploaded
+                )
+        linked: list[dict[str, str]] = []
+        if self._agent_root is not None:
+            try:
+                link_refs, link_undelivered, linked = await upload_linked_files(
+                    self._client,
+                    room_id,
+                    response,
+                    self._agent_root,
+                    uploaded=uploaded,
+                    limit=REPLY_ATTACHMENT_LIMIT - len(references),
+                )
+            except OSError:
+                logger.warning("reply_linked_files_failed", room_id=room_id)
+            else:
+                references = [*references, *link_refs]
+                undelivered = [*undelivered, *link_undelivered]
+        if not references and not undelivered:
             return metadata
-        try:
-            changed = await asyncio.to_thread(
-                changed_outbox_files, self._outbox_dir, room_id, before
-            )
-        except OSError:
-            logger.warning("reply_attachment_scan_failed", room_id=room_id)
-            return metadata
-        if not changed:
-            return metadata
-        references, undelivered = await upload_reply_attachments(
-            self._client, room_id, changed
-        )
         metadata = dict(metadata or {})
         if references:
             metadata["references"] = [*metadata.get("references", []), *references]
+        if linked:
+            metadata["linked_files"] = linked
         if undelivered:
             metadata["undelivered_attachments"] = undelivered
         return metadata

@@ -194,6 +194,38 @@ class TestDownload:
         assert resp.content == body
         assert hashlib.sha256(resp.content).hexdigest() == artifact.sha256
 
+    async def _upload_and_get(self, client: AsyncClient, env, name: str, body: bytes, mime: str):
+        url = f"/api/v1/rooms/{env['room'].id}/artifacts"
+        up = await client.post(
+            url, headers=_auth(env["agent_token"]), files={"upload": (name, body, mime)},
+        )
+        assert up.status_code == 201, up.text
+        return await client.get(f"{url}/{up.json()['id']}", headers=_auth(env["owner_token"]))
+
+    @pytest.mark.req("MSG-11")
+    async def test_html_opens_inline_in_a_sandbox(self, client: AsyncClient, env) -> None:
+        """#1017 — HTML and SVG open in place but never as the app's origin."""
+        for name, mime in (("report.html", "text/html"), ("chart.svg", "image/svg+xml")):
+            resp = await self._upload_and_get(client, env, name, f"<x>{name}</x>".encode(), mime)
+            assert resp.headers["content-disposition"].startswith("inline;")
+            assert resp.headers["content-security-policy"] == "sandbox allow-scripts"
+            assert resp.headers["x-content-type-options"] == "nosniff"
+
+    @pytest.mark.req("MSG-11")
+    async def test_previewable_types_open_inline(self, client: AsyncClient, env) -> None:
+        for name, mime in (("a.png", "image/png"), ("a.pdf", "application/pdf"), ("a.txt", "text/plain")):
+            resp = await self._upload_and_get(client, env, name, f"body {name}".encode(), mime)
+            assert resp.headers["content-disposition"].startswith("inline;")
+            assert "content-security-policy" not in resp.headers
+            assert resp.headers["x-content-type-options"] == "nosniff"
+
+    @pytest.mark.req("MSG-11")
+    async def test_other_types_download(self, client: AsyncClient, env) -> None:
+        resp = await self._upload_and_get(client, env, "app.zip", b"PK\x03\x04", "application/zip")
+        assert resp.headers["content-disposition"].startswith("attachment;")
+        assert resp.headers["content-type"].startswith("application/zip")
+        assert resp.headers["x-content-type-options"] == "nosniff"
+
     async def test_outsider_gets_403(self, client: AsyncClient, env) -> None:
         artifact = await _seed_artifact(env)
         resp = await client.get(
@@ -335,10 +367,37 @@ class TestUpload:
         assert resp.status_code == 201, resp.text
         assert resp.json()["mime"] == "text/markdown"
 
-    async def test_disallowed_mime_415(self, client: AsyncClient, env) -> None:
+    @pytest.mark.req("MSG-11")
+    async def test_agent_may_upload_any_type(self, client: AsyncClient, env) -> None:
+        """#1017 — an agent attaches whatever it produced; the download
+        headers, not an allow-list, keep the browser safe."""
         resp = await client.post(
             self._url(env),
             headers=_auth(env["agent_token"]),
+            files={"upload": ("tool.exe", b"MZ", "application/x-msdownload")},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["mime"] == "application/x-msdownload"
+
+    @pytest.mark.req("MSG-11")
+    async def test_agent_upload_of_unknown_type_is_octet_stream(
+        self, client: AsyncClient, env
+    ) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["agent_token"]),
+            files={"upload": ("data.weird", b"\x00\x01", "not a mime"),},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["mime"] == "application/octet-stream"
+
+    @pytest.mark.req("MSG-11")
+    async def test_human_upload_keeps_the_allow_list(
+        self, client: AsyncClient, env
+    ) -> None:
+        resp = await client.post(
+            self._url(env),
+            headers=_auth(env["owner_token"]),
             files={"upload": ("tool.exe", b"MZ", "application/x-msdownload")},
         )
         assert resp.status_code == 415
