@@ -283,7 +283,7 @@ describe('MessageInput drop and paste attachments (#872)', () => {
       dataTransfer: {
         types: ['Files'],
         files: [
-          new File(['x'], 'tool.sh', { type: 'application/x-sh' }),
+          new File(['x'], 'tool.sh', { type: 'text/x-sh' }),
           textFile('huge.txt'),
           textFile('ok.txt'),
         ],
@@ -383,21 +383,36 @@ describe('MessageInput image attachments (#873)', () => {
     expect(uploadRoomFile).not.toHaveBeenCalled()
   })
 
-  it('refuses SVG without uploading it', async () => {
+  it('sends any non-text file as an artifact [MSG-11]', async () => {
     renderComposer()
-    drop([new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' })])
-    expect(await screen.findByText('logo.svg — file type not allowed')).toBeInTheDocument()
-    expect(uploadRoomArtifact).not.toHaveBeenCalled()
+    drop([
+      new File(['PK'], 'deck.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }),
+      new File(['PK'], 'bundle.zip', { type: 'application/zip' }),
+      new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' }),
+      new File(['\x00'], 'data.bin', { type: '' }),
+    ])
+    await waitFor(() => expect(uploadRoomArtifact).toHaveBeenCalledTimes(4))
+    expect(uploadRoomArtifact.mock.calls.map(call => (call[1] as File).name)).toEqual([
+      'deck.pptx', 'bundle.zip', 'logo.svg', 'data.bin',
+    ])
     expect(uploadRoomFile).not.toHaveBeenCalled()
   })
 
-  it('lets the file picker offer images and PDFs', () => {
+  it('sends text too large for a shared file as an artifact [MSG-11]', async () => {
     renderComposer()
-    const accept = (screen.getByTestId('composer-file-input') as HTMLInputElement).accept
-    for (const type of ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']) {
-      expect(accept).toContain(type)
-    }
-    expect(accept).not.toContain('svg')
+    drop([
+      new File(['x'.repeat(300 * 1024)], 'big.csv', { type: 'text/csv' }),
+      new File(['hi'], 'small.md', { type: '' }),
+    ])
+    await waitFor(() => expect(uploadRoomFile).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(uploadRoomArtifact).toHaveBeenCalledTimes(1))
+    expect((uploadRoomArtifact.mock.calls[0][1] as File).name).toBe('big.csv')
+    expect((uploadRoomFile.mock.calls[0][1] as File).name).toBe('small.md')
+  })
+
+  it('lets the file picker offer every file type [MSG-11]', () => {
+    renderComposer()
+    expect((screen.getByTestId('composer-file-input') as HTMLInputElement).accept).toBe('')
   })
 })
 

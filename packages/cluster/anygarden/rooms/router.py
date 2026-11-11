@@ -2016,11 +2016,9 @@ async def upload_room_artifact(
         )
     filename = upload.filename or "upload"
     mime = artifacts_service.normalize_mime(upload.content_type)
-    # An agent may send any type (#1017), so only a missing type falls back
-    # to the filename; a person's unlisted type may still be a listed one.
-    if mime == artifacts_service.OCTET_STREAM or (
-        identity.kind != "agent" and mime not in artifacts_service.ALLOWED_MIME_TYPES
-    ):
+    # Any type is accepted (#1017, #1021); only a missing type falls back
+    # to the filename.
+    if mime == artifacts_service.OCTET_STREAM:
         guessed, _ = mimetypes.guess_type(filename)
         mime = guessed or mime
 
@@ -2034,10 +2032,6 @@ async def upload_room_artifact(
             raw=raw,
             artifact_files_dir=config.artifact_files_dir,
             max_size_bytes=cap,
-        )
-    except artifacts_service.ArtifactMimeNotAllowedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
         )
     except artifacts_service.ArtifactRejectedError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

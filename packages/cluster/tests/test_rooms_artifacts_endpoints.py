@@ -392,24 +392,28 @@ class TestUpload:
         assert resp.json()["mime"] == "application/octet-stream"
 
     @pytest.mark.req("MSG-11")
-    async def test_human_upload_keeps_the_allow_list(
-        self, client: AsyncClient, env
-    ) -> None:
-        resp = await client.post(
-            self._url(env),
-            headers=_auth(env["owner_token"]),
-            files={"upload": ("tool.exe", b"MZ", "application/x-msdownload")},
-        )
-        assert resp.status_code == 415
+    async def test_human_may_upload_any_type(self, client: AsyncClient, env) -> None:
+        """#1021 — a person attaches any file; the download headers keep
+        the browser safe, as for agents."""
+        url = self._url(env)
+        pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        for name, mime in (("deck.pptx", pptx), ("tool.exe", "application/x-msdownload"), ("logo.svg", "image/svg+xml")):
+            resp = await client.post(
+                url, headers=_auth(env["owner_token"]), files={"upload": (name, name.encode(), mime)},
+            )
+            assert resp.status_code == 201, (name, resp.text)
+            assert resp.json()["mime"] == mime
+        down = await client.get(f"{url}/{resp.json()['id']}", headers=_auth(env["owner_token"]))
+        assert down.headers["content-security-policy"] == "sandbox allow-scripts"
 
-    async def test_oversize_413(self, client: AsyncClient, env) -> None:
-        env["config"].artifact_upload_max_bytes = 16
+    @pytest.mark.req("MSG-11")
+    async def test_missing_type_is_guessed_from_the_filename(self, client: AsyncClient, env) -> None:
         resp = await client.post(
-            self._url(env),
-            headers=_auth(env["agent_token"]),
-            files={"upload": ("big.txt", b"x" * 17, "text/plain")},
+            self._url(env), headers=_auth(env["owner_token"]),
+            files={"upload": ("sheet.xlsx", b"PK", "application/octet-stream")},
         )
-        assert resp.status_code == 413
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["mime"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     async def test_human_upload_creates_artifact(
         self, client: AsyncClient, env

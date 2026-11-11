@@ -58,40 +58,34 @@ const EVERYONE_OPTION_ID = '__everyone__'
 const EVERYONE_PATTERN = /(?<!\w)@everyone(?![\w-])/
 const USER_TOKEN_PATTERN = /<@user:[^>]+>/
 
-/** A file uploaded since the last send. Text goes to the room's shared
- * files (#246); images and PDFs are room artifacts (#873), shown with a
- * local thumbnail until the message goes out. */
+/** A file uploaded since the last send. Small text goes to the room's
+ * shared files (#246); anything else is a room artifact (#873, #1021),
+ * images shown with a local thumbnail until the message goes out. */
 type Attachment =
   | { kind: 'shared_file'; id: string; filename: string; storage_name: string; sha256?: string }
   | { kind: 'artifact'; id: string; filename: string; previewUrl?: string }
 
-/** #873 — binaries that travel as room artifacts. SVG is left out on
- * purpose: a person's SVG can carry script once downloaded and opened. */
-const ARTIFACT_TYPES: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  pdf: 'application/pdf',
-}
-const ARTIFACT_MIMES = new Set(Object.values(ARTIFACT_TYPES))
-const TEXT_ACCEPT = '.txt,.md,.markdown,.json,.yaml,.yml,.csv,.py,.html,.xml,text/*,application/json,application/yaml,application/xml'
-const FILE_ACCEPT = [
-  TEXT_ACCEPT,
-  ...Object.keys(ARTIFACT_TYPES).map(ext => `.${ext}`),
-  ...ARTIFACT_MIMES,
-].join(',')
+/** #1021 — small text goes to the room's shared files, which agents read
+ * as part of their context (#246); everything else — any type, and text
+ * too large for a shared file — travels as a room artifact that agents
+ * receive in their inbox (#874). */
+const SHARED_FILE_MAX_BYTES = 256 * 1024
+const TEXT_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'json', 'yaml', 'yml', 'csv', 'py', 'html', 'htm', 'xml',
+])
+const TEXT_MIMES = new Set([
+  'application/json', 'application/yaml', 'application/x-yaml', 'application/xml',
+])
 
-/** Where a file goes: ``artifact``, ``shared_file``, or ``null`` when no
- * store takes it. Browsers sometimes leave ``type`` empty, so the
+/** Where a file goes. Browsers sometimes leave ``type`` empty, so the
  * extension decides then. */
-function attachmentStore(file: File): 'artifact' | 'shared_file' | null {
+function attachmentStore(file: File): 'artifact' | 'shared_file' {
   const ext = /\.(\w+)$/.exec(file.name)?.[1].toLowerCase() ?? ''
-  const mime = file.type || ARTIFACT_TYPES[ext] || ''
-  if (ARTIFACT_MIMES.has(mime)) return 'artifact'
-  if (mime === 'image/svg+xml' || ext === 'svg') return null
-  return 'shared_file'
+  const mime = file.type.toLowerCase()
+  const isText = mime
+    ? (mime.startsWith('text/') || TEXT_MIMES.has(mime)) && mime !== 'image/svg+xml'
+    : TEXT_EXTENSIONS.has(ext)
+  return isText && file.size <= SHARED_FILE_MAX_BYTES ? 'shared_file' : 'artifact'
 }
 
 function releasePreview(attachment: Attachment) {
@@ -508,9 +502,7 @@ export default function MessageInput({
     let uploadedAny = false
     for (const file of files) {
       try {
-        const store = attachmentStore(file)
-        if (store === null) throw new RoomFileUploadError(415, '')
-        if (store === 'artifact') {
+        if (attachmentStore(file) === 'artifact') {
           const uploaded = await uploadRoomArtifact(roomId, file)
           const previewUrl = uploaded.mime.startsWith('image/') ? URL.createObjectURL(file) : undefined
           addAttachment({ kind: 'artifact', id: uploaded.id, filename: uploaded.filename, previewUrl })
@@ -772,7 +764,6 @@ export default function MessageInput({
                 multiple
                 className="hidden"
                 onChange={handleFileSelected}
-                accept={FILE_ACCEPT}
               />
               <button
                 type="button"

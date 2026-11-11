@@ -43,7 +43,7 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-/** #873 — attach a binary file (image, PDF) to the sender's own message.
+/** #873 — attach a file of any type (#1021) to the sender's own message.
  * Bytes already in the room come back as the existing artifact. */
 export async function uploadRoomArtifact(
   roomId: string,
