@@ -110,7 +110,7 @@ describe('TasksSection right-rail containment', () => {
     expect(assigneeSelect).toBeInTheDocument()
     expect(assigneeSelect.className).toContain('min-w-0')
     expect(assigneeSelect.className).toContain('max-w-full')
-    expect(assigneeSelect.parentElement?.className).toContain('flex-[0_1_8rem]')
+    expect(assigneeSelect.parentElement?.className).toContain('flex-[0_1_auto]')
     expect(assigneeSelect.parentElement?.className).toContain('min-w-[5rem]')
   })
 
@@ -141,16 +141,54 @@ describe('TasksSection right-rail containment', () => {
   })
 })
 
-describe('TasksSection execution evidence', () => {
-  it.each(['blocked', 'failed'])('shows the reason for a %s task without expanding details', status => {
-    mocks.tasks = [task({ status, error: 'Waiting for the job analysis result before editing the resume' })]
+function openDialog(id = 'task-1') {
+  fireEvent.click(screen.getByTestId(`right-rail-task-open-${id}`))
+  return screen.getByTestId(`right-rail-task-dialog-${id}`)
+}
+
+describe('TasksSection flat list', () => {
+  it('lists current work without per-status headings, ordered by status', () => {
+    mocks.tasks = [
+      task({ id: 'todo', status: 'todo' }),
+      task({ id: 'doing', status: 'in_progress' }),
+      task({ id: 'stuck', status: 'blocked' }),
+    ]
     renderTasksSection()
-    expect(screen.getByTestId('right-rail-task-reason-task-1')).toHaveTextContent('Waiting for the job analysis result')
+    expect(screen.queryByText(/To do ·/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/In progress ·/)).not.toBeInTheDocument()
+    const ids = screen.getAllByTestId(/^right-rail-task-row-/).map(row => row.dataset.testid)
+    expect(ids).toEqual(['right-rail-task-row-doing', 'right-rail-task-row-stuck', 'right-rail-task-row-todo'])
+  })
+})
+
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+
+describe('TasksSection row times', () => {
+  it('shows how long running work has gone on instead of the assignee', () => {
+    mocks.tasks = [task({ status: 'in_progress', started_at: ago(23 * 60_000) })]
+    renderTasksSection()
+    expect(screen.getByTestId('right-rail-task-meta-task-1')).toHaveTextContent('23m')
   })
 
-  it('omits an empty details control for ordinary tasks', () => {
+  it('shows when finished work ended', () => {
+    mocks.tasks = [task({ status: 'done', started_at: ago(4 * 3_600_000), finished_at: ago(2 * 3_600_000) })]
     renderTasksSection()
-    expect(screen.queryByTestId('right-rail-task-details-task-1')).not.toBeInTheDocument()
+    expect(screen.getByTestId('right-rail-task-meta-task-1')).toHaveTextContent('2 hours ago')
+  })
+
+  it('keeps the assignee for waiting work', () => {
+    renderTasksSection()
+    expect(screen.getByTestId('right-rail-task-meta-task-1')).toHaveTextContent(LONG_AGENT_NAME)
+  })
+})
+
+describe('TasksSection detail dialog', () => {
+  it.each(['blocked', 'failed'])('keeps the reason for a %s task out of the row and shows it in the dialog', status => {
+    mocks.tasks = [task({ status, error: 'Waiting for the job analysis result before editing the resume' })]
+    renderTasksSection()
+    expect(screen.queryByTestId('right-rail-task-reason-task-1')).not.toBeInTheDocument()
+    openDialog()
+    expect(screen.getByTestId('right-rail-task-reason-task-1')).toHaveTextContent('Waiting for the job analysis result')
   })
 
   it('renders supplied instructions, results, source versions and schedule evidence', () => {
@@ -160,9 +198,8 @@ describe('TasksSection execution evidence', () => {
       schedule_context: { goal_id: 'goal-career', scheduled_for: '2026-09-30T09:00:00Z', timezone: 'Asia/Seoul', overlap_policy: 'wait', trigger_source: 'scheduler' },
     })]
     renderTasksSection()
-    const details = screen.getByTestId('right-rail-task-details-task-1')
-    expect(details).not.toHaveAttribute('open')
-    fireEvent.click(screen.getByText('Task details'))
+    expect(screen.queryByText('Use only verified career facts.')).not.toBeInTheDocument()
+    const dialog = openDialog()
     expect(screen.getByText('Use only verified career facts.')).toBeInTheDocument()
     expect(screen.getByText('Resume ready').tagName).toBe('STRONG')
     expect(screen.getByText('Job analysis')).toBeInTheDocument()
@@ -170,9 +207,67 @@ describe('TasksSection execution evidence', () => {
     expect(screen.getByText('analysis-1')).toBeInTheDocument()
     expect(screen.getByTitle('a'.repeat(64))).toHaveTextContent('SHA-256')
     expect(screen.getByText('Asia/Seoul')).toBeInTheDocument()
-    expect(details.querySelector('time')).toHaveAttribute('datetime', '2026-09-30T09:00:00Z')
+    expect(dialog.querySelector('time[datetime="2026-09-30T09:00:00Z"]')).not.toBeNull()
     expect(screen.getByText('Wait until the previous run finishes')).toBeInTheDocument()
     expect(mocks.update).not.toHaveBeenCalled()
+  })
+
+  it('saves an edited title from the dialog', async () => {
+    renderTasksSection()
+    openDialog()
+    const save = screen.getByTestId('right-rail-task-dialog-save')
+    expect(save).toBeDisabled()
+    fireEvent.change(screen.getByTestId('right-rail-task-dialog-title'), { target: { value: 'Renamed task' } })
+    fireEvent.click(save)
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledWith('task-1', { title: 'Renamed task' }))
+    await waitFor(() => expect(screen.queryByTestId('right-rail-task-dialog-task-1')).not.toBeInTheDocument())
+  })
+
+  it('draws the progress timeline in order and ends running work at now', () => {
+    mocks.tasks = [task({
+      status: 'in_progress',
+      created_at: ago(30 * 60_000),
+      assigned_at: ago(29 * 60_000),
+      started_at: ago(23 * 60_000),
+    })]
+    renderTasksSection()
+    openDialog()
+    const items = Array.from(screen.getByTestId('right-rail-task-timeline-task-1').querySelectorAll('li')).map(li => li.textContent)
+    expect(items).toHaveLength(4)
+    expect(items[0]).toContain('Created')
+    expect(items[1]).toContain(`Assigned to ${LONG_AGENT_NAME}`)
+    expect(items[2]).toContain('Started')
+    expect(items[3]).toContain('In progress · 23m')
+    expect(items[3]).toContain('Now')
+  })
+
+  it('puts failed attempts on the timeline of finished work', () => {
+    mocks.tasks = [task({
+      status: 'done',
+      created_at: ago(70 * 60_000),
+      started_at: ago(65 * 60_000),
+      finished_at: ago(5 * 60_000),
+      recovery: { state: 'completed', attempts: [
+        { ordinal: 1, state: 'failed', outcome: 'timeout', started_at: ago(65 * 60_000), finished_at: ago(40 * 60_000) },
+        { ordinal: 2, state: 'completed', outcome: 'succeeded', started_at: ago(39 * 60_000), finished_at: ago(5 * 60_000) },
+      ] },
+    })]
+    renderTasksSection()
+    openDialog()
+    const timeline = screen.getByTestId('right-rail-task-timeline-task-1')
+    expect(timeline).toHaveTextContent('Attempt 1 started')
+    expect(timeline).toHaveTextContent('Attempt 2 started')
+    expect(timeline.querySelectorAll('li')[timeline.querySelectorAll('li').length - 1]).toHaveTextContent('Done')
+    expect(screen.queryByTestId('task-recovery-history-task-1')).not.toBeInTheDocument()
+  })
+
+  it('shows run-owned tasks read-only', () => {
+    mocks.tasks = [task({ status: 'in_progress', execution_id: 'run', disposition: 'current' })]
+    renderTasksSection()
+    openDialog()
+    expect(screen.queryByTestId('right-rail-task-dialog-title')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('right-rail-task-dialog-delete')).not.toBeInTheDocument()
+    expect(screen.getByText('This task can only be viewed here.')).toBeInTheDocument()
   })
 })
 
@@ -190,7 +285,7 @@ describe('TasksSection current work and history', () => {
     expect(history).toContainElement(screen.getByTestId('right-rail-task-row-cancelled'))
     expect(history).toContainElement(screen.getByTestId('right-rail-task-row-old'))
     expect(history).not.toContainElement(screen.getByTestId('right-rail-task-row-current'))
-    expect(screen.getByTestId('right-rail-task-row-cancelled')).toHaveTextContent('Cancellation confirmed')
+    expect(openDialog('cancelled')).toHaveTextContent('Cancellation confirmed')
   })
   it('shows three recent results and retains every remaining result in history', () => {
     mocks.tasks = Array.from({ length: 5 }, (_, i) => task({ id: `done-${i}`, status: 'done', created_at: `2026-10-0${i + 1}T00:00:00Z` }))

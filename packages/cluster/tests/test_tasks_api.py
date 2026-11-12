@@ -444,6 +444,60 @@ class TestUpdateTask:
         assert await _count_task_messages(tasks_env["factory"], room.id) == 1
 
 
+class TestTaskTimestamps:
+    """The task detail timeline reads lifecycle stamps from the API."""
+
+    @pytest.mark.asyncio
+    async def test_api_returns_assigned_started_and_finished_at(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        async with tasks_env["factory"]() as db:
+            row = await db.get(Room, room.id)
+            assert row is not None
+            row.allow_human_assignment = True
+            await db.commit()
+
+        created = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "timeline", "assignee_participant_id": tasks_env["agent_a_p_id"]},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["assigned_at"] is not None
+        assert body["started_at"] is None
+        assert body["finished_at"] is None
+
+        unassigned = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "mine"},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = unassigned.json()["id"]
+        claimed = await client.post(
+            f"/api/v1/tasks/{task_id}/claim",
+            headers=_auth(tasks_env["bystander_token"]),
+        )
+        assert claimed.status_code == 200
+        assert claimed.json()["started_at"] is not None
+        assert claimed.json()["finished_at"] is None
+
+        done = await client.put(
+            f"/api/v1/tasks/{task_id}",
+            json={"status": "done"},
+            headers=_auth(tasks_env["bystander_token"]),
+        )
+        assert done.status_code == 200
+        listed = await client.get(
+            f"/api/v1/rooms/{room.id}/tasks",
+            headers=_auth(tasks_env["token"]),
+        )
+        row = next(t for t in listed.json() if t["id"] == task_id)
+        assert row["started_at"] is not None
+        assert row["finished_at"] is not None
+        assert row["finished_at"] >= row["started_at"]
+
+
 class TestAssignedAt:
     """#314 — ``assigned_at`` is the sweeper's pickup-timeout clock.
     Must be stamped on creation when an assignee is present, refreshed
