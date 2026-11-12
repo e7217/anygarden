@@ -1,5 +1,5 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
-import { ChevronRight, GitFork, List, Network } from 'lucide-react'
+import { ChevronDown, GitFork, List, Network } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import PeerStateBadge from '@/components/peer-chains/PeerStateBadge'
 import PeerChainStopButton from '@/components/peer-chains/PeerChainStopButton'
@@ -13,7 +13,7 @@ import {
 
 const PeerChainGraph = lazy(() => import('@/components/peer-chains/PeerChainGraph'))
 
-/** Tree rows indent this many levels; deeper rows line up with the last. */
+/** Branches indent this many levels; deeper rows line up with the last. */
 const MAX_TREE_INDENT = 6
 
 export function rowLabel(entry: ChainTreeNode): string {
@@ -29,7 +29,7 @@ export function shortRowLabel(entry: ChainTreeNode, parentName: string): string 
   return entry.node.caller_name === parentName ? entry.node.target_name : rowLabel(entry)
 }
 
-/** Empty stand-in for the expand button, so labels share one column. */
+/** Empty stand-in for the expand button, so row highlights share one width. */
 function ToggleSlot() {
   return <span aria-hidden="true" data-toggle-slot className="size-[var(--control-icon-size)] shrink-0" />
 }
@@ -56,9 +56,9 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
   const { t } = useLocale()
   const tree = useMemo(() => buildChainTree(chain), [chain])
   const defaults = useMemo(() => defaultExpandedIds(tree), [tree])
-  // #1024 — every row, the root included, reserves the expand-button
-  // column when any row can fold, and none does otherwise, so each level
-  // sits exactly one indent step right of its parent.
+  // #1029 — the expand button trails its row so it never pushes labels
+  // right. Every row, the root included, reserves that column when any
+  // row can fold, and none does otherwise, so highlights stay one width.
   const hasToggles = useMemo(() => [...tree.byId.values()].some(entry => entry.children.length > 0), [tree])
   const [toggled, setToggled] = useState<Map<string, boolean>>(() => new Map())
   const [view, setView] = useState<'list' | 'graph'>('list')
@@ -68,6 +68,17 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
     setToggled(previous => new Map(previous).set(id, !isExpanded(id)))
   }
 
+  // Each open branch hangs under a guide line drawn below its parent's
+  // label text, one indent step in, up to MAX_TREE_INDENT.
+  const renderBranch = (entries: ChainTreeNode[], level: number, parentName: string) => (
+    <ul
+      data-testid="peer-chain-branch"
+      className={`flex flex-col ${level <= MAX_TREE_INDENT ? 'ms-2 border-s border-[var(--color-border)] ps-2' : ''}`}
+    >
+      {entries.map(entry => renderRow(entry, level, parentName))}
+    </ul>
+  )
+
   const renderRow = (entry: ChainTreeNode, level: number, parentName: string) => {
     const { node } = entry
     const hasChildren = entry.children.length > 0
@@ -76,24 +87,7 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
     const label = rowLabel(entry)
     return (
       <li key={node.id} data-node-id={node.id}>
-        <div
-          className="flex min-w-0 items-center gap-1"
-          style={{ paddingInlineStart: `calc(var(--space-4) * ${Math.min(level, MAX_TREE_INDENT)})` }}
-        >
-          {hasChildren ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              data-toggle-slot
-              aria-expanded={expanded}
-              aria-label={t(expanded ? 'peerChains.tree.collapse' : 'peerChains.tree.expand', { name: node.target_name })}
-              onClick={() => toggle(node.id)}
-              className="text-[var(--color-foreground-muted)]"
-            >
-              <ChevronRight aria-hidden="true" className={`transition-transform ${expanded ? 'rotate-90' : ''}`} />
-            </Button>
-          ) : hasToggles && <ToggleSlot />}
+        <div className="flex min-w-0 items-center gap-1">
           <button
             type="button"
             aria-pressed={selected}
@@ -111,12 +105,22 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
             </span>
             <PeerStateBadge state={node.state} title={node.reason} />
           </button>
+          {hasChildren ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              data-toggle-slot
+              aria-expanded={expanded}
+              aria-label={t(expanded ? 'peerChains.tree.collapse' : 'peerChains.tree.expand', { name: node.target_name })}
+              onClick={() => toggle(node.id)}
+              className="text-[var(--color-foreground-muted)]"
+            >
+              <ChevronDown aria-hidden="true" className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            </Button>
+          ) : hasToggles && <ToggleSlot />}
         </div>
-        {expanded && (
-          <ul className="flex flex-col">
-            {entry.children.map(child => renderRow(child, level + 1, node.target_name))}
-          </ul>
-        )}
+        {expanded && renderBranch(entry.children, level + 1, node.target_name)}
       </li>
     )
   }
@@ -176,7 +180,6 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
         <ul className="flex flex-col" data-testid="peer-chain-rows">
           <li>
             <div className="flex min-w-0 items-center gap-1">
-              {hasToggles && <ToggleSlot />}
               <button
                 type="button"
                 aria-pressed={selectedNodeId === null}
@@ -192,10 +195,9 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
                 <span className="min-w-0 truncate text-caption font-medium text-[var(--color-foreground)]">{chain.root.name}</span>
                 <PeerStateBadge state={`chain:${chain.state}`} />
               </button>
+              {hasToggles && <ToggleSlot />}
             </div>
-            <ul className="flex flex-col">
-              {tree.roots.map(entry => renderRow(entry, 1, chain.root.name))}
-            </ul>
+            {renderBranch(tree.roots, 1, chain.root.name)}
           </li>
         </ul>
       )}

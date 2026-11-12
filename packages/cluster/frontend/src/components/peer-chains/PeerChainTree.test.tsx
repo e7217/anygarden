@@ -69,14 +69,23 @@ describe('PeerChainTree', () => {
     expect(rows.querySelector('[data-node-id="Y"] [data-testid="peer-chain-row-label"]')).toHaveTextContent('X → Y')
   })
 
-  it('lines every row up on one toggle column, or none when nothing folds', () => {
-    const slots = () => screen.getByTestId('peer-chain-rows').querySelectorAll('[data-toggle-slot]').length
+  it('keeps the expand control at the end of each row, in one column or none when nothing folds', () => {
+    const slots = () => Array.from(screen.getByTestId('peer-chain-rows').querySelectorAll('[data-toggle-slot]'))
     const { unmount } = renderTree()
-    // Root plus the five shown rows each reserve the column.
-    expect(slots()).toBe(6)
+    // Root plus the five shown rows each reserve the trailing column.
+    expect(slots()).toHaveLength(6)
+    for (const slot of slots()) expect(slot.previousElementSibling?.tagName).toBe('BUTTON')
+    const toggle = screen.getByRole('button', { name: 'Show questions asked by B' })
+    expect(toggle.nextElementSibling).toBeNull()
     unmount()
     renderTree({ chain: sampleChain({ nodes: [node({ id: 'B' }), node({ id: 'D' })] }) })
-    expect(slots()).toBe(0)
+    expect(slots()).toHaveLength(0)
+  })
+
+  it('groups each open branch under one guide line', () => {
+    renderTree()
+    // The root's questions, then the open D → E → F path.
+    expect(screen.getAllByTestId('peer-chain-branch')).toHaveLength(4)
   })
 
   it('switches to the graph view', async () => {
