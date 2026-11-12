@@ -1,7 +1,7 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dagre from 'dagre'
 import {
-  BaseEdge, Controls, Background, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
+  BaseEdge, Controls, Background, Handle, MarkerType, NodeToolbar, Position, ReactFlow, ReactFlowProvider,
   applyNodeChanges, getBezierPath, useNodesInitialized, useNodesState,
   useReactFlow, useStore, useUpdateNodeInternals,
   type Connection, type Edge, type EdgeChange, type EdgeProps, type EdgeTypes, type FinalConnectionState,
@@ -14,7 +14,8 @@ import type { MessageKey } from '@/i18n/messages'
 import { Button } from '@/components/ui/button'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useAgentLinkView } from '@/hooks/useAgentLinkView'
-import { agentNodeSize, reachableFrom, type ActivePeerEdge, type AgentActivity, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
+import { EngineGlyph } from '@/components/EngineGlyph'
+import { agentNodeBox, agentNodeDiameter, reachableFrom, type ActivePeerEdge, type AgentActivity, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
 
 export type LinkSelection = { kind: 'agent'; id: string } | { kind: 'link'; id: string } | null
 interface Props {
@@ -33,7 +34,7 @@ interface Props {
 }
 type Emphasis = 'reach' | 'none'
 interface AgentNodeData extends Record<string, unknown> {
-  name: string; emphasis: Emphasis; width: number; height: number
+  name: string; engine: string | null; emphasis: Emphasis; diameter: number
   status: AgentActivity['state']; statusText: string | null
   room: { id: string; label: string } | null
   onOpenRoom?: (roomId: string) => void
@@ -51,16 +52,27 @@ const IDLE: AgentActivity = { state: 'idle', roomIds: [], unavailableCode: null 
 function viewportDuration() { return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 220 }
 const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData>>) {
   const updateInternals = useUpdateNodeInternals()
-  // React Flow must remeasure handles as a link changes the source's size.
-  useEffect(() => { updateInternals(id) }, [id, data.width, data.height, updateInternals])
+  // React Flow must remeasure handles as a link changes the circle's size.
+  useEffect(() => { updateInternals(id) }, [id, data.diameter, updateInternals])
+  const [hovered, setHovered] = useState(false)
   const tone = data.status === 'busy' ? ' is-busy' : data.status === 'unavailable' ? ' is-unavailable' : ''
-  return <div className={`agent-link-node${tone}${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
-    <span className="agent-link-node__name">{data.status === 'busy' && <span className="agent-link-node__pulse" aria-hidden="true" />}{data.name}</span>
-    {data.statusText && <span className="agent-link-node__status">
-      {data.room && data.onOpenRoom
-        ? <button type="button" className="agent-link-node__room nodrag nopan" onClick={event => { event.stopPropagation(); data.onOpenRoom!(data.room!.id) }}>{data.statusText}</button>
-        : data.statusText}
-    </span>}
+  // #1031 — the circle carries the engine and the state; the card on hover or selection says the rest.
+  return <div className={`agent-link-node${tone}${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`}
+    onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    {data.status === 'busy' && <span className="agent-link-node__aurora" aria-hidden="true" />}
+    <span className="agent-link-node__icon" aria-hidden="true"><EngineGlyph engine={data.engine ?? undefined} size={Math.round(data.diameter / 2)} /></span>
+    <span className="agent-link-node__name">{data.name}</span>
+    <NodeToolbar isVisible={hovered || selected} position={Position.Top} offset={10}>
+      <div className="agent-link-card nodrag nopan" data-testid={`agent-link-card-${id}`}>
+        <span className="agent-link-card__name">{data.name}</span>
+        {data.engine && <span className="agent-link-card__meta">{data.engine}</span>}
+        {data.statusText && <span>
+          {data.room && data.onOpenRoom
+            ? <button type="button" className="agent-link-card__room" onClick={event => { event.stopPropagation(); data.onOpenRoom!(data.room!.id) }}>{data.statusText}</button>
+            : data.statusText}
+        </span>}
+      </div>
+    </NodeToolbar>
     <Handle type="target" position={Position.Left} isConnectableStart={false} />
     <Handle type="source" position={Position.Right} isConnectableEnd={false} />
   </div>
@@ -81,8 +93,8 @@ const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY
     : bezier
   return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} interactionWidth={28} />
 })
-// Reserve room for the top-right tools and bottom-left zoom controls.
-const fitViewOptions = { padding: { top: '64px', bottom: '24px', left: '64px', right: '24px' }, maxZoom: 1 } as const
+// Reserve room for the top-right tools, the bottom-left zoom controls and the last row's names.
+const fitViewOptions = { padding: { top: '64px', bottom: '64px', left: '64px', right: '24px' }, maxZoom: 1 } as const
 const nodeTypes: NodeTypes = { agent: LinkAgentNode }
 const edgeTypes: EdgeTypes = { link: LinkEdge }
 
@@ -90,13 +102,13 @@ function layoutPositions(agents: LinkAgent[], links: AgentLink[], counts: Map<st
   const graph = new dagre.graphlib.Graph()
   graph.setGraph({ rankdir: 'LR', nodesep: 48, ranksep: 96, marginx: 32, marginy: 32 })
   graph.setDefaultEdgeLabel(() => ({}))
-  // Lay out for the taller busy card so a status line never overlaps a neighbour.
-  for (const a of agents) graph.setNode(a.id, agentNodeSize(counts.get(a.id) ?? 0, true))
+  // Lay out the circle with its name under it so names never overlap a neighbour.
+  for (const a of agents) graph.setNode(a.id, agentNodeBox(counts.get(a.id) ?? 0))
   for (const l of links) if (graph.hasNode(l.from_agent_id) && graph.hasNode(l.to_agent_id)) graph.setEdge(l.from_agent_id, l.to_agent_id)
   dagre.layout(graph)
   return new Map(agents.map(a => {
-    const size = agentNodeSize(counts.get(a.id) ?? 0, true), box = graph.node(a.id)
-    return [a.id, { x: box.x - size.width / 2, y: box.y - size.height / 2 }]
+    const n = counts.get(a.id) ?? 0, d = agentNodeDiameter(n), box = graph.node(a.id)
+    return [a.id, { x: box.x - d / 2, y: box.y - agentNodeBox(n).height / 2 }]
   }))
 }
 function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom }: Props) {
@@ -127,7 +139,7 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
       const old = new Map(previous.map(node => [node.id, node]))
       return agents.map(a => {
         const now = activity?.get(a.id) ?? IDLE
-        const existing = old.get(a.id), size = agentNodeSize(counts.get(a.id) ?? 0, now.state !== 'idle')
+        const existing = old.get(a.id), diameter = agentNodeDiameter(counts.get(a.id) ?? 0)
         const firstRoom = now.roomIds[0]
         const label = firstRoom ? `#${roomName?.(firstRoom) ?? t('agentLinks.someRoom')}` : ''
         const statusText = now.state === 'busy'
@@ -136,7 +148,7 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
             ? t(UNAVAILABLE_KEYS[now.unavailableCode ?? ''] ?? 'agentLinks.unavailable.offline')
             : null
         return { ...existing, id: a.id, type: 'agent', position: existing?.position ?? initialView.current.positions[a.id] ?? positions.get(a.id)!,
-          style: size, data: { name: a.name, ...size, emphasis: 'none' as Emphasis, status: now.state, statusText,
+          style: { width: diameter, height: diameter }, data: { name: a.name, engine: a.engine ?? null, diameter, emphasis: 'none' as Emphasis, status: now.state, statusText,
             room: firstRoom ? { id: firstRoom, label } : null, onOpenRoom } }
       })
     })
@@ -162,7 +174,8 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
   const nodes = useMemo(() => localNodes.map(node => {
     const emphasis: Emphasis = reach?.agents.has(node.id) ? 'reach' : 'none'
     return { ...node, selected: selection?.kind === 'agent' && selection.id === node.id,
-      ariaLabel: t('agentLinks.agentNode', { name: node.data.name }), data: { ...node.data, emphasis } }
+      // The state moved off the circle into its card, so the accessible name keeps it.
+      ariaLabel: [t('agentLinks.agentNode', { name: node.data.name }), node.data.statusText].filter(Boolean).join(', '), data: { ...node.data, emphasis } }
   }), [localNodes, selection, reach, t])
   const edges = useMemo<Edge[]>(() => {
     const running = new Set((activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`))

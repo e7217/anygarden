@@ -20,7 +20,7 @@ const ROOT_ID = 'msg-root'
 const WELCOME = 'Welcome to Anygarden'
 
 const agents = [
-  { id: 'a-dev', name: 'Developer', description: null, actual_state: 'running' },
+  { id: 'a-dev', name: 'Developer', description: null, actual_state: 'running', engine: 'codex-cli' },
   { id: 'a-rev', name: 'Reviewer', description: null, actual_state: 'running' },
   { id: 'a-sec', name: 'Security', description: null, actual_state: 'idle' },
 ]
@@ -216,7 +216,7 @@ test.describe('agent links', () => {
     await expect.poll(() => posted).toEqual([{ from_agent_id: 'a-rev', to_agent_id: 'a-sec' }])
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect.poll(async () => (await source.boundingBox())!.width).toBeGreaterThan(before.width)
-    await expect(source.locator('.agent-link-node')).toHaveText('Reviewer')
+    await expect(source.locator('.agent-link-node__name')).toHaveText('Reviewer')
     const sourceHandle = (await handle.boundingBox())!
     const sourceBox = (await source.boundingBox())!
     expect(Math.abs(sourceHandle.x + sourceHandle.width / 2 - sourceBox.x - sourceBox.width)).toBeLessThan(2)
@@ -260,7 +260,7 @@ test.describe('agent links', () => {
     await page.getByRole('button', { name: 'Close details' }).focus()
     await expect(handle).toHaveCSS('opacity', '1')
     await expect(other).toHaveCSS('opacity', '1')
-    await expect(node.locator('.agent-link-node')).toHaveText('Developer')
+    await expect(node.locator('.agent-link-node__name')).toHaveText('Developer')
     // Starting a connection leaves existing endpoint geometry intact.
     const start = (await handle.boundingBox())!
     await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
@@ -367,8 +367,14 @@ test.describe('agent links', () => {
     await expect(page.getByTestId('sidebar-agent-links')).toHaveAttribute('aria-current', 'page')
     const dev = page.getByTestId('rf__node-a-dev')
     await expect(dev.locator('.agent-link-node')).toHaveClass(/is-busy/)
-    await expect(dev).toContainText('Answering in')
-    await expect(page.getByTestId('rf__node-a-sec')).toContainText('Offline')
+    await expect(dev.locator('.agent-link-node__name')).toHaveText('Developer')
+    // #1031 — the state lives in the card that opens on hover, and in the accessible name.
+    await expect(dev).toHaveAttribute('aria-label', /Developer, Answering in/)
+    await dev.locator('.agent-link-node').hover()
+    await expect(page.getByTestId('agent-link-card-a-dev')).toContainText('Answering in')
+    await expect(page.getByTestId('agent-link-card-a-dev')).toContainText('codex-cli')
+    await page.getByTestId('rf__node-a-sec').locator('.agent-link-node').hover()
+    await expect(page.getByTestId('agent-link-card-a-sec')).toContainText('Offline')
     await expect(page.getByRole('complementary', { name: 'What is happening' })).toContainText('Running now')
   })
 
@@ -451,7 +457,7 @@ test.describe('agent links', () => {
 
   for (const theme of ['light', 'dark']) {
     for (const locale of ['en', 'ko']) {
-      test(`[COL-14] slim cards fit reference widths in ${theme}/${locale}`, async ({ page }, testInfo) => {
+      test(`[COL-14] agent circles fit reference widths in ${theme}/${locale}`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width: 1440, height: 1000 })
         await stubWebSocket(page, locale)
         await stubApi(page, [])
@@ -485,7 +491,7 @@ test.describe('agent links', () => {
           const hub = page.getByTestId('rf__node-a-dev')
           await expect(hub).toBeVisible()
           await expect(page.locator('.react-flow__edge')).toHaveCount(5)
-          await expect(page.getByTestId('rf__node-a-design').locator('.agent-link-node')).toHaveAttribute('title', graphAgents[3].name)
+          await expect(page.getByTestId('rf__node-a-design').locator('.agent-link-node__name')).toHaveText(graphAgents[3].name)
           expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
           await capture(`${theme}-${locale}-${width}`)
           await hub.click()
