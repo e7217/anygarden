@@ -5,18 +5,16 @@
 }
 .agent-links-root .react-flow__controls-button:hover { background: var(--color-surface-hover); }
 .agent-links-root .react-flow__controls-button svg { fill: currentColor; }
-.agent-links-root .react-flow__edge-path { stroke-width: 1.25; }
-.agent-links-root .react-flow__edge.is-emphasized .react-flow__edge-path { stroke-width: 1.5; }
+/* #1035 — no arrowheads; a link leaves the asker's right port and enters the answerer's left one. */
+.agent-links-root .react-flow__edge-path { stroke-width: 1.5; }
+.agent-links-root .react-flow__edge.is-emphasized .react-flow__edge-path { stroke-width: 2; }
 .agent-links-root .react-flow__edge:focus-visible { outline: none; }
 /* Every edge is dashed while it flows, so keyboard focus reads through width. */
 .agent-links-root .react-flow__edge:focus-visible .react-flow__edge-path { stroke-width: 2.5; }
-/* COL-19 — only a question running now flows (source → target); resting links keep their arrow. */
+/* COL-19 — only a question running now flows (source → target). */
 .agent-links-root .react-flow__edge.animated .react-flow__edge-path { animation-duration: 1s; }
 .agent-links-root .react-flow__edge.is-active .react-flow__edge-path { stroke-width: 2; }
-@media (prefers-reduced-motion: no-preference) {
-  .agent-links-root .react-flow__edge.animated .react-flow__edge-path { marker-end: none; }
-}
-/* Without motion the dashes stop, so a solid line and an arrow carry direction. */
+/* Without motion the dashes stop: a running question stays a thicker teal solid line. */
 @media (prefers-reduced-motion: reduce) {
   .agent-links-root .react-flow__edge.animated .react-flow__edge-path { animation: none; stroke-dasharray: none; }
 }
@@ -74,11 +72,13 @@
 }
 .agent-links-root .react-flow__handle.connectingto.valid { --xy-handle-background-color: var(--color-brand-text); }
 /* Touch needs a 44px grab area around the small source port. */
+/* The source port is easy to grab: 24px with a mouse, 44px on touch. */
+.agent-links-root .react-flow__handle.source::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 1.5rem; height: 1.5rem;
+  transform: translate(-50%, -50%);
+}
 @media (pointer: coarse) {
-  .agent-links-root .react-flow__handle.source::after {
-    content: ''; position: absolute; left: 50%; top: 50%; width: 2.75rem; height: 2.75rem;
-    transform: translate(-50%, -50%);
-  }
+  .agent-links-root .react-flow__handle.source::after { width: 2.75rem; height: 2.75rem; }
 }
 .agent-link-node.is-unavailable.is-selected { border-style: solid; }
 /* COL-20 — top right: the one thing that needs you (a problem first); bottom right: queued tasks.

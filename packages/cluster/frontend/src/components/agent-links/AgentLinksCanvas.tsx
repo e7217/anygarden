@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dagre from 'dagre'
 import {
-  BaseEdge, Controls, Background, Handle, MarkerType, NodeToolbar, Position, ReactFlow, ReactFlowProvider,
+  BaseEdge, Controls, Background, Handle, NodeToolbar, Position, ReactFlow, ReactFlowProvider,
   applyNodeChanges, getBezierPath, useNodesInitialized, useNodesState,
   useReactFlow, useStore, useUpdateNodeInternals,
   type Connection, type Edge, type EdgeChange, type EdgeProps, type EdgeTypes, type FinalConnectionState,
@@ -34,6 +34,8 @@ interface Props {
   /** COL-20 — what needs the person, per agent id. */
   alerts?: ReadonlyMap<string, AgentAlerts>
   onOpenHref?: (href: string) => void
+  /** #1035 — bring this agent into view; a new ``seq`` moves the map again. */
+  focusAgent?: { id: string; seq: number } | null
 }
 type Emphasis = 'reach' | 'none'
 interface AgentNodeData extends Record<string, unknown> {
@@ -107,7 +109,7 @@ function nodeIdAt(event: MouseEvent | TouchEvent) {
   if (!point) return null
   return document.elementFromPoint(point.clientX, point.clientY)?.closest('.react-flow__node')?.getAttribute('data-id') ?? null
 }
-const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style }: EdgeProps) {
+const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style }: EdgeProps) {
   // A stronger curve keeps the run into each card level instead of hooking at the end.
   const [bezier] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, curvature: 0.5 })
   // A return connection uses a separate lane, keeping both arrows readable.
@@ -115,7 +117,7 @@ const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY
   const path = sourceX > targetX
     ? `M ${sourceX} ${sourceY} C ${sourceX + 48} ${sourceY}, ${sourceX + 48} ${y}, ${sourceX} ${y} L ${targetX - 24} ${y} C ${targetX - 48} ${y}, ${targetX - 48} ${targetY}, ${targetX} ${targetY}`
     : bezier
-  return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} interactionWidth={28} />
+  return <BaseEdge id={id} path={path} style={style} interactionWidth={28} />
 })
 // Reserve room for the top-right tools, the bottom-left zoom controls and the last row's names.
 const fitViewOptions = { padding: { top: '64px', bottom: '64px', left: '64px', right: '24px' }, maxZoom: 1 } as const
@@ -153,7 +155,7 @@ function alertLinesFor(alerts: AgentAlerts, room: (id: string) => string, t: Tra
   if (alerts.queued_tasks > 0) lines.push({ key: 'queued', kind: 'queued', text: t('agentLinks.alert.queued', { count: alerts.queued_tasks }) })
   return lines
 }
-function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom, alerts, onOpenHref }: Props) {
+function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom, alerts, onOpenHref, focusAgent }: Props) {
   const { t } = useLocale()
   const rf = useReactFlow()
   const { view, savePosition, saveViewport, reset } = useAgentLinkView(userId)
@@ -215,6 +217,12 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
       void rf.fitView(fitViewOptions)
     }
   }, [canvasWidth, canvasHeight, rf])
+  useEffect(() => {
+    if (!focusAgent || !rf.getNode(focusAgent.id)) return
+    // Pan only: keep the zoom the person chose.
+    const zoom = rf.getZoom()
+    void rf.fitView({ nodes: [{ id: focusAgent.id }], minZoom: zoom, maxZoom: zoom, duration: viewportDuration() })
+  }, [focusAgent, rf])
   const reach = useMemo(() => selection?.kind === 'agent' ? reachableFrom(selection.id, links) : null, [selection, links])
   const names = useMemo(() => new Map(agents.map(a => [a.id, a.name])), [agents])
   const nodes = useMemo(() => localNodes.map(node => {
@@ -228,24 +236,24 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
   const edges = useMemo<Edge[]>(() => {
     const running = new Set((activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`))
     const ids = new Set(agents.map(a => a.id))
-    // The built-in symbol occupies 8 of its 20 viewBox units: 16 gives a 6.4px chevron.
-    const arrow = (color: string) => ({ type: MarkerType.Arrow, color, width: 16, height: 16, markerUnits: 'userSpaceOnUse' as const, strokeWidth: 1.5 })
+    // #1035 — no arrowheads: a link always leaves the asker's right port and
+    // enters the answerer's left port, so the side it meets tells its direction.
     const linked = links.map(l => {
       const emphasized = selection?.kind === 'link' && selection.id === l.id || !!reach?.links.has(l.id)
       const live = running.delete(`${l.from_agent_id}>${l.to_agent_id}`)
       const color = emphasized || live ? 'var(--color-brand-text)' : 'var(--color-foreground-subtle)'
-      // COL-19 — only a question running now flows; a resting link is a still line with an arrow.
+      // COL-19 — only a question running now flows; a resting link is a still line.
       return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link', animated: live,
         selected: selection?.kind === 'link' && selection.id === l.id, focusable: true,
         ariaLabel: t(live ? 'agentLinks.linkLabelActive' : 'agentLinks.linkLabel', { from: names.get(l.from_agent_id) ?? '?', to: names.get(l.to_agent_id) ?? '?' }),
         className: [emphasized && 'is-emphasized', live && 'is-active'].filter(Boolean).join(' ') || undefined,
-        markerEnd: arrow(color), style: { stroke: color } }
+        style: { stroke: color } }
     })
     // A question between room members needs no link; draw it dashed while it runs.
     const unlinked = [...running].map(key => key.split('>')).filter(([from, to]) => ids.has(from) && ids.has(to)).map(([from, to]) => ({
       id: `activity:${from}>${to}`, source: from, target: to, type: 'link', animated: true,
       selectable: false, focusable: false, className: 'is-activity',
-      markerEnd: arrow('var(--color-brand-text)'), style: { stroke: 'var(--color-brand-text)', strokeDasharray: '3 4' } }))
+      style: { stroke: 'var(--color-brand-text)', strokeDasharray: '3 4' } }))
     return [...linked, ...unlinked]
   }, [agents, links, activeEdges, selection, reach, names, t])
   const onNodesChange = useCallback((changes: NodeChange<Node<AgentNodeData>>[]) => {

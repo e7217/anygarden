@@ -16,13 +16,14 @@ vi.mock('@/components/PageShell', () => ({
   default: ({ children }: { children: ReactNode }) => <main>{children}</main>,
 }))
 vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
-  default: ({ agents, onSelect, onConnect, activity, activeEdges, alerts }: {
+  default: ({ agents, onSelect, onConnect, activity, activeEdges, alerts, focusAgent }: {
     agents: { id: string; name: string }[]
     onSelect: (selection: { kind: 'agent'; id: string } | null) => void
     onConnect: (from: string, to: string) => void
     activity?: Map<string, { state: string; roomIds: string[] }>
     activeEdges?: { from_agent_id: string; to_agent_id: string }[]
     alerts?: Map<string, { queued_tasks: number }>
+    focusAgent?: { id: string; seq: number } | null
   }) => (
     <div data-testid="canvas">
       {agents.map(agent => (
@@ -34,6 +35,7 @@ vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
         {agents.map(agent => `${agent.id}:${activity?.get(agent.id)?.state ?? '-'}`).join(' ')}
       </p>
       <p data-testid="canvas-alerts">{[...(alerts ?? new Map()).entries()].map(([id, a]) => `${id}:${a.queued_tasks}`).join(' ')}</p>
+      <p data-testid="canvas-focus">{focusAgent?.id ?? ''}</p>
       <p data-testid="canvas-edges">{(activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`).join(' ')}</p>
       <button type="button" onClick={() => onConnect('qa', 'coder')}>connect QA to Coder</button>
     </div>
@@ -98,20 +100,45 @@ describe('AgentLinksPage', () => {
     expect(screen.getByTestId('canvas')).toBeInTheDocument()
   })
 
-  it('lists every agent reachable from the selected one', async () => {
+  it('[COL-14] sums up who a selected agent can pull in, without a separate list', async () => {
     fetchMock.mockResolvedValue(json({
       agents,
       links: [link('l1', 'coder', 'sec'), link('l2', 'sec', 'qa'), link('l3', 'docs', 'coder')],
     }))
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'select Coder' }))
-    const reach = within(screen.getByTestId('agent-reach-list'))
-    expect(reach.getByText('Security')).toBeInTheDocument()
-    expect(reach.getByText('QA')).toBeInTheDocument()
-    expect(reach.queryByText('Docs')).not.toBeInTheDocument()
+    const details = screen.getByTestId('agent-reach-details')
+    expect(details).toHaveTextContent('Following links can involve up to 2 agents · highlighted on the map')
+    expect(screen.queryByTestId('agent-reach-list')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'select QA' }))
     expect(screen.getByText('QA has no links, so it answers on its own.')).toBeInTheDocument()
+  })
+
+  it('[COL-14] a linked agent\'s name opens that agent and moves the map to it', async () => {
+    fetchMock.mockResolvedValue(json({ agents, links: [link('l1', 'coder', 'sec'), link('l3', 'docs', 'coder')] }))
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'select Coder' }))
+    expect(screen.getByTestId('canvas-focus')).toHaveTextContent('')
+    fireEvent.click(within(screen.getByTestId('agent-reach-details')).getByRole('button', { name: 'Security' }))
+
+    const details = screen.getByTestId('agent-reach-details')
+    expect(within(details).getByRole('heading', { level: 2 })).toHaveTextContent('Security')
+    expect(screen.queryByTestId('agent-link-details')).not.toBeInTheDocument()
+    expect(screen.getByTestId('canvas-focus')).toHaveTextContent('sec')
+  })
+
+  it('[COL-14] deletes a link from its row after confirming', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fetchMock.mockImplementation(async (_path, init) => init?.method === 'DELETE'
+      ? new Response(null, { status: 204 })
+      : json({ agents, links: [link('l1', 'coder', 'sec'), link('l3', 'docs', 'coder')] }))
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'select Coder' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete link from Docs' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => init?.method === 'DELETE' && String(path).endsWith('/l3'))).toBe(true))
+    expect(confirm).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Delete link to Security' })).toBeInTheDocument()
   })
 
   it('[COL-14] saves a dragged link immediately without a condition dialog', async () => {

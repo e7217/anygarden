@@ -1,5 +1,5 @@
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeftRight, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, ChevronRight, Network, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
 import PageShell from '@/components/PageShell'
 import { Button } from '@/components/ui/button'
 import AgentLinksCanvas, { type LinkSelection } from '@/components/agent-links/AgentLinksCanvas'
@@ -130,6 +130,13 @@ export default function AgentLinksPage() {
     finally { setSaving(n => n - 1) }
   }, [create, notify, t])
 
+  // Picking an agent from the details panel also brings it into view on the map.
+  const [focusAgent, setFocusAgent] = useState<{ id: string; seq: number } | null>(null)
+  const openAgent = useCallback((id: string) => {
+    setSelection({ kind: 'agent', id })
+    setFocusAgent(previous => ({ id, seq: (previous?.seq ?? 0) + 1 }))
+  }, [])
+
   const selectedLink = selection?.kind === 'link' ? links.find(link => link.id === selection.id) ?? null : null
   const selectedAgent = selection?.kind === 'agent' ? agents.find(agent => agent.id === selection.id) ?? null : null
 
@@ -169,6 +176,7 @@ export default function AgentLinksPage() {
               onOpenRoom={openRoom}
               alerts={alerts}
               onOpenHref={openHref}
+              focusAgent={focusAgent}
             />
           </CanvasBoundary>
           {links.length === 0 && (
@@ -203,7 +211,8 @@ export default function AgentLinksPage() {
                 onAdd={agents.some(a => a.id !== selectedAgent.id && !links.some(l => l.from_agent_id === selectedAgent.id && l.to_agent_id === a.id)) ? () => setEditor({ fromId: selectedAgent.id, lockFrom: true }) : undefined}
                 links={links}
                 nameOf={nameOf}
-                onSelectLink={id => setSelection({ kind: 'link', id })}
+                onOpenAgent={openAgent}
+                onDeleteLink={link => void askDelete(link)}
               />
             )}
           </DetailsPanel>
@@ -306,27 +315,33 @@ function LinkDetails({ link, nameOf, onReverse, onDelete }: {
   </div>
 }
 
-function AgentDetails({ agent, user, onAdd, links, nameOf, onSelectLink }: {
+function AgentDetails({ agent, user, onAdd, links, nameOf, onOpenAgent, onDeleteLink }: {
   user: { id: string; is_admin: boolean } | null
   onAdd?: () => void
   agent: LinkAgent
   links: AgentLink[]
   nameOf: (id: string) => string
-  onSelectLink: (id: string) => void
+  onOpenAgent: (id: string) => void
+  onDeleteLink: (link: AgentLink) => void
 }) {
-  const { t } = useLocale()
-  const reachable = [...reachableFrom(agent.id, links).agents].filter(id => id !== agent.id).map(nameOf).sort()
+  const { t, formatNumber } = useLocale()
+  const reachable = [...reachableFrom(agent.id, links).agents].filter(id => id !== agent.id)
   const outgoing = links.filter(link => link.from_agent_id === agent.id)
   const incoming = links.filter(link => link.to_agent_id === agent.id)
-  const linkRow = (link: AgentLink, otherId: string) => (
-    <li key={link.id}>
+  // #1035 — a name opens that agent; the row's own button removes the link.
+  const linkRow = (link: AgentLink, otherId: string, deleteLabel: string) => (
+    <li key={link.id} className="flex items-center gap-1">
       <button
         type="button"
-        onClick={() => onSelectLink(link.id)}
-        className="w-full rounded-[var(--radius-sm)] px-2 py-1.5 text-left hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+        onClick={() => onOpenAgent(otherId)}
+        className="flex min-h-[var(--control-height)] min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left text-caption font-medium text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
       >
-        <span className="block text-caption font-medium text-[var(--color-foreground)]">{nameOf(otherId)}</span>
+        <span className="min-w-0 flex-1 truncate">{nameOf(otherId)}</span>
+        <ChevronRight className="size-4 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
       </button>
+      <Button variant="ghost" size="icon" onClick={() => onDeleteLink(link)} aria-label={deleteLabel} title={deleteLabel}>
+        <X />
+      </Button>
     </li>
   )
   return (
@@ -337,32 +352,23 @@ function AgentDetails({ agent, user, onAdd, links, nameOf, onSelectLink }: {
       </div>
       <AgentConversationsPanel key={`${user?.id ?? ''}:${agent.id}`} agentId={agent.id} user={user} />
       {onAdd && <Button variant="outline" size="sm" onClick={onAdd}><Plus />{t('agentLinks.addLink')}</Button>}
-      <div>
-        <h3 className="text-caption font-semibold text-[var(--color-foreground)]">{t('agentLinks.reachTitle', { name: agent.name })}</h3>
-        {reachable.length === 0 ? (
-          <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.reachNone', { name: agent.name })}</p>
-        ) : (
-          <>
-            <ul className="mt-1 flex flex-wrap gap-1.5" data-testid="agent-reach-list">
-              {reachable.map(name => (
-                <li key={name} className="rounded-[var(--radius-pill)] border border-[var(--color-brand-text)] px-2 py-0.5 text-badge text-[var(--color-brand-text)]">{name}</li>
-              ))}
-            </ul>
-            <p className="mt-2 text-badge text-[var(--color-foreground-muted)]">{t('agentLinks.reachHint', { name: agent.name })}</p>
-          </>
-        )}
-      </div>
+      <p className="flex items-start gap-2 text-caption text-[var(--color-foreground-muted)]">
+        <Network className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span>{reachable.length === 0
+          ? t('agentLinks.reachNone', { name: agent.name })
+          : t('agentLinks.reachSummary', { count: formatNumber(reachable.length) })}</span>
+      </p>
       <div>
         <h3 className="text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('agentLinks.outgoing')}</h3>
         {outgoing.length === 0
           ? <p className="mt-1 text-caption text-[var(--color-foreground-subtle)]">{t('agentLinks.none')}</p>
-          : <ul className="mt-1 space-y-0.5">{outgoing.map(link => linkRow(link, link.to_agent_id))}</ul>}
+          : <ul className="mt-1 space-y-0.5">{outgoing.map(link => linkRow(link, link.to_agent_id, t('agentLinks.deleteNamed', { to: nameOf(link.to_agent_id) })))}</ul>}
       </div>
       <div>
         <h3 className="text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('agentLinks.incoming')}</h3>
         {incoming.length === 0
           ? <p className="mt-1 text-caption text-[var(--color-foreground-subtle)]">{t('agentLinks.none')}</p>
-          : <ul className="mt-1 space-y-0.5">{incoming.map(link => linkRow(link, link.from_agent_id))}</ul>}
+          : <ul className="mt-1 space-y-0.5">{incoming.map(link => linkRow(link, link.from_agent_id, t('agentLinks.deleteIncoming', { from: nameOf(link.from_agent_id) })))}</ul>}
       </div>
     </div>
   )
