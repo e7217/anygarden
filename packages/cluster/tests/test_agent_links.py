@@ -480,6 +480,18 @@ class TestOverviewApi:
         assert "Traceback" not in json.dumps(listed)
 
     @pytest.mark.asyncio
+    @pytest.mark.req("COL-14")
+    async def test_agents_carry_their_engine(self, ws_env) -> None:
+        app, sf = ws_env["app"], ws_env["session_factory"]
+        agent_id = await _add_outside_agent(sf, "엔진")
+
+        with TestClient(app) as client:
+            listed = client.get("/api/v1/agent-links", headers=_auth(ws_env["token"])).json()
+
+        by_id = {a["id"]: a for a in listed["agents"]}
+        assert by_id[agent_id]["engine"] == "codex"
+
+    @pytest.mark.asyncio
     @pytest.mark.req("COL-19")
     async def test_running_questions_are_listed_as_agent_edges(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]

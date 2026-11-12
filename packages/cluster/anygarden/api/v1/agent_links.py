@@ -40,6 +40,8 @@ class AgentBriefOut(BaseModel):
     # #1023 — the overview dims agents that cannot answer. Only the code is
     # exposed; the UI words it, and failure details stay admin-only.
     unavailable_code: str | None = None
+    # #1031 — the map draws each agent as its engine's logo.
+    engine: str | None = None
 
 
 class AgentLinkOut(BaseModel):
@@ -101,6 +103,7 @@ async def list_agent_links(
                 description=a.description,
                 actual_state=a.actual_state,
                 unavailable_code=a.unavailable_code,
+                engine=a.engine,
             )
             for a in agents
         ],

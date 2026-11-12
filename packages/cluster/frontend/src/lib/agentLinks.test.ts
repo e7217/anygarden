@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentLinkError, agentActivity, createAgentLink, deleteAgentLink, fetchActivePeerEdges, fetchAgentLinkGraph, findCycles, reachableFrom, agentNodeSize, type AgentLink, type LinkAgent } from './agentLinks'
+import { AgentLinkError, agentActivity, createAgentLink, deleteAgentLink, fetchActivePeerEdges, fetchAgentLinkGraph, findCycles, reachableFrom, agentNodeDiameter, agentNodeBox, type AgentLink, type LinkAgent } from './agentLinks'
 import { isLinkParticipant, roomMembers, type Participant } from './participants'
 import { apiFetch } from './api'
 
@@ -102,11 +102,17 @@ describe('room members', () => {
   })
 })
 
-it('keeps nodes compact and caps emphasis for many outgoing links', () => {
-  expect(agentNodeSize(0).height).toBeGreaterThanOrEqual(44)
-  expect(agentNodeSize(2).width).toBeGreaterThan(agentNodeSize(0).width)
-  expect(agentNodeSize(20)).toEqual(agentNodeSize(4))
-  expect(agentNodeSize(20).width).toBeLessThanOrEqual(128)
+it('grows the circle 5% per outgoing link without a cap', () => {
+  expect(agentNodeDiameter(0)).toBe(40)
+  expect(agentNodeDiameter(1)).toBe(42)
+  expect(agentNodeDiameter(4)).toBe(48)
+  expect(agentNodeDiameter(20)).toBe(80)
+  expect(agentNodeDiameter(-1)).toBe(40)
+})
+
+it('lays out the circle with room for a two-line name under it', () => {
+  expect(agentNodeBox(0)).toEqual({ width: 124, height: 40 + 40 })
+  expect(agentNodeBox(60)).toEqual({ width: 160, height: 160 + 40 })
 })
 
 describe('agentActivity', () => {
@@ -138,7 +144,3 @@ describe('active peer edges', () => {
   })
 })
 
-it('gives a busy card room for its status line [COL-19]', () => {
-  expect(agentNodeSize(0, true).width).toBeGreaterThanOrEqual(176)
-  expect(agentNodeSize(0, true).height).toBeGreaterThan(agentNodeSize(0).height)
-})

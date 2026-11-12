@@ -27,6 +27,8 @@ export interface LinkAgent {
   actual_state: string
   /** #1023 — why it cannot answer, worded by the UI; null when fine. */
   unavailable_code?: string | null
+  /** #1031 — drawn as the engine's logo. */
+  engine?: string | null
 }
 
 export interface AgentLinkGraph {
@@ -207,13 +209,19 @@ function cycleThrough(component: string[], outgoing: Map<string, string[]>): str
   return [start]
 }
 
-/** Small, capped visual emphasis; incoming and indirect links do not count. */
-export function agentNodeSize(outgoingCount: number, withStatus = false) {
-  const count = Math.min(4, Math.max(0, outgoingCount))
-  // #1023 — a busy or unavailable card adds one status line and room for it.
-  return withStatus
-    ? { width: 184, height: 60 + count * 2 }
-    : { width: 96 + count * 8, height: 44 + count * 2 }
+/** #1031 — a circle that grows 5% per distinct outgoing link, with no cap. */
+export function agentNodeDiameter(outgoingCount: number) {
+  return Math.round(40 * (1 + 0.05 * Math.max(0, outgoingCount)))
+}
+
+/** The name sits under the circle: at most this wide and two lines tall. */
+export const AGENT_NAME_WIDTH = 124
+export const AGENT_NAME_HEIGHT = 40
+
+/** Space the layout reserves for a circle and the name under it. */
+export function agentNodeBox(outgoingCount: number) {
+  const d = agentNodeDiameter(outgoingCount)
+  return { width: Math.max(d, AGENT_NAME_WIDTH), height: d + AGENT_NAME_HEIGHT }
 }
 
 /** #1023 — an agent-to-agent question running now in a room the person can open. */
