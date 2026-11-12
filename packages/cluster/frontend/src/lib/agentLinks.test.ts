@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentLinkError, agentActivity, createAgentLink, deleteAgentLink, fetchActivePeerEdges, fetchAgentLinkGraph, findCycles, reachableFrom, agentNodeDiameter, agentNodeBox, type AgentLink, type LinkAgent } from './agentLinks'
+import { AgentLinkError, agentActivity, createAgentLink, deleteAgentLink, fetchActivePeerEdges, fetchAgentAlerts, fetchAgentLinkGraph, topAlert, findCycles, reachableFrom, agentNodeDiameter, agentNodeBox, type AgentLink, type LinkAgent } from './agentLinks'
 import { isLinkParticipant, roomMembers, type Participant } from './participants'
 import { apiFetch } from './api'
 
@@ -144,3 +144,22 @@ describe('active peer edges', () => {
   })
 })
 
+
+describe('agent alerts [COL-20]', () => {
+  const none = { agent_id: 'a', failed_tasks: [], failed_tasks_count: 0, failed_rooms: [], waiting: [], waiting_count: 0, unread_rooms: [], queued_tasks: 0 }
+
+  it('shows one alert: a problem, then waiting, then unread', () => {
+    expect(topAlert(undefined)).toBeNull()
+    expect(topAlert({ ...none, queued_tasks: 3 })).toBeNull()
+    expect(topAlert({ ...none, unread_rooms: ['r'] })).toBe('unread')
+    expect(topAlert({ ...none, unread_rooms: ['r'], waiting_count: 1 })).toBe('waiting')
+    expect(topAlert({ ...none, waiting_count: 1, failed_rooms: ['r'] })).toBe('issue')
+    expect(topAlert({ ...none, failed_tasks_count: 1 })).toBe('issue')
+  })
+
+  it('reads the alerts endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ agents: [none] }), { status: 200 }))
+    expect(await fetchAgentAlerts()).toEqual([none])
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/agent-links/alerts', expect.anything())
+  })
+})

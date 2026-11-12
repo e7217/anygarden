@@ -11,6 +11,7 @@ whole chain.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -195,6 +196,42 @@ async def list_active_peer_edges(
         include_shared=True,
     )
     return {"edges": await list_active_edges(db, room_ids=set(room_ids))}
+
+
+@router.get("/api/v1/agent-links/alerts")
+async def list_agent_alerts(
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """#1032 — what needs the person, per agent, across the rooms they can open.
+
+    Same rooms as ``GET /api/v1/turns/active``; project approvals and
+    questions come from the person's inbox so they match it exactly.
+    """
+    from anygarden.orchestration.agent_alerts import agent_alerts
+    from anygarden.project_executions.inbox import list_inbox
+
+    _require_person(identity)
+    room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="rooms.collection",
+        channel_service=getattr(request.app.state, "channel_service", None),
+        include_shared=True,
+    )
+    config = getattr(request.app.state, "config", None)
+    inbox = await list_inbox(
+        db, identity=identity, targets=getattr(config, "project_action_targets", {})
+    )
+    alerts = await agent_alerts(
+        db,
+        room_ids=room_ids,
+        user_id=identity.id,
+        inbox_items=inbox.get("items", []),
+        now=datetime.now(UTC),
+    )
+    return {"agents": [{"agent_id": agent_id, **a} for agent_id, a in sorted(alerts.items())]}
 
 
 @router.post("/api/v1/rooms/{room_id}/peer-chains/{chain_id}/cancel")

@@ -9,13 +9,13 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import './agentLinks.css'
-import { LayoutGrid, Maximize2 } from 'lucide-react'
+import { Clock3, LayoutGrid, Maximize2 } from 'lucide-react'
 import type { MessageKey } from '@/i18n/messages'
 import { Button } from '@/components/ui/button'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useAgentLinkView } from '@/hooks/useAgentLinkView'
 import { EngineGlyph } from '@/components/EngineGlyph'
-import { agentNodeBox, agentNodeDiameter, reachableFrom, type ActivePeerEdge, type AgentActivity, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
+import { agentNodeBox, agentNodeDiameter, reachableFrom, topAlert, type ActivePeerEdge, type AgentActivity, type AgentAlertKind, type AgentAlerts, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
 
 export type LinkSelection = { kind: 'agent'; id: string } | { kind: 'link'; id: string } | null
 interface Props {
@@ -31,6 +31,9 @@ interface Props {
   activeEdges?: readonly ActivePeerEdge[]
   roomName?: (roomId: string) => string | null
   onOpenRoom?: (roomId: string) => void
+  /** COL-20 — what needs the person, per agent id. */
+  alerts?: ReadonlyMap<string, AgentAlerts>
+  onOpenHref?: (href: string) => void
 }
 type Emphasis = 'reach' | 'none'
 interface AgentNodeData extends Record<string, unknown> {
@@ -38,7 +41,17 @@ interface AgentNodeData extends Record<string, unknown> {
   status: AgentActivity['state']; statusText: string | null
   room: { id: string; label: string } | null
   onOpenRoom?: (roomId: string) => void
+  /** COL-20 — the one badge at the top right, the queued count at the bottom right, and the card's lines. */
+  alert: AgentAlertKind | null
+  queued: number
+  alertLines: AlertLine[]
+  onOpenHref?: (href: string) => void
 }
+interface AlertLine { key: string; kind: AgentAlertKind | 'queued'; text: string; roomId?: string | null; href?: string | null }
+const ALERT_LABELS: Record<AgentAlertKind, MessageKey> = {
+  issue: 'agentLinks.alert.issue', waiting: 'agentLinks.alert.waiting', unread: 'agentLinks.alert.unread',
+}
+const CARD_ROOMS = 3
 const UNAVAILABLE_KEYS: Record<string, MessageKey> = {
   crashed: 'agentLinks.unavailable.crashed',
   crash_loop: 'agentLinks.unavailable.crashed',
@@ -62,6 +75,10 @@ const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodePr
     {data.status === 'busy' && <span className="agent-link-node__aurora" aria-hidden="true" />}
     <span className="agent-link-node__icon" aria-hidden="true"><EngineGlyph engine={data.engine ?? undefined} size={Math.round(data.diameter / 2)} /></span>
     <span className="agent-link-node__name">{data.name}</span>
+    {data.alert && <span className={`agent-link-alert is-${data.alert}`} aria-hidden="true">
+      {data.alert === 'issue' ? '!' : data.alert === 'waiting' ? <Clock3 strokeWidth={3} /> : null}
+    </span>}
+    {data.queued > 0 && <span className="agent-link-queue" aria-hidden="true">{data.queued}</span>}
     <NodeToolbar isVisible={hovered || selected} position={Position.Top} offset={10}>
       <div className="agent-link-card nodrag nopan" data-testid={`agent-link-card-${id}`}>
         <span className="agent-link-card__name">{data.name}</span>
@@ -71,6 +88,13 @@ const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodePr
             ? <button type="button" className="agent-link-card__room" onClick={event => { event.stopPropagation(); data.onOpenRoom!(data.room!.id) }}>{data.statusText}</button>
             : data.statusText}
         </span>}
+        {data.alertLines.map(line => {
+          const open = line.href && data.onOpenHref ? () => data.onOpenHref!(line.href!)
+            : line.roomId && data.onOpenRoom ? () => data.onOpenRoom!(line.roomId!) : null
+          return <span key={line.key} className={`agent-link-card__alert is-${line.kind}`}>
+            {open ? <button type="button" className="agent-link-card__room" onClick={event => { event.stopPropagation(); open() }}>{line.text}</button> : line.text}
+          </span>
+        })}
       </div>
     </NodeToolbar>
     <Handle type="target" position={Position.Left} isConnectableStart={false} />
@@ -111,7 +135,25 @@ function layoutPositions(agents: LinkAgent[], links: AgentLink[], counts: Map<st
     return [a.id, { x: box.x - d / 2, y: box.y - agentNodeBox(n).height / 2 }]
   }))
 }
-function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom }: Props) {
+type Translate = ReturnType<typeof useLocale>['t']
+/** COL-20 — the card lists every alert, each opening its room or item. */
+function alertLinesFor(alerts: AgentAlerts, room: (id: string) => string, t: Translate): AlertLine[] {
+  const lines: AlertLine[] = []
+  const more = (key: string, kind: AlertLine['kind'], shown: number, total: number) => {
+    if (total > shown) lines.push({ key: `${key}:more`, kind, text: t('agentLinks.alert.more', { count: total - shown }) })
+  }
+  for (const task of alerts.failed_tasks) lines.push({ key: `task:${task.id}`, kind: 'issue', text: t('agentLinks.alert.failedTask', { title: task.title }), roomId: task.room_id })
+  more('task', 'issue', alerts.failed_tasks.length, alerts.failed_tasks_count)
+  for (const id of alerts.failed_rooms.slice(0, CARD_ROOMS)) lines.push({ key: `failed:${id}`, kind: 'issue', text: t('agentLinks.alert.failedRoom', { room: room(id) }), roomId: id })
+  more('failed', 'issue', Math.min(CARD_ROOMS, alerts.failed_rooms.length), alerts.failed_rooms.length)
+  for (const item of alerts.waiting) lines.push({ key: `wait:${item.id}`, kind: 'waiting', text: t('agentLinks.alert.waitingItem', { title: item.title }), roomId: item.room_id, href: item.href })
+  more('wait', 'waiting', alerts.waiting.length, alerts.waiting_count)
+  for (const id of alerts.unread_rooms.slice(0, CARD_ROOMS)) lines.push({ key: `unread:${id}`, kind: 'unread', text: t('agentLinks.alert.unreadRoom', { room: room(id) }), roomId: id })
+  more('unread', 'unread', Math.min(CARD_ROOMS, alerts.unread_rooms.length), alerts.unread_rooms.length)
+  if (alerts.queued_tasks > 0) lines.push({ key: 'queued', kind: 'queued', text: t('agentLinks.alert.queued', { count: alerts.queued_tasks }) })
+  return lines
+}
+function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom, alerts, onOpenHref }: Props) {
   const { t } = useLocale()
   const rf = useReactFlow()
   const { view, savePosition, saveViewport, reset } = useAgentLinkView(userId)
@@ -147,12 +189,16 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
           : now.state === 'unavailable'
             ? t(UNAVAILABLE_KEYS[now.unavailableCode ?? ''] ?? 'agentLinks.unavailable.offline')
             : null
+        // COL-20 — an agent that cannot answer shows its outline only, no badges.
+        const mine = now.state === 'unavailable' ? undefined : alerts?.get(a.id)
+        const alertLines = mine ? alertLinesFor(mine, id => `#${roomName?.(id) ?? t('agentLinks.someRoom')}`, t) : []
         return { ...existing, id: a.id, type: 'agent', position: existing?.position ?? initialView.current.positions[a.id] ?? positions.get(a.id)!,
           style: { width: diameter, height: diameter }, data: { name: a.name, engine: a.engine ?? null, diameter, emphasis: 'none' as Emphasis, status: now.state, statusText,
-            room: firstRoom ? { id: firstRoom, label } : null, onOpenRoom } }
+            room: firstRoom ? { id: firstRoom, label } : null, onOpenRoom,
+            alert: topAlert(mine), queued: mine?.queued_tasks ?? 0, alertLines, onOpenHref } }
       })
     })
-  }, [agents, counts, positions, setLocalNodes, activity, roomName, onOpenRoom, t])
+  }, [agents, counts, positions, setLocalNodes, activity, roomName, onOpenRoom, alerts, onOpenHref, t])
   useEffect(() => {
     if (!initialized || restored.current) return
     restored.current = true
@@ -175,7 +221,9 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
     const emphasis: Emphasis = reach?.agents.has(node.id) ? 'reach' : 'none'
     return { ...node, selected: selection?.kind === 'agent' && selection.id === node.id,
       // The state moved off the circle into its card, so the accessible name keeps it.
-      ariaLabel: [t('agentLinks.agentNode', { name: node.data.name }), node.data.statusText].filter(Boolean).join(', '), data: { ...node.data, emphasis } }
+      ariaLabel: [t('agentLinks.agentNode', { name: node.data.name }), node.data.statusText,
+        node.data.alert && t(ALERT_LABELS[node.data.alert]),
+        node.data.queued > 0 && t('agentLinks.alert.queued', { count: node.data.queued })].filter(Boolean).join(', '), data: { ...node.data, emphasis } }
   }), [localNodes, selection, reach, t])
   const edges = useMemo<Edge[]>(() => {
     const running = new Set((activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`))

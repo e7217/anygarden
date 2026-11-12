@@ -75,6 +75,15 @@ export const agentLinksEn = {
   'agentLinks.roomsWithNews': 'Rooms with news',
   'agentLinks.quiet': 'Nothing is running and nothing needs you right now.',
   'agentLinks.asking': '{{from}} → {{to}}',
+  'agentLinks.alert.issue': 'Has a problem',
+  'agentLinks.alert.waiting': 'Waiting for you',
+  'agentLinks.alert.unread': 'Unread answer',
+  'agentLinks.alert.queued': '{{count}} queued tasks',
+  'agentLinks.alert.failedTask': 'Failed: {{title}}',
+  'agentLinks.alert.failedRoom': 'Last answer failed in {{room}}',
+  'agentLinks.alert.waitingItem': 'Waiting for you: {{title}}',
+  'agentLinks.alert.unreadRoom': 'Unread answer in {{room}}',
+  'agentLinks.alert.more': '+{{count}} more',
 } as const
 
 export const agentLinksKo: Record<keyof typeof agentLinksEn, string> = {
@@ -153,4 +162,13 @@ export const agentLinksKo: Record<keyof typeof agentLinksEn, string> = {
   'agentLinks.roomsWithNews': '새 소식 있는 룸',
   'agentLinks.quiet': '지금은 진행 중인 일도, 확인할 일도 없어요.',
   'agentLinks.asking': '{{from}} → {{to}}',
+  'agentLinks.alert.issue': '문제 있음',
+  'agentLinks.alert.waiting': '내 응답 대기',
+  'agentLinks.alert.unread': '읽지 않은 답변',
+  'agentLinks.alert.queued': '밀린 작업 {{count}}개',
+  'agentLinks.alert.failedTask': '실패: {{title}}',
+  'agentLinks.alert.failedRoom': '{{room}}에서 마지막 답변 실패',
+  'agentLinks.alert.waitingItem': '내 응답 대기: {{title}}',
+  'agentLinks.alert.unreadRoom': '{{room}}에 읽지 않은 답변',
+  'agentLinks.alert.more': '외 {{count}}개',
 }
