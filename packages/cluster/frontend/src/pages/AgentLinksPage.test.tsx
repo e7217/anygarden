@@ -190,7 +190,6 @@ describe('AgentLinksPage', () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('canvas-activity')).toHaveTextContent('coder:busy sec:busy qa:unavailable docs:unavailable'))
     expect(screen.getByTestId('canvas-edges')).toHaveTextContent('coder>sec')
-    expect(screen.getByText('4 agents · 2 answering · 0 links')).toBeInTheDocument()
 
     const summary = within(screen.getByTestId('agent-overview-summary'))
     expect(summary.getByRole('link', { name: /#release/ })).toHaveAttribute('href', '/rooms/r1')

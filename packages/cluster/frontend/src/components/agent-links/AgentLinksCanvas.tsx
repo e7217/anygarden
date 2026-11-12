@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import dagre from 'dagre'
 import {
   BaseEdge, Controls, Background, Handle, NodeToolbar, Position, ReactFlow, ReactFlowProvider,
@@ -36,6 +36,9 @@ interface Props {
   onOpenHref?: (href: string) => void
   /** #1035 — bring this agent into view; a new ``seq`` moves the map again. */
   focusAgent?: { id: string; seq: number } | null
+  /** Page actions around the layout buttons: secondary ones first, the primary one last. */
+  leadingActions?: ReactNode
+  actions?: ReactNode
 }
 type Emphasis = 'reach' | 'none'
 interface AgentNodeData extends Record<string, unknown> {
@@ -155,7 +158,7 @@ function alertLinesFor(alerts: AgentAlerts, room: (id: string) => string, t: Tra
   if (alerts.queued_tasks > 0) lines.push({ key: 'queued', kind: 'queued', text: t('agentLinks.alert.queued', { count: alerts.queued_tasks }) })
   return lines
 }
-function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom, alerts, onOpenHref, focusAgent }: Props) {
+function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom, alerts, onOpenHref, focusAgent, leadingActions, actions }: Props) {
   const { t } = useLocale()
   const rf = useReactFlow()
   const { view, savePosition, saveViewport, reset } = useAgentLinkView(userId)
@@ -294,12 +297,14 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
       onPaneClick={() => select(null)} deleteKeyCode={null} connectionRadius={32}
       connectionLineStyle={{ stroke: 'var(--color-brand-text)', strokeWidth: 1.5 }}
       minZoom={0.3} maxZoom={2} proOptions={{ hideAttribution: true }}>
-      <Background color="var(--color-border-subtle)" gap={16} size={1} />
+      <Background color="var(--color-border-strong)" gap={20} size={1.25} />
       <Controls showInteractive={false} showFitView={false} />
     </ReactFlow>
-    <div className="absolute right-3 top-3 z-10 flex gap-2">
+    <div className="absolute right-3 top-3 z-10 flex flex-wrap justify-end gap-2">
+      {leadingActions}
       <Button variant="outline" size="sm" onClick={rearrange} title={t('agentLinks.rearrangeHint')}><LayoutGrid />{t('agentLinks.rearrange')}</Button>
       <Button variant="outline" size="icon" onClick={() => void rf.fitView({ ...fitViewOptions, duration: viewportDuration() })} aria-label={t('agentLinks.fitView')} title={t('agentLinks.fitView')}><Maximize2 /></Button>
+      {actions}
     </div>
   </div>
 }
