@@ -86,6 +86,11 @@ class TaskOut(BaseModel):
     assignee_participant_id: Optional[str] = None
     created_by: Optional[str] = None
     created_at: str
+    # Lifecycle stamps for the task detail timeline: latest assignment,
+    # latest start (claim or move to in_progress) and terminal finish.
+    assigned_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
     source_message_id: Optional[str] = None
     source_thread_root_id: Optional[str] = None
     # #302 — goal-derived task fields. NULL on manual rows. Surfaced
@@ -216,6 +221,9 @@ async def _to_out(
         assignee_participant_id=task.assignee_participant_id,
         created_by=task.created_by,
         created_at=task.created_at.isoformat(),
+        assigned_at=task.assigned_at.isoformat() if task.assigned_at else None,
+        started_at=task.started_at.isoformat() if task.started_at else None,
+        finished_at=task.finished_at.isoformat() if task.finished_at else None,
         source_message_id=task.source_message_id,
         source_thread_root_id=await source_thread_root_id(db, task),
         goal_id=task.goal_id,

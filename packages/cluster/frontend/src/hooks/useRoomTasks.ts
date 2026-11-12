@@ -61,6 +61,10 @@ export interface Task {
   assignee_participant_id: string | null
   created_by?: string | null
   created_at: string
+  // Lifecycle stamps for the detail timeline; older servers omit them.
+  assigned_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
   source_message_id?: string | null
   source_thread_root_id?: string | null
   // Optional — populated only when the server has run the #302

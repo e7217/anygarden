@@ -1,22 +1,8 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import {
-  Plus,
-  CheckCircle2,
-  Circle,
-  Clock,
-  PauseCircle,
-  XCircle,
-  Trash2,
-  Wand2,
-  Loader2,
-} from 'lucide-react'
+import { Plus, Trash2, Wand2, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
-import MarkdownContent from '@/components/MarkdownContent'
-import { DispositionNotice } from '@/components/ExecutionState'
-import TaskRecoveryState, { hasTaskRecovery } from '@/components/TaskRecoveryState'
 import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
 import { taskPresentation } from '@/lib/taskPresentation'
 import { autoRouteUnassigned } from '@/lib/routing'
@@ -24,6 +10,10 @@ import type { Participant } from '@/pages/ChatPage'
 import { isLinkParticipant } from '@/lib/participants'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import { useNow } from '@/lib/elapsed'
+import { formatAgo, formatRunning, msSince } from '@/lib/taskTime'
+import TaskDetailDialog from './TaskDetailDialog'
+import { STATUS_ICON, statusIconColor } from './taskStatusIcon'
 
 interface TasksSectionProps {
   roomId: string
@@ -31,79 +21,10 @@ interface TasksSectionProps {
   onNavigate?: () => void
 }
 
-// #319 — ``blocked`` / ``failed`` are system-set statuses (the goals
-// sweeper stamps ``failed`` on pickup/execution timeouts; agents can
-// stamp ``blocked`` themselves via ``mark_task_status``). They render
-// in their own status group but are deliberately *not* in the user
-// toggle cycle — the click toggle stays on actionable transitions.
+// Current work is one list ordered by status; the row icon carries the
+// status, so the list needs no per-status headings.
 const STATUS_ORDER = ['in_progress', 'cancelling', 'blocked', 'failed', 'todo'] as const
-const STATUS_ICON: Record<string, typeof Circle> = {
-  todo: Circle,
-  in_progress: Clock,
-  done: CheckCircle2,
-  blocked: PauseCircle,
-  failed: XCircle,
-  cancelled: XCircle,
-  cancelling: PauseCircle,
-  superseded: PauseCircle,
-}
 
-function TaskExecutionDetails({ task, onNavigate }: { task: Task; onNavigate?: () => void }) {
-  const { t, formatDate } = useLocale()
-  const dependencies = task.dependency_results ?? []
-  const schedule = task.schedule_context
-  const originalRequest = task.execution_operating_room_id && task.execution_source_message_id
-    ? `/rooms/${task.execution_operating_room_id}?message=${encodeURIComponent(task.execution_source_message_id)}` : null
-  if (!task.spec?.trim() && !task.result_markdown?.trim() && dependencies.length === 0 && !schedule && !originalRequest && !task.execution_objective?.trim()) return null
-  return (
-    <details data-testid={`right-rail-task-details-${task.id}`} className="min-w-0 px-2 pb-2">
-      <summary className="min-h-11 cursor-pointer content-center text-xs font-medium text-[var(--color-foreground-muted)] md:min-h-8">
-        {t('tasks.details')}
-      </summary>
-      <div className="min-w-0 space-y-3 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-sm [overflow-wrap:anywhere]">
-        {task.execution_objective?.trim() && (
-          <div><p className="mb-1 text-xs font-semibold">{t('tasks.originalRequest')}</p><MarkdownContent content={task.execution_objective} /></div>
-        )}
-        {originalRequest && <Link data-testid={`right-rail-task-source-${task.id}`} to={originalRequest} onClick={onNavigate} className="flex min-h-11 items-center text-xs text-[var(--color-brand-text)] underline md:min-h-8">{t('tasks.openOriginalRequest')}</Link>}
-        {task.parent_task_title && <p className="text-xs text-[var(--color-foreground-muted)]">{t('tasks.parentTask')}: {task.parent_task_title}</p>}
-        {task.spec?.trim() && (
-          <div><p className="mb-1 text-xs font-semibold">{t('tasks.instructions')}</p><MarkdownContent content={task.spec} /></div>
-        )}
-        {task.result_markdown?.trim() && (
-          <div><p className="mb-1 text-xs font-semibold">{t('tasks.result')}</p>{task.result_version != null && task.result_version > 0 && <p className="mb-1 text-xs text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: task.result_version })}</p>}<MarkdownContent content={task.result_markdown} /></div>
-        )}
-        {dependencies.length > 0 && (
-          <div>
-            <p className="mb-1 text-xs font-semibold">{t('tasks.sourceResults')}</p>
-            <div className="space-y-2">
-              {dependencies.map(source => (
-                <div key={source.task_id} className="min-w-0 border-l-2 border-[var(--color-border)] pl-2">
-                  <p className="font-medium">{source.title}</p>
-                  <p className="break-all text-xs text-[var(--color-foreground-muted)]">{t('tasks.sourceTask')}: <code>{source.task_id}</code></p>
-                  {source.room_id && <p className="break-all text-xs text-[var(--color-foreground-muted)]">{t('tasks.sourceRoom')}: <code>{source.room_id}</code></p>}
-                  {source.result_version != null && <p className="text-xs text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: source.result_version })}</p>}
-                  {source.result_sha256 && <p className="truncate font-mono text-xs text-[var(--color-foreground-muted)]" title={source.result_sha256}>SHA-256: {source.result_sha256.slice(0, 12)}…</p>}
-                  {source.result_markdown?.trim() && <div className="mt-1"><MarkdownContent content={source.result_markdown} /></div>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {schedule && (
-          <div className="space-y-1 text-xs text-[var(--color-foreground-muted)]">
-            <p className="font-semibold text-[var(--color-foreground)]">{t('tasks.schedule')}</p>
-            <p className="break-all">{t('tasks.goalSource')}: <code>{schedule.goal_id}</code></p>
-            {schedule.scheduled_for && <p>{t('tasks.scheduledFor')}: <time dateTime={schedule.scheduled_for}>{formatDate(new Date(schedule.scheduled_for), { dateStyle: 'medium', timeStyle: 'short', timeZone: schedule.timezone })}</time></p>}
-            <p>{t('tasks.timezone')}: <span>{schedule.timezone}</span></p>
-            {schedule.overlap_policy === 'wait' && <p>{t('tasks.overlapWait')}</p>}
-            {schedule.trigger_source === 'scheduler' && <p>{t('tasks.scheduledTrigger')}</p>}
-            {schedule.trigger_source === 'manual' && <p>{t('tasks.manualTrigger')}</p>}
-          </div>
-        )}
-      </div>
-    </details>
-  )
-}
 /**
  * Compact tasks panel for the right rail (#302). Shares the
  * ``useRoomTasks`` hook with ``TaskPanel`` so the legacy panel and
@@ -120,18 +41,12 @@ function TaskExecutionDetails({ task, onNavigate }: { task: Task; onNavigate?: (
  * the chip is read-only — there is only one valid choice.
  */
 export default function TasksSection({ roomId, participants, onNavigate }: TasksSectionProps) {
-  const { t } = useLocale()
+  const { t, locale, formatDate } = useLocale()
+  // Row times are minute-grained ("23m"): a minute tick re-renders, and
+  // each render reads the clock so freshly loaded rows are not behind.
+  useNow(60_000)
+  const now = Date.now()
   const { confirm, notify } = useFeedback()
-  const statusLabel = (status: string): string => {
-    switch (status) {
-      case 'todo': return t('tasks.todo')
-      case 'in_progress': return t('tasks.inProgress')
-      case 'done': return t('tasks.done')
-      case 'blocked': return t('tasks.blocked')
-      case 'failed': return t('tasks.failed')
-      default: return status
-    }
-  }
   const { tasks, loading, error, refresh, create, claim, requeue, update, remove } = useRoomTasks(roomId)
   const [newTitle, setNewTitle] = useState('')
   const [newAssignee, setNewAssignee] = useState<string>('')
@@ -142,6 +57,9 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
   // sees the outcome without an extra notification system.
   const [routing, setRouting] = useState(false)
   const [routeMessage, setRouteMessage] = useState<string | null>(null)
+  // The open detail dialog follows the live task list, so a task that
+  // disappears (deleted elsewhere) closes it.
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null)
 
   // Agent participants only — humans are not eligible Task assignees
   // in the rail (mirrors the legacy TaskPanel default; rooms with
@@ -226,19 +144,27 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
     }
   }
 
-  const grouped = useMemo(() => {
-    const groups: Record<string, Task[]> = {}
+  const { current, recentResults, remainingHistory } = useMemo(() => {
+    const byStatus: Record<string, Task[]> = {}
+    const history: Task[] = []
     for (const task of tasks) {
       const presentation = taskPresentation(task)
-      const status = presentation.history ? 'history' : presentation.status
-      ;(groups[status] ??= []).push(task)
+      if (presentation.history) history.push(task)
+      else (byStatus[presentation.status] ??= []).push(task)
     }
-    groups.history?.sort((a, b) => b.created_at.localeCompare(a.created_at))
-    return groups
+    history.sort((a, b) => b.created_at.localeCompare(a.created_at))
+    const order = [...STATUS_ORDER, ...Object.keys(byStatus).filter(status => !STATUS_ORDER.includes(status as typeof STATUS_ORDER[number]))]
+    const recent = history.filter(task => taskPresentation(task).status === 'done').slice(0, 3)
+    return {
+      current: order.flatMap(status => byStatus[status] ?? []),
+      recentResults: recent,
+      remainingHistory: history.filter(task => !recent.includes(task)),
+    }
   }, [tasks])
-  const recentResults = (grouped.history ?? []).filter(task => taskPresentation(task).status === 'done').slice(0, 3)
-  const remainingHistory = (grouped.history ?? []).filter(task => !recentResults.includes(task))
-  const statuses = [...STATUS_ORDER, ...Object.keys(grouped).filter(status => status !== 'history' && !STATUS_ORDER.includes(status as typeof STATUS_ORDER[number]))]
+  const openTask = openTaskId ? tasks.find(task => task.id === openTaskId) ?? null : null
+
+  const isReadOnly = (task: Task) =>
+    Boolean(task.execution_id) || task.room_id !== roomId || (taskPresentation(task).history && task.status !== 'done')
 
   const cycleStatus = async (task: Task) => {
     if (task.status === 'todo') {
@@ -265,6 +191,23 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
     }
   }
 
+  const saveTask = async (task: Task, patch: { title: string; assigneeId: string }): Promise<boolean> => {
+    try {
+      if (patch.title && patch.title !== task.title) await update(task.id, { title: patch.title })
+      if (patch.assigneeId !== (task.assignee_participant_id ?? '')) await reassign(task, patch.assigneeId)
+      return true
+    } catch (error) {
+      notify({ message: error instanceof Error ? error.message : t('common.error'), tone: 'error' })
+      return false
+    }
+  }
+
+  const deleteTask = async (task: Task): Promise<boolean> => {
+    if (!await confirm({ title: t('tasks.deleteTitle'), description: t('tasks.deleteConfirm', { name: task.title }), confirmLabel: t('tasks.deleteTitle'), destructive: true })) return false
+    await remove(task.id)
+    return true
+  }
+
   const submitNew = async () => {
     if (!newTitle.trim()) return
     setAdding(true)
@@ -284,22 +227,41 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
     }
   }
 
+  // The row's trailing text: how long running work has gone on, when
+  // finished work ended, or what stopped it. ``null`` falls back to the
+  // assignee, which is what a waiting task needs.
+  const rowMeta = (task: Task): { text: string; tone: string } | null => {
+    const presentation = taskPresentation(task)
+    const label = presentation.label ? t(presentation.label) : presentation.status
+    if (presentation.history && task.status !== 'done') return { text: label, tone: 'text-[var(--color-foreground-muted)]' }
+    if (presentation.status === 'cancelling') return { text: label, tone: 'text-[var(--color-warning)]' }
+    const running = task.status === 'in_progress' ? msSince(task.started_at, now) : null
+    if (running !== null) return { text: formatRunning(t, running), tone: 'font-medium text-[var(--color-success)]' }
+    if (task.status === 'blocked') return { text: label, tone: 'font-medium text-[var(--color-warning)]' }
+    if (task.status === 'failed') {
+      return { text: task.finished_at ? `${label} · ${formatAgo(t, locale, formatDate, task.finished_at, now)}` : label, tone: 'font-medium text-[var(--color-danger)]' }
+    }
+    if (task.status === 'done' && task.finished_at) return { text: formatAgo(t, locale, formatDate, task.finished_at, now), tone: 'text-[var(--color-foreground-muted)]' }
+    return null
+  }
+
   const renderRow = (task: Task) => {
     const presentation = taskPresentation(task)
     const label = presentation.label ? t(presentation.label) : presentation.status
-    const Icon = STATUS_ICON[presentation.status] ?? Circle
-    const readOnly = Boolean(task.execution_id) || task.room_id !== roomId || presentation.history && task.status !== 'done'
+    const Icon = STATUS_ICON[presentation.status] ?? STATUS_ICON.todo
+    const readOnly = isReadOnly(task)
     const assignee = task.assignee_participant_id
       ? participants[task.assignee_participant_id]
       : undefined
     const assigneeName = assignee?.display_name ?? task.assignee_display_name ?? t('tasks.unassigned')
+    const meta = rowMeta(task)
     return (
       <article
         key={task.id}
         data-testid={`right-rail-task-row-${task.id}`}
         className="group min-w-0 rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)]"
       >
-      <div className="relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 md:pointer-fine:flex-nowrap">
+      <div className="relative flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 px-1 md:pointer-fine:flex-nowrap">
         <Button
           variant="ghost"
           size="icon"
@@ -309,42 +271,39 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
           title={label}
           className="shrink-0"
         >
-          <Icon
-            className={`h-4 w-4 ${
-              task.status === 'done'
-                ? 'text-[var(--color-success)]'
-                : task.status === 'in_progress'
-                  ? 'text-[var(--color-status-online)]'
-                  : task.status === 'failed'
-                    ? 'text-[var(--color-danger)]'
-                  : task.status === 'blocked'
-                      ? 'text-[var(--color-warning)]'
-                      : 'text-[var(--color-foreground-subtle)]'
-            }`}
-          />
+          <Icon className={`h-4 w-4 ${statusIconColor(task.status)}`} />
         </Button>
-        <span
-          className={`min-w-0 flex-1 truncate text-sm ${
+        {/* The title opens the detail and edit dialog; the whole
+            remaining width goes to it so short rails truncate less. */}
+        <button
+          type="button"
+          onClick={() => setOpenTaskId(task.id)}
+          aria-label={t('tasks.open', { name: task.title })}
+          title={task.title}
+          data-testid={`right-rail-task-open-${task.id}`}
+          className={`flex min-h-[var(--control-icon-size)] min-w-0 flex-1 items-center truncate rounded-[var(--radius-sm)] text-left text-sm focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)] ${
             task.status === 'done'
               ? 'line-through text-[var(--color-foreground-muted)]'
               : task.status === 'failed'
                 ? 'text-[var(--color-danger)]'
                 : 'text-[var(--color-foreground)]'
           }`}
-          title={task.title}
         >
-          {task.title}
-        </span>
+          <span className="min-w-0 truncate">{task.title}</span>
+        </button>
+        {/* Touch rows show the picker on its own line, so the time sits
+            beside the title instead of behind the picker. */}
+        {!readOnly && meta && <span className={`shrink-0 pr-1 text-xs md:pointer-fine:hidden ${meta.tone}`}>{meta.text}</span>}
         {/* Keep the native picker usable on touch; desktop hover replaces
-            the assignee label without reserving another row. The delete
-            action has its own target beside the picker. */}
-        {readOnly ? <span data-testid={`right-rail-task-owner-${task.id}`} className="max-w-full truncate text-xs text-[var(--color-foreground-muted)]" title={assigneeName}>{assigneeName}</span> : <div className={`relative ml-[calc(var(--control-icon-size)+.5rem)] flex h-[var(--control-sm-height)] w-[calc(100%-var(--control-icon-size)-.5rem)] min-w-0 items-center md:pointer-fine:ml-0 md:pointer-fine:w-auto md:pointer-fine:min-w-[5rem] md:pointer-fine:max-w-[8rem] md:pointer-fine:flex-[0_1_8rem] ${task.source_message_id ? '' : 'pr-[calc(var(--control-icon-size)+.25rem)]'}`}>
+            the assignee label, and the delete action covers the label's
+            tail only while hovered, so no width is held back for it. */}
+        {readOnly ? <span data-testid={`right-rail-task-owner-${task.id}`} className={`max-w-[8rem] shrink-0 truncate pr-1 text-xs ${meta?.tone ?? 'text-[var(--color-foreground-muted)]'}`} title={meta ? `${meta.text} · ${assigneeName}` : assigneeName}>{meta?.text ?? assigneeName}</span> : <div className={`relative ml-[calc(var(--control-icon-size)+.25rem)] flex h-[var(--control-sm-height)] w-[calc(100%-var(--control-icon-size)-.25rem)] min-w-0 items-center md:pointer-fine:ml-0 md:pointer-fine:w-auto md:pointer-fine:min-w-[5rem] md:pointer-fine:max-w-[8rem] md:pointer-fine:flex-[0_1_auto] md:pointer-fine:pr-0 ${task.source_message_id ? '' : 'pr-[calc(var(--control-icon-size)+.25rem)]'}`}>
           <span
-            aria-hidden="true"
-            className="invisible block w-full min-w-0 max-w-full truncate text-right text-xs text-[var(--color-foreground-subtle)] md:pointer-fine:visible md:pointer-fine:group-hover:invisible md:pointer-fine:group-focus-within:invisible"
-            title={assignee?.display_name ?? t('tasks.unassigned')}
+            data-testid={`right-rail-task-meta-${task.id}`}
+            className={`invisible block w-full min-w-0 max-w-full truncate pr-1 text-right text-xs md:pointer-fine:visible md:pointer-fine:group-hover:invisible md:pointer-fine:group-focus-within:invisible ${meta?.tone ?? 'text-[var(--color-foreground-subtle)]'}`}
+            title={meta ? `${meta.text} · ${assigneeName}` : assigneeName}
           >
-            {assignee?.display_name ?? '—'}
+            {meta?.text ?? assignee?.display_name ?? t('tasks.unassigned')}
           </span>
           <Select
             value={task.assignee_participant_id ?? ''}
@@ -366,39 +325,14 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
           <Button
             variant="ghost"
             size="icon"
-            onClick={async () => {
-              if (await confirm({ title: t('tasks.deleteTitle'), description: t('tasks.deleteConfirm', { name: task.title }), confirmLabel: t('tasks.deleteTitle'), destructive: true })) await remove(task.id)
-            }}
-            className="absolute bottom-1.5 right-2 text-[var(--color-destructive)] opacity-100 transition-opacity hover:bg-[var(--color-danger-soft)] md:pointer-fine:bottom-auto md:pointer-fine:top-1/2 md:pointer-fine:-translate-y-1/2 md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100"
+            onClick={() => deleteTask(task)}
+            className="absolute bottom-0 right-1 text-[var(--color-destructive)] opacity-100 transition-opacity hover:bg-[var(--color-danger-soft)] md:pointer-fine:bottom-auto md:pointer-fine:top-1/2 md:pointer-fine:-translate-y-1/2 md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100"
             aria-label={t('tasks.delete', { name: task.title })}
           >
             <Trash2 className="h-3 w-3" />
           </Button>
         ) : null}
       </div>
-      {task.execution_id && <div className="flex min-w-0 flex-wrap items-center gap-x-2 px-2 pb-1 text-xs text-[var(--color-foreground-muted)]">
-        <Link data-testid={`right-rail-task-room-${task.id}`} to={`/rooms/${task.room_id}`} onClick={onNavigate} className="flex min-h-11 min-w-0 items-center break-words text-[var(--color-brand-text)] underline md:min-h-8">{task.room_name ?? t('tasks.openTaskRoom')}</Link>
-        <span>{label}</span>
-        {task.input_revision != null && <span>{t('executions.inputVersion', { version: task.input_revision })}</span>}
-      </div>}
-      {task.execution_id && <div className="px-2 pb-2"><DispositionNotice disposition={task.disposition} inputRevision={task.input_revision} operationAction={task.execution_operation_action} /></div>}
-      {hasTaskRecovery(task.recovery) && <details className="mx-2 mb-2 min-w-0">
-        <summary className="min-h-11 cursor-pointer content-center text-sm text-[var(--color-foreground-muted)]">{t('contextRail.processingDetails')}</summary>
-        <TaskRecoveryState recovery={task.recovery} taskId={task.id} inputRevision={task.input_revision} />
-      </details>}
-      {(task.status === 'blocked' || task.status === 'failed') && task.error?.trim() && (
-        (task.error === 'APPROVAL_REJECTED' && task.recovery?.reason_code !== 'APPROVAL_REJECTED') ||
-        !(hasTaskRecovery(task.recovery) && task.recovery?.reason_code)
-      ) && (
-        <p data-testid={`right-rail-task-reason-${task.id}`} className={`break-words px-2 pb-2 text-xs [overflow-wrap:anywhere] ${task.status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-foreground-muted)]'}`}>
-          <span className="font-medium">{t('tasks.reason')}: </span>{task.error === 'APPROVAL_REJECTED' ? t('taskRecovery.reason.APPROVAL_REJECTED') : task.error}
-        </p>
-      )}
-      {task.status === 'blocked' && (task.blocked_by?.length ?? 0) > 0 && <div data-testid={`right-rail-task-blockers-${task.id}`} className="space-y-1 px-2 pb-2 text-xs text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">
-        <p className="font-medium">{t('tasks.waitingForWork')}</p>
-        {task.blocked_by!.map(blocker => <p key={blocker.task_id}><Link to={`/rooms/${blocker.room_id}`} onClick={onNavigate} className="inline-flex min-h-11 items-center text-[var(--color-brand-text)] underline md:min-h-8">{blocker.title}</Link> · {statusLabel(blocker.status)}</p>)}
-      </div>}
-      <TaskExecutionDetails task={task} onNavigate={onNavigate} />
       </article>
     )
   }
@@ -448,7 +382,7 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
           {routeMessage}
         </p>
       )}
-      <div className="min-w-0 px-1">
+      <div className="min-w-0 px-1 pb-1">
         {error && <p className="px-3 py-2 text-xs text-[var(--color-danger)]" role="alert">{error.match(/HTTP (\d+)/) ? t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '' }) : error}</p>}
         {loading && <p className="px-3 py-2 text-xs text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
         {!loading && !error && tasks.length === 0 && (
@@ -456,31 +390,26 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
             {t('tasks.empty')}
           </div>
         )}
-        {statuses.map((status) => {
-          const items = grouped[status] ?? []
-          if (items.length === 0) return null
-          return (
-            <div key={status} className="mb-1 min-w-0">
-              <div className="px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-                {status === 'cancelling' ? t('executions.status.cancelling') : statusLabel(status)} · {items.length}
-              </div>
-              {items.slice(0, 5).map(renderRow)}
-              {items.length > 5 && <details className="min-w-0">
-                <summary className="min-h-11 cursor-pointer content-center px-3 text-sm text-[var(--color-brand-text)]">{t('contextRail.more', { count: items.length })}</summary>
-                {items.slice(5).map(renderRow)}
-              </details>}
-            </div>
-          )
-        })}
-        {recentResults.length > 0 && <div className="min-w-0 pt-2" data-testid="right-rail-recent-results">
-          <h4 className="px-3 py-1 text-sm font-semibold">{t('contextRail.recentResults')}</h4>
+        {current.map(renderRow)}
+        {recentResults.length > 0 && <div className="min-w-0" data-testid="right-rail-recent-results">
           {recentResults.map(renderRow)}
         </div>}
         {remainingHistory.length > 0 && <details className="min-w-0" data-testid="right-rail-task-history">
-          <summary className="min-h-11 cursor-pointer content-center px-3 text-sm text-[var(--color-brand-text)]">{t('contextRail.history')} ({remainingHistory.length})</summary>
+          <summary className="min-h-11 cursor-pointer content-center px-2 text-sm text-[var(--color-brand-text)] md:pointer-fine:min-h-8">{t('contextRail.history')} ({remainingHistory.length})</summary>
           {remainingHistory.map(renderRow)}
         </details>}
       </div>
+      <TaskDetailDialog
+        task={openTask}
+        participants={participants}
+        agentParticipants={agentParticipants}
+        readOnly={openTask ? isReadOnly(openTask) : true}
+        onClose={() => setOpenTaskId(null)}
+        onNavigate={onNavigate}
+        onCycleStatus={cycleStatus}
+        onSave={saveTask}
+        onDelete={deleteTask}
+      />
       {/* Inline create input + assignee picker (#312). The picker
           renders even on rooms with a single agent — disabled in
           that case so the chip is informative read-only ("auto-

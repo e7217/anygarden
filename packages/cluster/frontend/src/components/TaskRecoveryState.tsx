@@ -15,15 +15,22 @@ const OUTCOMES: Record<string, MessageKey> = Object.fromEntries([
   'unknown', 'stale', 'ok', 'succeeded', 'timeout', 'skipped', 'rejected', 'retry_exhausted',
 ].map(outcome => [outcome, `taskRecovery.outcome.${outcome}`])) as Record<string, MessageKey>
 
+/** Message key for an attempt's outcome, shared with the task timeline. */
+export function attemptOutcomeKey(outcome: string): MessageKey {
+  return OUTCOMES[outcome] ?? 'taskRecovery.outcome.unknown'
+}
+
+export const FAILED_ATTEMPT_OUTCOMES = ['failed', 'interrupted', 'unknown', 'timeout', 'rejected', 'retry_exhausted']
+
 export function hasTaskRecovery(recovery?: TaskRecovery | null): boolean {
   if (!recovery) return false
-  const previousFailure = (recovery.attempts ?? []).some(attempt => attempt.reason_code || ['failed', 'interrupted', 'unknown', 'timeout', 'rejected', 'retry_exhausted'].includes(attempt.outcome ?? attempt.state))
+  const previousFailure = (recovery.attempts ?? []).some(attempt => attempt.reason_code || FAILED_ATTEMPT_OUTCOMES.includes(attempt.outcome ?? attempt.state))
   if (recovery.state === 'none') return previousFailure || (recovery.retry_count ?? 0) > 0
   const failureReason = recovery.reason_code && !['INPUT_SUPERSEDED', 'EXECUTION_CANCELLED'].includes(recovery.reason_code)
   return !['running', 'completed', 'historical', 'cancelled'].includes(recovery.state) || previousFailure || !!failureReason || (recovery.retry_count ?? 0) > 0
 }
 
-export default function TaskRecoveryState({ recovery, taskId, inputRevision, className = '' }: { recovery?: TaskRecovery | null; taskId: string; inputRevision?: number | null; className?: string }) {
+export default function TaskRecoveryState({ recovery, taskId, inputRevision, className = '', hideHistory = false }: { recovery?: TaskRecovery | null; taskId: string; inputRevision?: number | null; className?: string; /** The task dialog draws attempts in its own timeline. */ hideHistory?: boolean }) {
   const { t, formatDate } = useLocale()
   const retry = useExecutionTaskRetry(taskId, inputRevision, recovery)
   const attempts = recovery?.attempts ?? []
@@ -43,7 +50,7 @@ export default function TaskRecoveryState({ recovery, taskId, inputRevision, cla
     {recovery.state === 'retry_wait' && nextRetry && <p>{t('taskRecovery.nextRetry')}: <time dateTime={nextRetry}>{formatDate(new Date(nextRetry), { dateStyle: 'medium', timeStyle: 'short' })}</time></p>}
     {retry.canRetry && <Button type="button" variant="outline" className="min-h-11 h-auto max-w-full whitespace-normal text-left" data-testid={`task-retry-${taskId}`} disabled={retry.sending || retry.accepted} onClick={() => { void retry.submit() }}>{retry.sending ? t('common.loading') : retry.accepted ? t('taskRecovery.retryAccepted') : t('taskRecovery.retrySameTask')}</Button>}
     {retry.error && <p role="alert" className="whitespace-pre-wrap text-[var(--color-danger)]">{retry.error}</p>}
-    {attempts.length > 0 && <details data-testid={`task-recovery-history-${taskId}`}>
+    {!hideHistory && attempts.length > 0 && <details data-testid={`task-recovery-history-${taskId}`}>
       <summary className="min-h-11 cursor-pointer content-center text-xs font-medium md:min-h-8">{t('taskRecovery.history')}{recovery.attempt_count != null && recovery.attempt_count > 0 && <> · {t('taskRecovery.attemptCount', { count: recovery.attempt_count })}</>}</summary>
       <div className="space-y-2 pt-1">
         <p className="text-xs text-[var(--color-foreground-muted)]">{t('taskRecovery.historyMeaning')}</p>
