@@ -10,10 +10,11 @@ import {
 import '@xyflow/react/dist/style.css'
 import './agentLinks.css'
 import { LayoutGrid, Maximize2 } from 'lucide-react'
+import type { MessageKey } from '@/i18n/messages'
 import { Button } from '@/components/ui/button'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useAgentLinkView } from '@/hooks/useAgentLinkView'
-import { agentNodeSize, reachableFrom, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
+import { agentNodeSize, reachableFrom, type ActivePeerEdge, type AgentActivity, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
 
 export type LinkSelection = { kind: 'agent'; id: string } | { kind: 'link'; id: string } | null
 interface Props {
@@ -23,18 +24,43 @@ interface Props {
   selection: LinkSelection
   onSelect: (selection: LinkSelection) => void
   onConnect: (fromId: string, toId: string) => void
+  /** COL-19 — live state per agent id; agents missing here read as idle. */
+  activity?: ReadonlyMap<string, AgentActivity>
+  /** COL-19 — questions running now; matching links flow, others draw dashed. */
+  activeEdges?: readonly ActivePeerEdge[]
+  roomName?: (roomId: string) => string | null
+  onOpenRoom?: (roomId: string) => void
 }
 type Emphasis = 'reach' | 'none'
 interface AgentNodeData extends Record<string, unknown> {
   name: string; emphasis: Emphasis; width: number; height: number
+  status: AgentActivity['state']; statusText: string | null
+  room: { id: string; label: string } | null
+  onOpenRoom?: (roomId: string) => void
 }
+const UNAVAILABLE_KEYS: Record<string, MessageKey> = {
+  crashed: 'agentLinks.unavailable.crashed',
+  crash_loop: 'agentLinks.unavailable.crashed',
+  spawn_failed: 'agentLinks.unavailable.crashed',
+  no_machine_for_engine: 'agentLinks.unavailable.noMachine',
+  machine_removed: 'agentLinks.unavailable.noMachine',
+  machine_busy: 'agentLinks.unavailable.noMachine',
+  no_room: 'agentLinks.unavailable.noRoom',
+}
+const IDLE: AgentActivity = { state: 'idle', roomIds: [], unavailableCode: null }
 function viewportDuration() { return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 220 }
 const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData>>) {
   const updateInternals = useUpdateNodeInternals()
   // React Flow must remeasure handles as a link changes the source's size.
   useEffect(() => { updateInternals(id) }, [id, data.width, data.height, updateInternals])
-  return <div className={`agent-link-node${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
-    <span className="agent-link-node__name">{data.name}</span>
+  const tone = data.status === 'busy' ? ' is-busy' : data.status === 'unavailable' ? ' is-unavailable' : ''
+  return <div className={`agent-link-node${tone}${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`} title={data.name}>
+    <span className="agent-link-node__name">{data.status === 'busy' && <span className="agent-link-node__pulse" aria-hidden="true" />}{data.name}</span>
+    {data.statusText && <span className="agent-link-node__status">
+      {data.room && data.onOpenRoom
+        ? <button type="button" className="agent-link-node__room nodrag nopan" onClick={event => { event.stopPropagation(); data.onOpenRoom!(data.room!.id) }}>{data.statusText}</button>
+        : data.statusText}
+    </span>}
     <Handle type="target" position={Position.Left} isConnectableStart={false} />
     <Handle type="source" position={Position.Right} isConnectableEnd={false} />
   </div>
@@ -64,15 +90,16 @@ function layoutPositions(agents: LinkAgent[], links: AgentLink[], counts: Map<st
   const graph = new dagre.graphlib.Graph()
   graph.setGraph({ rankdir: 'LR', nodesep: 48, ranksep: 96, marginx: 32, marginy: 32 })
   graph.setDefaultEdgeLabel(() => ({}))
-  for (const a of agents) graph.setNode(a.id, agentNodeSize(counts.get(a.id) ?? 0))
+  // Lay out for the taller busy card so a status line never overlaps a neighbour.
+  for (const a of agents) graph.setNode(a.id, agentNodeSize(counts.get(a.id) ?? 0, true))
   for (const l of links) if (graph.hasNode(l.from_agent_id) && graph.hasNode(l.to_agent_id)) graph.setEdge(l.from_agent_id, l.to_agent_id)
   dagre.layout(graph)
   return new Map(agents.map(a => {
-    const size = agentNodeSize(counts.get(a.id) ?? 0), box = graph.node(a.id)
+    const size = agentNodeSize(counts.get(a.id) ?? 0, true), box = graph.node(a.id)
     return [a.id, { x: box.x - size.width / 2, y: box.y - size.height / 2 }]
   }))
 }
-function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: Props) {
+function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, activity, activeEdges, roomName, onOpenRoom }: Props) {
   const { t } = useLocale()
   const rf = useReactFlow()
   const { view, savePosition, saveViewport, reset } = useAgentLinkView(userId)
@@ -99,12 +126,21 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
     setLocalNodes(previous => {
       const old = new Map(previous.map(node => [node.id, node]))
       return agents.map(a => {
-        const existing = old.get(a.id), size = agentNodeSize(counts.get(a.id) ?? 0)
+        const now = activity?.get(a.id) ?? IDLE
+        const existing = old.get(a.id), size = agentNodeSize(counts.get(a.id) ?? 0, now.state !== 'idle')
+        const firstRoom = now.roomIds[0]
+        const label = firstRoom ? `#${roomName?.(firstRoom) ?? t('agentLinks.someRoom')}` : ''
+        const statusText = now.state === 'busy'
+          ? (now.roomIds.length > 1 ? t('agentLinks.busyInMany', { room: label, count: now.roomIds.length - 1 }) : t('agentLinks.busyIn', { room: label }))
+          : now.state === 'unavailable'
+            ? t(UNAVAILABLE_KEYS[now.unavailableCode ?? ''] ?? 'agentLinks.unavailable.offline')
+            : null
         return { ...existing, id: a.id, type: 'agent', position: existing?.position ?? initialView.current.positions[a.id] ?? positions.get(a.id)!,
-          style: size, data: { name: a.name, ...size, emphasis: 'none' as Emphasis } }
+          style: size, data: { name: a.name, ...size, emphasis: 'none' as Emphasis, status: now.state, statusText,
+            room: firstRoom ? { id: firstRoom, label } : null, onOpenRoom } }
       })
     })
-  }, [agents, counts, positions, setLocalNodes])
+  }, [agents, counts, positions, setLocalNodes, activity, roomName, onOpenRoom, t])
   useEffect(() => {
     if (!initialized || restored.current) return
     restored.current = true
@@ -128,18 +164,29 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
     return { ...node, selected: selection?.kind === 'agent' && selection.id === node.id,
       ariaLabel: t('agentLinks.agentNode', { name: node.data.name }), data: { ...node.data, emphasis } }
   }), [localNodes, selection, reach, t])
-  const edges = useMemo<Edge[]>(() => links.map(l => {
-    const emphasized = selection?.kind === 'link' && selection.id === l.id || !!reach?.links.has(l.id)
-    const color = emphasized ? 'var(--color-brand-text)' : 'var(--color-foreground-subtle)'
-    // Flowing dashes show direction; the arrow only appears under reduced motion (agentLinks.css).
-    return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link', animated: true,
-      selected: selection?.kind === 'link' && selection.id === l.id, focusable: true,
-      ariaLabel: t('agentLinks.linkLabel', { from: names.get(l.from_agent_id) ?? '?', to: names.get(l.to_agent_id) ?? '?' }),
-      className: emphasized ? 'is-emphasized' : undefined,
-      // The built-in symbol occupies 8 of its 20 viewBox units: 16 gives a 6.4px chevron.
-      markerEnd: { type: MarkerType.Arrow, color, width: 16, height: 16, markerUnits: 'userSpaceOnUse', strokeWidth: 1.5 },
-      style: { stroke: color } }
-  }), [links, selection, reach, names, t])
+  const edges = useMemo<Edge[]>(() => {
+    const running = new Set((activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`))
+    const ids = new Set(agents.map(a => a.id))
+    // The built-in symbol occupies 8 of its 20 viewBox units: 16 gives a 6.4px chevron.
+    const arrow = (color: string) => ({ type: MarkerType.Arrow, color, width: 16, height: 16, markerUnits: 'userSpaceOnUse' as const, strokeWidth: 1.5 })
+    const linked = links.map(l => {
+      const emphasized = selection?.kind === 'link' && selection.id === l.id || !!reach?.links.has(l.id)
+      const live = running.delete(`${l.from_agent_id}>${l.to_agent_id}`)
+      const color = emphasized || live ? 'var(--color-brand-text)' : 'var(--color-foreground-subtle)'
+      // COL-19 — only a question running now flows; a resting link is a still line with an arrow.
+      return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link', animated: live,
+        selected: selection?.kind === 'link' && selection.id === l.id, focusable: true,
+        ariaLabel: t(live ? 'agentLinks.linkLabelActive' : 'agentLinks.linkLabel', { from: names.get(l.from_agent_id) ?? '?', to: names.get(l.to_agent_id) ?? '?' }),
+        className: [emphasized && 'is-emphasized', live && 'is-active'].filter(Boolean).join(' ') || undefined,
+        markerEnd: arrow(color), style: { stroke: color } }
+    })
+    // A question between room members needs no link; draw it dashed while it runs.
+    const unlinked = [...running].map(key => key.split('>')).filter(([from, to]) => ids.has(from) && ids.has(to)).map(([from, to]) => ({
+      id: `activity:${from}>${to}`, source: from, target: to, type: 'link', animated: true,
+      selectable: false, focusable: false, className: 'is-activity',
+      markerEnd: arrow('var(--color-brand-text)'), style: { stroke: 'var(--color-brand-text)', strokeDasharray: '3 4' } }))
+    return [...linked, ...unlinked]
+  }, [agents, links, activeEdges, selection, reach, names, t])
   const onNodesChange = useCallback((changes: NodeChange<Node<AgentNodeData>>[]) => {
     const rest: NodeChange<Node<AgentNodeData>>[] = []
     for (const change of changes) {
@@ -182,7 +229,7 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect }: 
       <Controls showInteractive={false} showFitView={false} />
     </ReactFlow>
     <div className="absolute right-3 top-3 z-10 flex gap-2">
-      <Button variant="outline" size="icon" onClick={rearrange} aria-label={t('agentLinks.rearrange')} title={t('agentLinks.rearrange')}><LayoutGrid /></Button>
+      <Button variant="outline" size="sm" onClick={rearrange} title={t('agentLinks.rearrangeHint')}><LayoutGrid />{t('agentLinks.rearrange')}</Button>
       <Button variant="outline" size="icon" onClick={() => void rf.fitView({ ...fitViewOptions, duration: viewportDuration() })} aria-label={t('agentLinks.fitView')} title={t('agentLinks.fitView')}><Maximize2 /></Button>
     </div>
   </div>

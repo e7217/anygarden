@@ -513,6 +513,8 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* #1023 — the overview (agent links + live state) is the home screen. */}
+      <div className="px-2"><button type="button" onClick={() => go('/agents/links')} aria-current={location.pathname === '/agents/links' ? 'page' : undefined} data-testid="sidebar-agent-links" className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-sm font-medium ${location.pathname === '/agents/links' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Workflow className="h-4 w-4 shrink-0" />{t('agentLinks.navLabel')}</button></div>
       <div className="px-2 pb-2"><button type="button" onClick={() => go('/inbox')} aria-current={location.pathname === '/inbox' ? 'page' : undefined} data-testid="sidebar-inbox" className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-sm font-medium ${location.pathname === '/inbox' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Inbox className="h-4 w-4 shrink-0" />{t('inbox.title')}</button></div>
 
       {/* Projects & agents split (#928). Each section scrolls on its own
@@ -766,20 +768,6 @@ export default function Sidebar({
                   {agentsCollapsed
                     ? <ChevronRight className="ml-auto h-3 w-3 shrink-0" />
                     : <ChevronDown className="ml-auto h-3 w-3 shrink-0" />}
-                </button>
-                {/* #1006 — the agent link map is open to every signed-in user. */}
-                <button
-                  type="button"
-                  onClick={() => go('/agents/links')}
-                  aria-label={t('agentLinks.navLabel')}
-                  aria-current={location.pathname === '/agents/links' ? 'page' : undefined}
-                  title={t('agentLinks.navLabel')}
-                  data-testid="sidebar-agent-links"
-                  className={`inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] ${
-                    location.pathname === '/agents/links' ? 'text-[var(--color-brand-text)]' : 'text-[var(--color-foreground-muted)]'
-                  }`}
-                >
-                  <Workflow className="h-4 w-4" />
                 </button>
                 {isAdmin && (
                   <button

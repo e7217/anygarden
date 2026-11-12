@@ -17,6 +17,7 @@ const user = { id: 'e2e-user', email: 'e2e@example.com', is_admin: true }
 const PROJECT_ID = 'proj-1'
 const ROOM_ID = 'room-1'
 const ROOT_ID = 'msg-root'
+const WELCOME = 'Welcome to Anygarden'
 
 const agents = [
   { id: 'a-dev', name: 'Developer', description: null, actual_state: 'running' },
@@ -175,7 +176,8 @@ async function signIn(page: Page, locale = 'en') {
   await page.locator('#login-email').fill(user.email)
   await page.locator('#login-password').fill('correct-password')
   await page.getByRole('button', { name: locale === 'ko' ? '로그인' : 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/$/)
+  // ROOM-16 — with two or more agents, home is the overview.
+  await expect(page).toHaveURL(/\/(agents\/links)?$/)
 }
 
 async function dragLink(page: Page, source: Locator, target: Locator, targetRight = false) {
@@ -320,9 +322,27 @@ test.describe('agent links', () => {
     expect(posted).toHaveLength(1)
   })
 
-  test('[COL-14] flowing dashes show direction, with a solid arrow under reduced motion', async ({ page }) => {
+  test('[COL-14] a resting link is a still line with an arrow', async ({ page }) => {
     await stubWebSocket(page)
     await stubApi(page, [])
+    await signIn(page)
+    await page.goto('/agents/links')
+    const edge = page.getByTestId('rf__edge-l-1')
+    const path = edge.locator('.react-flow__edge-path')
+    await expect(edge).not.toHaveClass(/animated/)
+    await expect(path).toHaveCSS('animation-name', 'none')
+    await expect(path).toHaveCSS('marker-end', /url\(/)
+  })
+
+  test('[COL-19] a running question flows, with a solid arrow under reduced motion', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await page.route('**/api/v1/peer-chains/active', route => fulfillJson(route, 200, {
+      edges: [
+        { chain_id: 'c1', room_id: ROOM_ID, from_agent_id: 'a-dev', to_agent_id: 'a-rev' },
+        { chain_id: 'c1', room_id: ROOM_ID, from_agent_id: 'a-rev', to_agent_id: 'a-dev' },
+      ],
+    }))
     await signIn(page)
     await page.goto('/agents/links')
     const edge = page.getByTestId('rf__edge-l-1')
@@ -330,10 +350,35 @@ test.describe('agent links', () => {
     await expect(edge).toHaveClass(/animated/)
     await expect(path).toHaveCSS('animation-name', 'dashdraw')
     await expect(path).toHaveCSS('marker-end', 'none')
+    // A question between room members needs no link; it draws while it runs.
+    await expect(page.getByTestId('rf__edge-activity:a-rev>a-dev')).toBeVisible()
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await expect(path).toHaveCSS('animation-name', 'none')
     await expect(path).toHaveCSS('stroke-dasharray', 'none')
     await expect(path).toHaveCSS('marker-end', /url\(/)
+  })
+
+  test('[ROOM-16] home opens the overview and its cards show who is answering', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await page.route('**/api/v1/turns/active', route => fulfillJson(route, 200, [{ room_id: ROOM_ID, agent_ids: ['a-dev'] }]))
+    await signIn(page)
+    await expect(page).toHaveURL(/\/agents\/links$/)
+    await expect(page.getByTestId('sidebar-agent-links')).toHaveAttribute('aria-current', 'page')
+    const dev = page.getByTestId('rf__node-a-dev')
+    await expect(dev.locator('.agent-link-node')).toHaveClass(/is-busy/)
+    await expect(dev).toContainText('Answering in')
+    await expect(page.getByTestId('rf__node-a-sec')).toContainText('Offline')
+    await expect(page.getByRole('complementary', { name: 'What is happening' })).toContainText('Running now')
+  })
+
+  test('[ROOM-16] home keeps the welcome screen with fewer than two agents', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await page.route('**/api/v1/agent-links', route => fulfillJson(route, 200, { agents: agents.slice(0, 1), links: [] }))
+    await signIn(page)
+    await expect(page.getByRole('heading', { name: WELCOME })).toBeVisible()
+    await expect(page).toHaveURL(/\/$/)
   })
 
   test('[COL-14] keyboard picker, reverse and confirmed deletion remain available', async ({ page }) => {

@@ -10,10 +10,11 @@
 .agent-links-root .react-flow__edge:focus-visible { outline: none; }
 /* Every edge is dashed while it flows, so keyboard focus reads through width. */
 .agent-links-root .react-flow__edge:focus-visible .react-flow__edge-path { stroke-width: 2.5; }
-/* Direction is shown by dashes flowing source → target, at a calm pace. */
+/* COL-19 — only a question running now flows (source → target); resting links keep their arrow. */
 .agent-links-root .react-flow__edge.animated .react-flow__edge-path { animation-duration: 1s; }
+.agent-links-root .react-flow__edge.is-active .react-flow__edge-path { stroke-width: 2; }
 @media (prefers-reduced-motion: no-preference) {
-  .agent-links-root .react-flow__edge-path { marker-end: none; }
+  .agent-links-root .react-flow__edge.animated .react-flow__edge-path { marker-end: none; }
 }
 /* Without motion the dashes stop, so a solid line and an arrow carry direction. */
 @media (prefers-reduced-motion: reduce) {
@@ -26,7 +27,20 @@
   background: var(--color-surface-elevated); color: var(--color-foreground);
   font-size: 0.875rem; font-weight: 500;
 }
-.agent-link-node__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-link-node__name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 0.375rem; }
+/* COL-19 — busy and unavailable cards add one status line under the name. */
+.agent-link-node.is-busy, .agent-link-node.is-unavailable { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0.125rem; }
+.agent-link-node__status { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; font-weight: 400; color: var(--color-foreground-muted); }
+.agent-link-node__room { all: unset; cursor: pointer; color: var(--color-brand-text); border-radius: var(--radius-sm); }
+.agent-link-node__room:hover { text-decoration: underline; }
+.agent-link-node__room:focus-visible { outline: 2px solid var(--color-brand-focus); outline-offset: 2px; }
+.agent-link-node.is-busy { border-color: var(--color-brand-text); box-shadow: 0 0 0 3px var(--color-brand-tint-bg); }
+.agent-link-node.is-unavailable { border-style: dashed; background: var(--color-surface-alt); color: var(--color-foreground-muted); }
+.agent-link-node__pulse { width: 0.5rem; height: 0.5rem; flex: none; border-radius: 9999px; background: var(--color-brand-text); }
+@media (prefers-reduced-motion: no-preference) {
+  .agent-link-node__pulse { animation: agent-link-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes agent-link-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .agent-link-node.is-reachable { border-color: var(--color-brand-text); }
 .agent-link-node.is-selected { border-color: var(--color-brand-text); background: var(--color-surface-selected); }
 .agent-links-root .react-flow__node:focus-visible { outline: 2px solid var(--color-brand-focus); outline-offset: 3px; }
@@ -43,3 +57,4 @@
     transform: translate(-50%, -50%);
   }
 }
+.agent-link-node.is-unavailable.is-selected { border-style: solid; background: var(--color-surface-selected); }

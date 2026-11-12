@@ -8,17 +8,20 @@ import { apiFetch } from '@/lib/api'
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'u', is_admin: true } }) }))
-vi.mock('@/hooks/useRooms', () => ({ useRooms: () => ({ createAgentDM: vi.fn() }) }))
+const roomsMock = vi.hoisted(() => ({ rooms: {} as Record<string, { id: string; name: string; has_updates?: boolean }[]> }))
+vi.mock('@/hooks/useRooms', () => ({ useRooms: () => ({ createAgentDM: vi.fn(), rooms: roomsMock.rooms, agentDMs: [] }) }))
 // The page frame and the xyflow canvas need a real layout engine; the
 // stand-ins expose the canvas callbacks as plain buttons.
 vi.mock('@/components/PageShell', () => ({
   default: ({ children }: { children: ReactNode }) => <main>{children}</main>,
 }))
 vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
-  default: ({ agents, onSelect, onConnect }: {
+  default: ({ agents, onSelect, onConnect, activity, activeEdges }: {
     agents: { id: string; name: string }[]
     onSelect: (selection: { kind: 'agent'; id: string } | null) => void
     onConnect: (from: string, to: string) => void
+    activity?: Map<string, { state: string; roomIds: string[] }>
+    activeEdges?: { from_agent_id: string; to_agent_id: string }[]
   }) => (
     <div data-testid="canvas">
       {agents.map(agent => (
@@ -26,6 +29,10 @@ vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
           select {agent.name}
         </button>
       ))}
+      <p data-testid="canvas-activity">
+        {agents.map(agent => `${agent.id}:${activity?.get(agent.id)?.state ?? '-'}`).join(' ')}
+      </p>
+      <p data-testid="canvas-edges">{(activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`).join(' ')}</p>
       <button type="button" onClick={() => onConnect('qa', 'coder')}>connect QA to Coder</button>
     </div>
   ),
@@ -49,7 +56,24 @@ function renderPage() {
   return render(<MemoryRouter><AgentLinksPage /></MemoryRouter>)
 }
 
-afterEach(() => { cleanup(); vi.resetAllMocks() })
+afterEach(() => { cleanup(); vi.resetAllMocks(); roomsMock.rooms = {} })
+
+/** Answers each endpoint the overview reads with a fresh response. */
+function serve({ graph, turns = [], edges = [], inbox = [] }: {
+  graph: unknown
+  turns?: { room_id: string; agent_ids: string[] }[]
+  edges?: { chain_id: string; room_id: string; from_agent_id: string; to_agent_id: string }[]
+  inbox?: unknown[]
+}) {
+  fetchMock.mockImplementation(async path => {
+    const url = String(path)
+    if (url.startsWith('/api/v1/turns/active')) return json(turns)
+    if (url.startsWith('/api/v1/peer-chains/active')) return json({ edges })
+    if (url.startsWith('/api/v1/inbox')) return json({ items: inbox, projects: [] })
+    if (url.startsWith('/api/v1/agent-links')) return json(graph)
+    return json({}, 404)
+  })
+}
 
 describe('AgentLinksPage', () => {
   it('explains links when there are none', async () => {
@@ -114,5 +138,43 @@ describe('AgentLinksPage', () => {
     fetchMock.mockResolvedValue(json({ agents, links: [] }))
     fireEvent.click(screen.getByRole('button', { name: /try again/i }))
     expect(await screen.findByTestId('canvas')).toBeInTheDocument()
+  })
+
+  it('[COL-19] marks who is answering and who cannot, and the running questions', async () => {
+    roomsMock.rooms = { p: [{ id: 'r1', name: 'release' }, { id: 'r2', name: 'design', has_updates: true }] }
+    serve({
+      graph: { agents: [...agents.slice(0, 3), { ...agents[3], actual_state: 'running', unavailable_code: 'crashed' }], links: [] },
+      turns: [{ room_id: 'r1', agent_ids: ['coder', 'sec'] }],
+      edges: [{ chain_id: 'c', room_id: 'r1', from_agent_id: 'coder', to_agent_id: 'sec' }],
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('canvas-activity')).toHaveTextContent('coder:busy sec:busy qa:unavailable docs:unavailable'))
+    expect(screen.getByTestId('canvas-edges')).toHaveTextContent('coder>sec')
+    expect(screen.getByText('4 agents · 2 answering · 0 links')).toBeInTheDocument()
+
+    const summary = within(screen.getByTestId('agent-overview-summary'))
+    expect(summary.getByRole('link', { name: /#release/ })).toHaveAttribute('href', '/rooms/r1')
+    expect(summary.getByText('Coder → Security')).toBeInTheDocument()
+    expect(summary.getByRole('link', { name: '#design' })).toHaveAttribute('href', '/rooms/r2')
+  })
+
+  it('[COL-19] puts what needs the person first and links to the inbox', async () => {
+    serve({
+      graph: { agents, links: [] },
+      inbox: [{ id: 'i1', needs_action: true, task_title: 'Approve the release', task_room_name: 'release', task_href: '/rooms/r1?task=t1' }],
+    })
+    renderPage()
+    const summary = within(await screen.findByTestId('agent-overview-summary'))
+    expect(summary.getByRole('link', { name: /Approve the release/ })).toHaveAttribute('href', '/rooms/r1?task=t1')
+    expect(summary.getByRole('link', { name: 'Open inbox' })).toHaveAttribute('href', '/inbox')
+  })
+
+  it('[COL-19] says so when nothing is happening, and hides the summary while an agent is selected', async () => {
+    serve({ graph: { agents, links: [] } })
+    renderPage()
+    expect(await screen.findByTestId('agent-overview-quiet')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'select Coder' }))
+    expect(screen.queryByTestId('agent-overview-quiet')).not.toBeInTheDocument()
+    expect(screen.getByTestId('agent-reach-details')).toBeInTheDocument()
   })
 })

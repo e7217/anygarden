@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentLinkError, createAgentLink, deleteAgentLink, fetchAgentLinkGraph, findCycles, reachableFrom, agentNodeSize, type AgentLink } from './agentLinks'
+import { AgentLinkError, agentActivity, createAgentLink, deleteAgentLink, fetchActivePeerEdges, fetchAgentLinkGraph, findCycles, reachableFrom, agentNodeSize, type AgentLink, type LinkAgent } from './agentLinks'
 import { isLinkParticipant, roomMembers, type Participant } from './participants'
 import { apiFetch } from './api'
 
@@ -107,4 +107,38 @@ it('keeps nodes compact and caps emphasis for many outgoing links', () => {
   expect(agentNodeSize(2).width).toBeGreaterThan(agentNodeSize(0).width)
   expect(agentNodeSize(20)).toEqual(agentNodeSize(4))
   expect(agentNodeSize(20).width).toBeLessThanOrEqual(128)
+})
+
+describe('agentActivity', () => {
+  const agent = (over: Partial<LinkAgent> = {}): LinkAgent =>
+    ({ id: 'a', name: 'A', description: null, actual_state: 'running', unavailable_code: null, ...over })
+
+  it('is busy in the rooms where it is answering [COL-19]', () => {
+    expect(agentActivity(agent(), ['r1', 'r2'])).toEqual({ state: 'busy', roomIds: ['r1', 'r2'], unavailableCode: null })
+  })
+
+  it('is idle when running with nothing to answer [COL-19]', () => {
+    expect(agentActivity(agent(), [])).toEqual({ state: 'idle', roomIds: [], unavailableCode: null })
+  })
+
+  it('cannot answer when stopped or carrying an unavailable code [COL-19]', () => {
+    expect(agentActivity(agent({ actual_state: 'stopped' }), []).state).toBe('unavailable')
+    expect(agentActivity(agent({ unavailable_code: 'crashed' }), ['r1']))
+      .toEqual({ state: 'unavailable', roomIds: [], unavailableCode: 'crashed' })
+  })
+})
+
+describe('active peer edges', () => {
+  it('reads the running questions [COL-19]', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      edges: [{ chain_id: 'c', room_id: 'r', from_agent_id: 'a', to_agent_id: 'b' }],
+    }), { status: 200 }))
+    expect(await fetchActivePeerEdges()).toEqual([{ chain_id: 'c', room_id: 'r', from_agent_id: 'a', to_agent_id: 'b' }])
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/peer-chains/active', expect.anything())
+  })
+})
+
+it('gives a busy card room for its status line [COL-19]', () => {
+  expect(agentNodeSize(0, true).width).toBeGreaterThanOrEqual(176)
+  expect(agentNodeSize(0, true).height).toBeGreaterThan(agentNodeSize(0).height)
 })

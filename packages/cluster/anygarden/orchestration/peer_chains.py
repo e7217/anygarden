@@ -279,3 +279,46 @@ async def cancel_chain(
             g.state = "cancelled"
     await db.flush()
     return ChainCancel(cancelled=cancelled)
+
+
+async def list_active_edges(db: AsyncSession, *, room_ids: set[str]) -> list[dict[str, Any]]:
+    """#1023 — open agent-to-agent questions in *room_ids*, one per caller→target.
+
+    A question a person asked is not an edge between agents and is left out.
+    """
+    if not room_ids:
+        return []
+    rows = (
+        await db.execute(
+            select(
+                PeerAskGroup.chain_id,
+                PeerAskGroup.room_id,
+                PeerAskGroup.caller_agent_id,
+                Participant.agent_id,
+            )
+            .join(PeerAskTarget, PeerAskTarget.group_id == PeerAskGroup.id)
+            .join(Participant, Participant.id == PeerAskTarget.target_participant_id)
+            .where(
+                PeerAskGroup.room_id.in_(room_ids),
+                PeerAskGroup.state.in_(ACTIVE_GROUP_STATES),
+                PeerAskTarget.state.not_in(TERMINAL_TARGET_STATES),
+                PeerAskGroup.caller_agent_id.is_not(None),
+                Participant.agent_id.is_not(None),
+            )
+            .order_by(PeerAskGroup.created_at, PeerAskGroup.id)
+        )
+    ).all()
+    edges: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for chain_id, room_id, from_agent, to_agent in rows:
+        key = (room_id, from_agent, to_agent)
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append({
+            "chain_id": chain_id,
+            "room_id": room_id,
+            "from_agent_id": from_agent,
+            "to_agent_id": to_agent,
+        })
+    return edges

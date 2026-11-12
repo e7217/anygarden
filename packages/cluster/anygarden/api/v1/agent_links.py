@@ -22,7 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Agent, AgentLink
 from anygarden.dependencies import get_current_identity, get_db
-from anygarden.rooms.authorization import Capability, require_capability
+from anygarden.rooms.authorization import (
+    Capability,
+    accessible_room_ids,
+    require_capability,
+)
 from anygarden.rooms.roster import broadcast_roster_for_agent
 
 router = APIRouter(tags=["agent-links"])
@@ -33,6 +37,9 @@ class AgentBriefOut(BaseModel):
     name: str
     description: str | None = None
     actual_state: str | None = None
+    # #1023 — the overview dims agents that cannot answer. Only the code is
+    # exposed; the UI words it, and failure details stay admin-only.
+    unavailable_code: str | None = None
 
 
 class AgentLinkOut(BaseModel):
@@ -93,6 +100,7 @@ async def list_agent_links(
                 name=a.name or "",
                 description=a.description,
                 actual_state=a.actual_state,
+                unavailable_code=a.unavailable_code,
             )
             for a in agents
         ],
@@ -160,6 +168,30 @@ async def list_peer_chains(
         db, room_id=room_id, identity=identity, capability=Capability.ROOM_READ
     )
     return {"chains": await list_chains(db, room_id=room_id, limit=limit)}
+
+
+@router.get("/api/v1/peer-chains/active")
+async def list_active_peer_edges(
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """#1023 — agent-to-agent questions running now, across the caller's rooms.
+
+    Covers the same rooms as ``GET /api/v1/turns/active`` so the overview
+    never reveals work in a room the person cannot open.
+    """
+    from anygarden.orchestration.peer_chains import list_active_edges
+
+    _require_person(identity)
+    room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="rooms.collection",
+        channel_service=getattr(request.app.state, "channel_service", None),
+        include_shared=True,
+    )
+    return {"edges": await list_active_edges(db, room_ids=set(room_ids))}
 
 
 @router.post("/api/v1/rooms/{room_id}/peer-chains/{chain_id}/cancel")
