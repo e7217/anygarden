@@ -6,7 +6,7 @@ import PeerChainTree from './PeerChainTree'
 import PeerMessagePath from './PeerMessagePath'
 import { LocaleProvider } from '@/i18n/LocaleProvider'
 import { messagePlacements } from '@/lib/peerChains'
-import { sampleChain } from '@/lib/peerChains.fixtures'
+import { node, sampleChain } from '@/lib/peerChains.fixtures'
 
 vi.mock('./PeerChainGraph', () => ({ default: () => <div data-testid="peer-chain-graph" /> }))
 
@@ -29,7 +29,7 @@ describe('PeerChainTree', () => {
     renderTree()
     expect(shownRows()).toEqual(['B', 'D', 'E', 'F', 'G'])
     const row = screen.getByTestId('peer-chain-rows').querySelector('[data-node-id="G"]') as HTMLElement
-    expect(within(row).getByText('F → G')).toBeInTheDocument()
+    expect(within(row).getByText('G')).toBeInTheDocument()
     expect(within(row).getByText('Answering')).toBeInTheDocument()
   })
 
@@ -54,6 +54,29 @@ describe('PeerChainTree', () => {
     unmount()
     renderTree({ chain: sampleChain({ state: 'done' }), onCancel: vi.fn() })
     expect(screen.queryByRole('button', { name: 'Stop every agent in this question chain' })).toBeNull()
+  })
+
+  it('names only the answerer on a row whose asker is the row above, keeping the full path for assistive tech', () => {
+    renderTree()
+    const rows = screen.getByTestId('peer-chain-rows')
+    expect(rows.querySelector('[data-node-id="E"] [data-testid="peer-chain-row-label"]')).toHaveTextContent(/^E$/)
+    expect(screen.getByRole('button', { name: /^Show only messages of D → E/ })).toBeInTheDocument()
+  })
+
+  it('keeps the asker on a row whose parent question is missing', () => {
+    renderTree({ chain: sampleChain({ nodes: [node({ id: 'Y', parent_id: 'missing', caller_name: 'X' })] }) })
+    const rows = screen.getByTestId('peer-chain-rows')
+    expect(rows.querySelector('[data-node-id="Y"] [data-testid="peer-chain-row-label"]')).toHaveTextContent('X → Y')
+  })
+
+  it('lines every row up on one toggle column, or none when nothing folds', () => {
+    const slots = () => screen.getByTestId('peer-chain-rows').querySelectorAll('[data-toggle-slot]').length
+    const { unmount } = renderTree()
+    // Root plus the five shown rows each reserve the column.
+    expect(slots()).toBe(6)
+    unmount()
+    renderTree({ chain: sampleChain({ nodes: [node({ id: 'B' }), node({ id: 'D' })] }) })
+    expect(slots()).toBe(0)
   })
 
   it('switches to the graph view', async () => {
