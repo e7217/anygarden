@@ -322,7 +322,7 @@ test.describe('agent links', () => {
     expect(posted).toHaveLength(1)
   })
 
-  test('[COL-14] a resting link is a still line with an arrow', async ({ page }) => {
+  test('[COL-14] a resting link is a still line from the asker\'s right port to the answerer\'s left port, without an arrow', async ({ page }) => {
     await stubWebSocket(page)
     await stubApi(page, [])
     await signIn(page)
@@ -331,10 +331,33 @@ test.describe('agent links', () => {
     const path = edge.locator('.react-flow__edge-path')
     await expect(edge).not.toHaveClass(/animated/)
     await expect(path).toHaveCSS('animation-name', 'none')
-    await expect(path).toHaveCSS('marker-end', /url\(/)
+    await expect(path).toHaveCSS('marker-end', 'none')
+    await expect(path).toHaveCSS('stroke-width', '1.5px')
+    // The line reaches the left port of the agent that is asked, like the right one it leaves.
+    const d = (await path.getAttribute('d'))!
+    const [ex, ey] = d.trim().split(/[\s,]+/).slice(-2).map(Number)
+    const viewport = await page.locator('.react-flow__viewport').evaluate(el => new DOMMatrix(getComputedStyle(el).transform))
+    const pane = (await page.locator('.react-flow').boundingBox())!
+    const port = (await page.getByTestId('rf__node-a-rev').locator('.react-flow__handle.target').boundingBox())!
+    expect(Math.abs(viewport.a * ex + viewport.e + pane.x - port.x)).toBeLessThan(1.5)
+    expect(Math.abs(viewport.d * ey + viewport.f + pane.y - (port.y + port.height / 2))).toBeLessThan(1.5)
   })
 
-  test('[COL-19] a running question flows, with a solid arrow under reduced motion', async ({ page }) => {
+  test('[COL-14] a linked agent in the details opens that agent and its row deletes the link', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await signIn(page)
+    await page.goto('/agents/links')
+    await page.getByTestId('rf__node-a-dev').click()
+    const details = page.getByTestId('agent-reach-details')
+    await expect(details).toContainText('Following links can involve up to 1 agents')
+    await details.getByRole('button', { name: 'Reviewer', exact: true }).click()
+    await expect(details.getByRole('heading', { level: 2 })).toHaveText('Reviewer')
+    await expect(page.getByTestId('rf__node-a-rev').locator('.agent-link-node')).toHaveClass(/is-selected/)
+    await expect(details.getByRole('button', { name: 'Delete link from Developer' })).toBeVisible()
+  })
+
+  test('[COL-19] a running question flows, and stays a solid line under reduced motion', async ({ page }) => {
     await stubWebSocket(page)
     await stubApi(page, [])
     await page.route('**/api/v1/peer-chains/active', route => fulfillJson(route, 200, {
@@ -355,7 +378,8 @@ test.describe('agent links', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await expect(path).toHaveCSS('animation-name', 'none')
     await expect(path).toHaveCSS('stroke-dasharray', 'none')
-    await expect(path).toHaveCSS('marker-end', /url\(/)
+    await expect(path).toHaveCSS('marker-end', 'none')
+    await expect(path).toHaveCSS('stroke-width', '2px')
   })
 
   test('[ROOM-16] home opens the overview and its cards show who is answering', async ({ page }) => {
