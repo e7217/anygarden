@@ -12,9 +12,11 @@ export const ACTIVE_TURNS_INVALIDATE_EVENT = 'anygarden:turns:invalidate'
 export interface ActiveTurns {
   roomIds: ReadonlySet<string>
   agentIds: ReadonlySet<string>
+  /** #1023 — rooms each agent is answering in, for the overview's cards. */
+  roomsByAgent: ReadonlyMap<string, string[]>
 }
 
-const EMPTY: ActiveTurns = { roomIds: new Set(), agentIds: new Set() }
+const EMPTY: ActiveTurns = { roomIds: new Set(), agentIds: new Set(), roomsByAgent: new Map() }
 
 /** Sidebar-wide snapshot, provided once so nested rows don't each poll. */
 export const ActiveTurnsContext = createContext<ActiveTurns>(EMPTY)
@@ -47,9 +49,14 @@ export function useActiveTurns(enabled: boolean): ActiveTurns {
         if (!resp.ok) return
         const rows = await resp.json() as { room_id: string; agent_ids: string[] }[]
         if (!active || !Array.isArray(rows)) return
+        const roomsByAgent = new Map<string, string[]>()
+        for (const row of rows) {
+          for (const agentId of row.agent_ids) roomsByAgent.set(agentId, [...roomsByAgent.get(agentId) ?? [], row.room_id])
+        }
         setState({
           roomIds: new Set(rows.map(row => row.room_id)),
-          agentIds: new Set(rows.flatMap(row => row.agent_ids)),
+          agentIds: new Set(roomsByAgent.keys()),
+          roomsByAgent,
         })
       } catch {
         // Keep the last known state; the next poll corrects it.

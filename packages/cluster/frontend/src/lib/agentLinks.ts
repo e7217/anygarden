@@ -10,6 +10,7 @@
  * a canvas.
  */
 import { apiFetch } from '@/lib/api'
+import { deriveAgentOnline } from '@/lib/agent-liveness'
 
 export interface AgentLink {
   id: string
@@ -24,6 +25,8 @@ export interface LinkAgent {
   name: string
   description: string | null
   actual_state: string
+  /** #1023 — why it cannot answer, worded by the UI; null when fine. */
+  unavailable_code?: string | null
 }
 
 export interface AgentLinkGraph {
@@ -205,7 +208,45 @@ function cycleThrough(component: string[], outgoing: Map<string, string[]>): str
 }
 
 /** Small, capped visual emphasis; incoming and indirect links do not count. */
-export function agentNodeSize(outgoingCount: number) {
+export function agentNodeSize(outgoingCount: number, withStatus = false) {
   const count = Math.min(4, Math.max(0, outgoingCount))
-  return { width: 96 + count * 8, height: 44 + count * 2 }
+  // #1023 — a busy or unavailable card adds one status line and room for it.
+  return withStatus
+    ? { width: 184, height: 60 + count * 2 }
+    : { width: 96 + count * 8, height: 44 + count * 2 }
+}
+
+/** #1023 — an agent-to-agent question running now in a room the person can open. */
+export interface ActivePeerEdge {
+  chain_id: string
+  room_id: string
+  from_agent_id: string
+  to_agent_id: string
+}
+
+export async function fetchActivePeerEdges(signal?: AbortSignal): Promise<ActivePeerEdge[]> {
+  const response = await apiFetch('/api/v1/peer-chains/active', { signal })
+  if (!response.ok) throw await failure(response)
+  const body = await response.json() as { edges?: unknown } | null
+  return Array.isArray(body?.edges) ? body.edges as ActivePeerEdge[] : []
+}
+
+export interface AgentActivity {
+  state: 'busy' | 'idle' | 'unavailable'
+  /** Rooms it is answering in; empty unless busy. */
+  roomIds: string[]
+  unavailableCode: string | null
+}
+
+/**
+ * COL-19 — what the overview shows on an agent's card. An agent that cannot
+ * answer reads as such even while a stale turn lingers in one of its rooms.
+ */
+export function agentActivity(agent: LinkAgent, answeringIn: readonly string[]): AgentActivity {
+  const code = agent.unavailable_code ?? null
+  if (code || !deriveAgentOnline(agent.actual_state)) {
+    return { state: 'unavailable', roomIds: [], unavailableCode: code }
+  }
+  if (answeringIn.length > 0) return { state: 'busy', roomIds: [...answeringIn], unavailableCode: null }
+  return { state: 'idle', roomIds: [], unavailableCode: null }
 }

@@ -2,9 +2,21 @@
 
 A link `A → B` lets A ask B for help from any room. Agents choose whether help is useful from the current task and each peer's public description. Edit that description in the agent's settings; relationships do not carry conditions or instructions. A reply returns to the requesting agent without a reverse link.
 
-Open **Agent links** beside the sidebar's Agents heading. Hover, select or keyboard-focus an agent to reveal the small hollow connection point on its right. Drag from that point onto another card, or use **Add link** to choose the two agents. On touch screens, tap the agent to select it; **Add link** also remains available without dragging. Select an arrow to delete it or add the reverse relationship. A slim card shows only its name; a small increase in size represents more directly outgoing connections. Thin arrows show the direction of help, and selecting a card highlights related paths while keeping all names readable. Cycles may be configured, but a running question cannot call an ancestor again.
+Open **Overview** at the top of the sidebar. When there are two or more agents, it is also the home screen: `/` without a room opens it, including after a room is archived or deleted. With fewer agents, home keeps the welcome screen. Hover, select or keyboard-focus an agent to reveal the small hollow connection point on its right. Drag from that point onto another card, or use **Add link** to choose the two agents. On touch screens, tap the agent to select it; **Add link** also remains available without dragging. Select an arrow to delete it or add the reverse relationship. A slim card shows only its name; a small increase in size represents more directly outgoing connections. Thin arrows show the direction of help, and selecting a card highlights related paths while keeping all names readable. Cycles may be configured, but a running question cannot call an ancestor again.
 
 Select an agent to see its description, accessible previous conversations and connections. Open a conversation by title to continue in that room. Administrators can explicitly start a new conversation. Other users can open conversations they already have access to. Conversation history is stored by DM room, not by the engine's internal session ID. The map remembers each user's layout and viewport in that browser.
+
+## Overview (#1023)
+
+The map shows what is happening now, limited to rooms the person can open:
+
+- An agent answering in a room gets a highlighted card and a link to that room (`Answering in #room`, or `+N` for more rooms).
+- An agent that cannot answer is dimmed with a short reason: stopped after an error, no machine to run on, not in any room, or offline. Failure details stay in the admin agent settings.
+- A link only flows while a question runs along it. A resting link is a still line with an arrow. A question between members of the same room needs no link; it is drawn as a temporary dashed line while it runs.
+- With nothing selected, the side panel lists what needs you (inbox items waiting on you), what is running now, and rooms with news. Empty sections are hidden.
+- **Auto-arrange** places agents left to right by who they can ask, so agents nobody asks sit in the first column.
+
+`GET /api/v1/agent-links` now also returns each agent's `unavailable_code` (null when fine). `GET /api/v1/peer-chains/active` returns `{"edges": [{chain_id, room_id, from_agent_id, to_agent_id}]}` for open agent-to-agent questions in the caller's accessible rooms (the same rooms as `GET /api/v1/turns/active`). It requires a person; agent identities get 403. Questions a person asked are not edges.
 
 ## API change in #1009
 

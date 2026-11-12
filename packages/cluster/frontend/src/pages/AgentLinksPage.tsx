@@ -5,11 +5,17 @@ import { Button } from '@/components/ui/button'
 import AgentLinksCanvas, { type LinkSelection } from '@/components/agent-links/AgentLinksCanvas'
 import LinkCreateDialog, { linkErrorMessage, type LinkCreateTarget } from '@/components/agent-links/LinkCreateDialog'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import { useNavigate } from 'react-router-dom'
 import AgentConversationsPanel from '@/components/agent-links/AgentConversationsPanel'
+import AgentOverviewSummary from '@/components/agent-links/AgentOverviewSummary'
 import { useAuth } from '@/hooks/useAuth'
 import { useAgentLinks } from '@/hooks/useAgentLinks'
+import { useActiveTurns } from '@/hooks/useActiveTurns'
+import { useActivePeerEdges } from '@/hooks/useActivePeerEdges'
+import { useProjectInbox } from '@/hooks/useProjectInbox'
+import { useRooms } from '@/hooks/useRooms'
 import { useLocale } from '@/i18n/LocaleProvider'
-import { findCycles, reachableFrom, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
+import { agentActivity, findCycles, reachableFrom, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
 
 /** Keeps a React Flow crash from blanking the whole SPA (as on Topology). */
 class CanvasBoundary extends Component<{ fallback: (retry: () => void, message: string) => ReactNode; children: ReactNode }, { error: Error | null }> {
@@ -35,10 +41,12 @@ function Notice({ title, body, action, tone = 'neutral' }: { title: string; body
 }
 
 /**
- * Relationship map of agent links (#1006): which agent may ask which,
- * Any signed-in user may edit links. Drag between agents to
- * add one; select a link to delete it; select an agent to
- * highlight everyone it could pull in by following links.
+ * Overview (#1023, COL-19) on top of the agent-link map (#1006): which agent
+ * may ask which, who is answering where right now, and which questions are
+ * running. Any signed-in user may edit links. Drag between agents to add
+ * one; select a link to delete it; select an agent to highlight everyone it
+ * could pull in by following links. With nothing selected the side panel
+ * sums up what needs the person.
  */
 export default function AgentLinksPage() {
   const { t, formatNumber } = useLocale()
@@ -48,6 +56,11 @@ export default function AgentLinksPage() {
   const [saving, setSaving] = useState(0)
   const [selection, setSelection] = useState<LinkSelection>(null)
   const [editor, setEditor] = useState<LinkCreateTarget | null>(null)
+  const navigate = useNavigate()
+  const activeTurns = useActiveTurns(true)
+  const activeEdges = useActivePeerEdges(true)
+  const inbox = useProjectInbox(user?.id ?? null)
+  const { rooms: roomsByProject, agentDMs } = useRooms()
 
   const agents = useMemo(() => graph?.agents ?? [], [graph])
   const links = useMemo(() => graph?.links ?? [], [graph])
@@ -56,6 +69,28 @@ export default function AgentLinksPage() {
     [agents],
   )
   const cycles = useMemo(() => findCycles(links), [links])
+  const roomList = useMemo(
+    () => [...Object.values(roomsByProject ?? {}).flat(), ...(agentDMs ?? [])],
+    [roomsByProject, agentDMs],
+  )
+  const roomName = useCallback((id: string) => roomList.find(room => room.id === id)?.name ?? null, [roomList])
+  const activity = useMemo(
+    () => new Map(agents.map(agent => [agent.id, agentActivity(agent, activeTurns.roomsByAgent.get(agent.id) ?? [])])),
+    [agents, activeTurns],
+  )
+  const busyCount = useMemo(() => [...activity.values()].filter(a => a.state === 'busy').length, [activity])
+  const running = useMemo(() => [...activeTurns.roomIds].map(id => ({
+    room: { id, name: roomName(id) ?? t('agentLinks.someRoom') },
+    agentIds: agents.filter(agent => activity.get(agent.id)?.roomIds.includes(id)).map(agent => agent.id),
+  })), [activeTurns, agents, activity, roomName, t])
+  const needsYou = useMemo(() => (inbox.items ?? []).filter(item => item.needs_action).map(item => ({
+    id: item.id, title: item.task_title, roomName: item.task_room_name, href: item.task_href,
+  })), [inbox.items])
+  const roomsWithNews = useMemo(
+    () => roomList.filter(room => room.has_updates && !activeTurns.roomIds.has(room.id)).map(room => ({ id: room.id, name: room.name })),
+    [roomList, activeTurns],
+  )
+  const openRoom = useCallback((id: string) => navigate(`/rooms/${id}`), [navigate])
 
   // Drop a selection whose agent or link disappeared (deleted, refetched).
   useEffect(() => {
@@ -125,6 +160,10 @@ export default function AgentLinksPage() {
               selection={selection}
               onSelect={setSelection}
               onConnect={(fromId, toId) => void connect(fromId, toId)}
+              activity={activity}
+              activeEdges={activeEdges}
+              roomName={roomName}
+              onOpenRoom={openRoom}
             />
           </CanvasBoundary>
           {links.length === 0 && (
@@ -137,8 +176,13 @@ export default function AgentLinksPage() {
             </div>
           )}
         </section>
+        {!selectedLink && !selectedAgent && (
+          <DetailsPanel label={t('agentLinks.overview')}>
+            <AgentOverviewSummary needsYou={needsYou} running={running} activeEdges={activeEdges} roomsWithNews={roomsWithNews} nameOf={nameOf} />
+          </DetailsPanel>
+        )}
         {(selectedLink || selectedAgent) && (
-          <DetailsPanel onClose={() => setSelection(null)}>
+          <DetailsPanel label={t('agentLinks.details')} onClose={() => setSelection(null)}>
             {selectedLink && (
               <LinkDetails
                 link={selectedLink}
@@ -170,7 +214,7 @@ export default function AgentLinksPage() {
           <h1 className="text-body font-bold tracking-tight text-[var(--color-foreground)] max-md:sr-only">{t('agentLinks.title')}</h1>
           {graph && (
             <span className="text-badge text-[var(--color-foreground-muted)]">
-              {t('agentLinks.summary', { agents: formatNumber(agents.length), links: formatNumber(links.length) })}
+              {t('agentLinks.summary', { agents: formatNumber(agents.length), busy: formatNumber(busyCount), links: formatNumber(links.length) })}
             </span>
           )}
           <div className="ml-auto flex items-center gap-2">
@@ -219,18 +263,22 @@ export default function AgentLinksPage() {
   )
 }
 
-function DetailsPanel({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+function DetailsPanel({ label, onClose, children }: { label: string; onClose?: () => void; children: ReactNode }) {
   const { t } = useLocale()
   return (
     <aside
-      aria-label={t('agentLinks.details')}
+      aria-label={label}
       className="relative z-20 max-h-[55%] shrink-0 overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-deep lg:static lg:max-h-none lg:w-80 lg:shrink-0 lg:border-l lg:border-t-0 lg:shadow-none"
     >
-      <div className="mb-2 flex justify-end">
-        <Button variant="ghost" size="icon" onClick={onClose} aria-label={t('agentLinks.closeDetails')}>
-          <X />
-        </Button>
-      </div>
+      {onClose ? (
+        <div className="mb-2 flex justify-end">
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label={t('agentLinks.closeDetails')}>
+            <X />
+          </Button>
+        </div>
+      ) : (
+        <h2 className="mb-3 text-body font-semibold text-[var(--color-foreground)]">{label}</h2>
+      )}
       {children}
     </aside>
   )

@@ -452,3 +452,79 @@ async def test_adding_a_thread_only_agent_makes_it_a_member(ws_env) -> None:
         )
 
     assert created is True and participant.joined_via is None
+
+
+class TestOverviewApi:
+    """COL-19 — the overview shows who cannot answer and which questions are running."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("COL-19")
+    async def test_agents_carry_their_unavailable_code(self, ws_env) -> None:
+        app, sf = ws_env["app"], ws_env["session_factory"]
+        ok = await _add_outside_agent(sf, "정상")
+        down = await _add_outside_agent(sf, "멈춤")
+        async with sf() as db:
+            agent = await db.get(Agent, down)
+            agent.actual_state = "failed"
+            agent.unavailable_code = "crashed"
+            agent.unavailable_detail = {"stderr_tail": "Traceback secret"}
+            await db.commit()
+
+        with TestClient(app) as client:
+            listed = client.get("/api/v1/agent-links", headers=_auth(ws_env["token"])).json()
+
+        by_id = {a["id"]: a for a in listed["agents"]}
+        assert by_id[ok]["unavailable_code"] is None
+        assert by_id[down]["unavailable_code"] == "crashed"
+        assert by_id[down]["actual_state"] == "failed"
+        assert "Traceback" not in json.dumps(listed)
+
+    @pytest.mark.asyncio
+    @pytest.mark.req("COL-19")
+    async def test_running_questions_are_listed_as_agent_edges(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        a_token, a_pid, _b_token, b_pid, _c = await _nested_setup(ws_env)
+        a_agent, b_agent = await _agent_of(sf, a_pid), await _agent_of(sf, b_pid)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{a_pid}> 점검")
+            _ask_peer_raw(client, a_token, room.id, [{"participant_id": b_pid, "question": "검토"}])
+            edges = client.get(
+                "/api/v1/peer-chains/active", headers=_auth(ws_env["token"])
+            ).json()["edges"]
+            assert [(e["from_agent_id"], e["to_agent_id"], e["room_id"]) for e in edges] == [
+                (a_agent, b_agent, room.id)
+            ]
+            chain_id = edges[0]["chain_id"]
+
+            client.post(
+                f"/api/v1/rooms/{room.id}/peer-chains/{chain_id}/cancel",
+                headers=_auth(ws_env["token"]),
+            )
+            after = client.get(
+                "/api/v1/peer-chains/active", headers=_auth(ws_env["token"])
+            ).json()["edges"]
+        assert after == []
+
+    @pytest.mark.asyncio
+    async def test_running_questions_stay_inside_accessible_rooms(self, ws_env) -> None:
+        from anygarden.orchestration.peer_chains import list_active_edges
+
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        a_token, a_pid, _b_token, b_pid, _c = await _nested_setup(ws_env)
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{a_pid}> 점검")
+            _ask_peer_raw(client, a_token, room.id, [{"participant_id": b_pid, "question": "검토"}])
+
+        async with sf() as db:
+            assert len(await list_active_edges(db, room_ids={room.id})) == 1
+            assert await list_active_edges(db, room_ids=set()) == []
+            assert await list_active_edges(db, room_ids={"other-room"}) == []
+
+    @pytest.mark.asyncio
+    async def test_agents_cannot_read_running_questions(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        agent_token, _s, _p = await _seed_sender_and_peer(sf, room)
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/peer-chains/active", headers=_auth(agent_token))
+        assert resp.status_code == 403

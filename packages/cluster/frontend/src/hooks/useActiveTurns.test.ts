@@ -38,6 +38,8 @@ describe('useActiveTurns', () => {
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/v1/turns/active', expect.anything())
     expect([...result.current.roomIds]).toEqual(['r1', 'r2'])
     expect([...result.current.agentIds].sort()).toEqual(['a1', 'a2'])
+    expect(result.current.roomsByAgent.get('a1')).toEqual(['r1', 'r2'])
+    expect(result.current.roomsByAgent.get('a2')).toEqual(['r2'])
   })
 
   it('polls while visible and clears a finished answer [MSG-09]', async () => {

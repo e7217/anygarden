@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useOverviewLanding } from '@/hooks/useOverviewLanding'
 import Sidebar from '@/components/Sidebar'
 import SidebarExpandButton from '@/components/SidebarExpandButton'
 import RoomHeader from '@/components/RoomHeader'
@@ -83,6 +84,8 @@ function LocalChatPage() {
   const location = useLocation()
   const focusMessageId = searchParams.get('message')
   const selectedRoom = roomId ?? null
+  // ROOM-16 — with a team of agents, the overview is the home screen.
+  const landing = useOverviewLanding(selectedRoom === null)
   const {
     projects,
     rooms,
@@ -874,6 +877,8 @@ function LocalChatPage() {
               onOpenChange={open => setWorkspaceRoomId(open ? selectedRoom : null)}
             />
           </>
+        ) : landing === 'checking' ? (
+          <div className="flex-1 bg-[var(--color-surface-alt)]" aria-busy="true" />
         ) : (
           <>
             {/* Mobile-only top bar with menu button for empty state */}
