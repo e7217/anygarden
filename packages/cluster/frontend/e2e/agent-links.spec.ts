@@ -378,6 +378,33 @@ test.describe('agent links', () => {
     await expect(page.getByRole('complementary', { name: 'What is happening' })).toContainText('Running now')
   })
 
+  test('[COL-20] agents carry one alert badge and a queued count, with the details in their card', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    const none = { failed_tasks: [], failed_tasks_count: 0, failed_rooms: [], waiting: [], waiting_count: 0, unread_rooms: [], queued_tasks: 0 }
+    await page.route('**/api/v1/agent-links/alerts', route => fulfillJson(route, 200, { agents: [
+      { ...none, agent_id: 'a-dev', failed_tasks: [{ id: 't1', title: 'Deploy', room_id: ROOM_ID }], failed_tasks_count: 1,
+        waiting: [{ kind: 'workspace_action', id: 'w1', title: 'Create a room', room_id: ROOM_ID, href: null }], waiting_count: 1, queued_tasks: 3 },
+      { ...none, agent_id: 'a-rev', waiting: [{ kind: 'approval', id: 'ap1', title: 'Publish', room_id: ROOM_ID, href: '/inbox' }], waiting_count: 1, unread_rooms: [ROOM_ID] },
+      { ...none, agent_id: 'a-sec', unread_rooms: [ROOM_ID], queued_tasks: 1 },
+    ] }))
+    await signIn(page)
+    await page.goto('/agents/links')
+    const dev = page.getByTestId('rf__node-a-dev')
+    // A problem wins over a request waiting on you; the queue sits apart.
+    await expect(dev.locator('.agent-link-alert')).toHaveClass(/is-issue/)
+    await expect(dev.locator('.agent-link-queue')).toHaveText('3')
+    await expect(dev).toHaveAttribute('aria-label', /Has a problem, 3 queued tasks/)
+    await expect(page.getByTestId('rf__node-a-rev').locator('.agent-link-alert')).toHaveClass(/is-waiting/)
+    // An agent that cannot answer shows its outline only.
+    await expect(page.getByTestId('rf__node-a-sec').locator('.agent-link-alert, .agent-link-queue')).toHaveCount(0)
+    await dev.locator('.agent-link-node').hover()
+    const card = page.getByTestId('agent-link-card-a-dev')
+    await expect(card).toContainText('Failed: Deploy')
+    await expect(card).toContainText('Waiting for you: Create a room')
+    await expect(card).toContainText('3 queued tasks')
+  })
+
   test('[ROOM-16] home keeps the welcome screen with fewer than two agents', async ({ page }) => {
     await stubWebSocket(page)
     await stubApi(page, [])

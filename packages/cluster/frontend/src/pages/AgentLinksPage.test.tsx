@@ -16,12 +16,13 @@ vi.mock('@/components/PageShell', () => ({
   default: ({ children }: { children: ReactNode }) => <main>{children}</main>,
 }))
 vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
-  default: ({ agents, onSelect, onConnect, activity, activeEdges }: {
+  default: ({ agents, onSelect, onConnect, activity, activeEdges, alerts }: {
     agents: { id: string; name: string }[]
     onSelect: (selection: { kind: 'agent'; id: string } | null) => void
     onConnect: (from: string, to: string) => void
     activity?: Map<string, { state: string; roomIds: string[] }>
     activeEdges?: { from_agent_id: string; to_agent_id: string }[]
+    alerts?: Map<string, { queued_tasks: number }>
   }) => (
     <div data-testid="canvas">
       {agents.map(agent => (
@@ -32,6 +33,7 @@ vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
       <p data-testid="canvas-activity">
         {agents.map(agent => `${agent.id}:${activity?.get(agent.id)?.state ?? '-'}`).join(' ')}
       </p>
+      <p data-testid="canvas-alerts">{[...(alerts ?? new Map()).entries()].map(([id, a]) => `${id}:${a.queued_tasks}`).join(' ')}</p>
       <p data-testid="canvas-edges">{(activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`).join(' ')}</p>
       <button type="button" onClick={() => onConnect('qa', 'coder')}>connect QA to Coder</button>
     </div>
@@ -59,17 +61,19 @@ function renderPage() {
 afterEach(() => { cleanup(); vi.resetAllMocks(); roomsMock.rooms = {} })
 
 /** Answers each endpoint the overview reads with a fresh response. */
-function serve({ graph, turns = [], edges = [], inbox = [] }: {
+function serve({ graph, turns = [], edges = [], inbox = [], alerts = [] }: {
   graph: unknown
   turns?: { room_id: string; agent_ids: string[] }[]
   edges?: { chain_id: string; room_id: string; from_agent_id: string; to_agent_id: string }[]
   inbox?: unknown[]
+  alerts?: unknown[]
 }) {
   fetchMock.mockImplementation(async path => {
     const url = String(path)
     if (url.startsWith('/api/v1/turns/active')) return json(turns)
     if (url.startsWith('/api/v1/peer-chains/active')) return json({ edges })
     if (url.startsWith('/api/v1/inbox')) return json({ items: inbox, projects: [] })
+    if (url.startsWith('/api/v1/agent-links/alerts')) return json({ agents: alerts })
     if (url.startsWith('/api/v1/agent-links')) return json(graph)
     return json({}, 404)
   })
@@ -138,6 +142,15 @@ describe('AgentLinksPage', () => {
     fetchMock.mockResolvedValue(json({ agents, links: [] }))
     fireEvent.click(screen.getByRole('button', { name: /try again/i }))
     expect(await screen.findByTestId('canvas')).toBeInTheDocument()
+  })
+
+  it('[COL-20] hands each agent\'s alerts to the map', async () => {
+    serve({
+      graph: { agents, links: [] },
+      alerts: [{ agent_id: 'coder', failed_tasks: [], failed_tasks_count: 0, failed_rooms: [], waiting: [], waiting_count: 0, unread_rooms: [], queued_tasks: 2 }],
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('canvas-alerts')).toHaveTextContent('coder:2'))
   })
 
   it('[COL-19] marks who is answering and who cannot, and the running questions', async () => {

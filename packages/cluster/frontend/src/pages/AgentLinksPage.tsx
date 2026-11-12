@@ -11,6 +11,7 @@ import AgentOverviewSummary from '@/components/agent-links/AgentOverviewSummary'
 import { useAuth } from '@/hooks/useAuth'
 import { useAgentLinks } from '@/hooks/useAgentLinks'
 import { useActiveTurns } from '@/hooks/useActiveTurns'
+import { useAgentAlerts } from '@/hooks/useAgentAlerts'
 import { useActivePeerEdges } from '@/hooks/useActivePeerEdges'
 import { useProjectInbox } from '@/hooks/useProjectInbox'
 import { useRooms } from '@/hooks/useRooms'
@@ -59,6 +60,7 @@ export default function AgentLinksPage() {
   const navigate = useNavigate()
   const activeTurns = useActiveTurns(true)
   const activeEdges = useActivePeerEdges(true)
+  const alerts = useAgentAlerts(true)
   const inbox = useProjectInbox(user?.id ?? null)
   const { rooms: roomsByProject, agentDMs } = useRooms()
 
@@ -91,6 +93,7 @@ export default function AgentLinksPage() {
     [roomList, activeTurns],
   )
   const openRoom = useCallback((id: string) => navigate(`/rooms/${id}`), [navigate])
+  const openHref = useCallback((href: string) => navigate(href), [navigate])
 
   // Drop a selection whose agent or link disappeared (deleted, refetched).
   useEffect(() => {
@@ -164,6 +167,8 @@ export default function AgentLinksPage() {
               activeEdges={activeEdges}
               roomName={roomName}
               onOpenRoom={openRoom}
+              alerts={alerts}
+              onOpenHref={openHref}
             />
           </CanvasBoundary>
           {links.length === 0 && (

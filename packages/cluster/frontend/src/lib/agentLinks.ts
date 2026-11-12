@@ -239,6 +239,45 @@ export async function fetchActivePeerEdges(signal?: AbortSignal): Promise<Active
   return Array.isArray(body?.edges) ? body.edges as ActivePeerEdge[] : []
 }
 
+/** #1032 — something waiting on a person that an agent asked for. */
+export interface AgentWaitingItem {
+  kind: 'workspace_action' | 'approval' | 'question'
+  id: string
+  title: string
+  room_id: string | null
+  href: string | null
+}
+
+/** #1032 — what needs the person, per agent, across the rooms they can open. */
+export interface AgentAlerts {
+  agent_id: string
+  failed_tasks: { id: string; title: string; room_id: string }[]
+  failed_tasks_count: number
+  failed_rooms: string[]
+  waiting: AgentWaitingItem[]
+  waiting_count: number
+  unread_rooms: string[]
+  queued_tasks: number
+}
+
+export async function fetchAgentAlerts(signal?: AbortSignal): Promise<AgentAlerts[]> {
+  const response = await apiFetch('/api/v1/agent-links/alerts', { signal })
+  if (!response.ok) throw await failure(response)
+  const body = await response.json() as { agents?: unknown } | null
+  return Array.isArray(body?.agents) ? body.agents as AgentAlerts[] : []
+}
+
+export type AgentAlertKind = 'issue' | 'waiting' | 'unread'
+
+/** The one alert the circle shows: a problem, then a request waiting on you, then an unread answer. */
+export function topAlert(alerts: AgentAlerts | undefined): AgentAlertKind | null {
+  if (!alerts) return null
+  if (alerts.failed_tasks_count > 0 || alerts.failed_rooms.length > 0) return 'issue'
+  if (alerts.waiting_count > 0) return 'waiting'
+  if (alerts.unread_rooms.length > 0) return 'unread'
+  return null
+}
+
 export interface AgentActivity {
   state: 'busy' | 'idle' | 'unavailable'
   /** Rooms it is answering in; empty unless busy. */
