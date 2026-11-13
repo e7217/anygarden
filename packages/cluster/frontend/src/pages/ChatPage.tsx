@@ -96,7 +96,7 @@ function LocalChatPage() {
     markRoomRead,
   } = useRooms()
   const { user } = useAuth()
-  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
+  const { messages, historyLoading, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
   const { participants, refresh: refreshRoomParticipants } = useRoomParticipants(selectedRoom)
   const myParticipantId = user ? Object.values(participants).find(p => p.user_id === user.id)?.id ?? null : null
   // #1006 — agents pulled in only to answer through an agent link stay in
@@ -775,6 +775,7 @@ function LocalChatPage() {
             {messageContextError && <p role="alert" className="px-4 py-2 text-sm text-[var(--color-danger)]">{t('tasks.requestFailed', { status: messageContextError.match(/HTTP (\d+)/)?.[1] ?? '500' })}</p>}
             <ChatArea
               messages={messages}
+              loading={historyLoading}
               focusedMessageId={focusMessageId}
               participants={participants}
               myParticipantId={myParticipantId}

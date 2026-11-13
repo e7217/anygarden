@@ -30,9 +30,12 @@ interface RoomState {
   /** #893 — when each agent started working, on the browser's clock (ms). */
   typingSince: Record<string, number>;
   messageContextError: string | null;
+  /** True until the room's REST history has answered, so the chat can show
+   *  a loading state instead of claiming the room is empty. */
+  historyLoading: boolean;
 }
 const emptyRoomState = (scope: RoomScope): RoomState => ({
-  scope, messages: [], connected: false, typingUsers: new Set(), typingStages: {}, typingProgress: {}, typingWork: {}, typingSince: {}, messageContextError: null,
+  scope, messages: [], historyLoading: scope.roomId !== null, connected: false, typingUsers: new Set(), typingStages: {}, typingProgress: {}, typingWork: {}, typingSince: {}, messageContextError: null,
 });
 
 export function useWebSocket(roomId: string | null, focusMessageId: string | null = null) {
@@ -43,7 +46,7 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
   currentScope.current = scope;
   const isCurrent = useCallback(() => scope.active && currentScope.current === scope, [scope]);
   const [snapshot, setSnapshot] = useState<RoomState>(() => emptyRoomState(scope));
-  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, messageContextError } = snapshot.scope === scope
+  const { messages, historyLoading, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, messageContextError } = snapshot.scope === scope
     ? snapshot : emptyRoomState(scope);
   const updateState = useCallback((patch: (previous: RoomState) => Partial<RoomState>) => {
     if (!isCurrent()) return;
@@ -367,7 +370,10 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
   useEffect(() => {
     if (!roomId) return;
     const token = getAuthToken();
-    if (!token) return;
+    if (!token) {
+      updateState(() => ({ historyLoading: false }));
+      return;
+    }
     const controller = new AbortController();
     const accepts = () => isCurrent() && !controller.signal.aborted && getAuthToken() === token;
     fetch(`/api/v1/rooms/${roomId}/messages?since_seq=0&limit=100`, {
@@ -406,7 +412,9 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
           return { messages: [...bySequence.values()].sort((a, b) => a.seq - b.seq) };
         });
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      if (accepts()) updateState(() => ({ historyLoading: false }));
+    });
     return () => controller.abort();
   }, [roomId, isCurrent, updateState]);
 
@@ -437,5 +445,5 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
     return () => controller.abort();
   }, [roomId, focusMessageId, isCurrent, updateState]);
 
-  return { messages, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, send, sendTyping, messageContextError };
+  return { messages, historyLoading, connected, typingUsers, typingStages, typingProgress, typingWork, typingSince, send, sendTyping, messageContextError };
 }

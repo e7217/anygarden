@@ -26,6 +26,9 @@ import { activeChainsForMessage, type PeerChain } from '@/lib/peerChains'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
+  /** The room's history is still being fetched. With no messages yet,
+   *  this shows a loading placeholder instead of the empty-room prompt. */
+  loading?: boolean
   focusedMessageId?: string | null
   participants: Record<string, Participant>
   myParticipantId: string | null
@@ -63,6 +66,7 @@ interface ChatAreaProps {
 
 export default function ChatArea({
   messages,
+  loading = false,
   focusedMessageId,
   participants,
   myParticipantId,
@@ -266,6 +270,10 @@ export default function ChatArea({
     scrollToEnd(bottomRef.current)
   }, [messages, typingNames.length, focusedMessageId])
 
+  if (messages.length === 0 && loading) {
+    return <ChatHistorySkeleton label={t('chat.loadingMessages')} />
+  }
+
   if (messages.length === 0) {
     return (
       <div className="chat-column flex flex-1 flex-col items-center justify-center bg-[var(--color-surface)] py-4 text-center">
@@ -388,6 +396,42 @@ export default function ChatArea({
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
+    </div>
+  )
+}
+
+// Alternating received/sent rows with varied widths, so the placeholder
+// reads as a conversation rather than a list.
+const SKELETON_ROWS = [
+  { mine: false, lines: ['w-48', 'w-72'] },
+  { mine: true, lines: ['w-56'] },
+  { mine: false, lines: ['w-64', 'w-40', 'w-52'] },
+  { mine: true, lines: ['w-44', 'w-60'] },
+  { mine: false, lines: ['w-56'] },
+]
+
+function ChatHistorySkeleton({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="chat-history-loading"
+      className="flex flex-1 flex-col min-h-0 bg-[var(--color-surface)]"
+    >
+      <div className="chat-column flex flex-1 flex-col justify-end gap-5 overflow-hidden py-4" aria-hidden="true">
+        {SKELETON_ROWS.map((row, i) => (
+          <div key={i} className={`flex items-start gap-3 ${row.mine ? 'flex-row-reverse' : ''}`}>
+            {!row.mine && <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-[var(--color-surface-hover)]" />}
+            <div className={`flex flex-col gap-2 ${row.mine ? 'items-end' : 'items-start'}`}>
+              {!row.mine && <div className="h-3 w-24 animate-pulse rounded bg-[var(--color-surface-hover)]" />}
+              {row.lines.map((width, j) => (
+                <div key={j} className={`h-4 max-w-full ${width} animate-pulse rounded bg-[var(--color-surface-hover)]`} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="chat-column pb-4 text-center text-caption text-[var(--color-foreground-muted)]">{label}</p>
     </div>
   )
 }
