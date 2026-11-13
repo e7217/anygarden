@@ -58,6 +58,12 @@ class ReceiptStore:
                 CREATE TABLE IF NOT EXISTS sessions (
                     scope TEXT PRIMARY KEY, handle TEXT NOT NULL
                 );
+                -- #1046 — unknown executions whose process is gone. The
+                -- executions row stays as replay evidence; only the scope
+                -- block is lifted.
+                CREATE TABLE IF NOT EXISTS retired_unknowns (
+                    execution_id TEXT PRIMARY KEY, scope TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS session_usage_counters (
                     scope TEXT NOT NULL, handle TEXT NOT NULL,
                     cumulative TEXT, execution_id TEXT NOT NULL,
@@ -160,12 +166,23 @@ class ReceiptStore:
         return SessionScope(**json.loads(row[0]))
 
     def scope_blocked(self, scope: str) -> bool:
-        return (
-            self.db.execute(
-                "SELECT 1 FROM executions WHERE scope=? AND outcome='unknown'", (scope,)
-            ).fetchone()
-            is not None
-        )
+        return bool(self.blocking_unknowns(scope))
+
+    def blocking_unknowns(self, scope: str) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT id,process_state,pid FROM executions WHERE scope=? AND outcome='unknown' "
+            "AND id NOT IN (SELECT execution_id FROM retired_unknowns)",
+            (scope,),
+        ).fetchall()
+
+    def retire_unknowns(self, scope: str, execution_ids: list[str]) -> None:
+        """Lift the block and drop the native session the unknown turns touched."""
+        with self.db:
+            self.db.executemany(
+                "INSERT OR IGNORE INTO retired_unknowns VALUES (?,?)",
+                [(execution_id, scope) for execution_id in execution_ids],
+            )
+            self.db.execute("DELETE FROM sessions WHERE scope=?", (scope,))
 
     def session(self, scope: str) -> str | None:
         row = self.db.execute(

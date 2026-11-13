@@ -253,6 +253,7 @@ async def test_failed_path_marks_failed_and_notifies_user():
         ("pi-cli", "AUTH_MISSING", "공급자 API 키가 없습니다"),
         ("pi-cli", "UNKNOWN_PROVIDER", "공급자 또는 모델 인증 확인에 실패했습니다"),
         ("pi-cli", "AUTH_CHECK_FAILED", "공급자 또는 모델 인증 확인에 실패했습니다"),
+        ("codex-cli", "SESSION_PREVIOUS_TURN_UNRESOLVED", "이전 작업이 아직 끝나지 않아"),
     ],
 )
 async def test_classified_failure_keeps_code_in_activity_and_guides_user(engine, code, notice):

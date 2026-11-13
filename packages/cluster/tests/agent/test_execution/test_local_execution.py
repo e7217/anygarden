@@ -21,6 +21,7 @@ from anygarden.agent.runtime.execution import (
     SessionScope,
 )
 from anygarden.agent.runtime.execution.codex import ProcessTree
+from anygarden.agent.runtime.execution.failure_feedback import terminal_failure_category
 from anygarden.agent.runtime.execution.store import ReceiptStore
 
 pytestmark = pytest.mark.skipif(
@@ -311,7 +312,7 @@ async def test_partial_resume_failure_never_reexecutes(
         assert len(calls(invocation)) == 2
         await m.start(replace(invocation, execution_id="blocked-next"))
         blocked, _ = await done(m, "blocked-next")
-        assert blocked.reason == "POLICY_DENIED"
+        assert blocked.reason == "SESSION_PREVIOUS_TURN_UNRESOLVED"
         assert len(calls(invocation)) == 2
     finally:
         await m.close()
@@ -866,5 +867,103 @@ async def test_timeout_is_transient_only_before_any_side_effect(
         assert (receipt.outcome, receipt.process_state) == ("failed", "stopped")
         assert receipt.reason == reason
         assert terminal_failure_category(receipt.outcome, receipt.reason) == category
+    finally:
+        await m.close()
+
+
+async def test_unresolved_unknown_blocks_with_its_own_code(
+    tmp_path, executable, invocation
+):
+    """#1046 — a scope blocked by an unknown turn says so, not POLICY_DENIED."""
+    store = ReceiptStore(tmp_path / "receipts")
+    store.accept(invocation)
+    store.transition(invocation.execution_id, "running", "running")
+    store.close()
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, execution_id="next"))
+        receipt, _ = await done(m, "next")
+        assert (receipt.outcome, receipt.reason) == (
+            "failed", "SESSION_PREVIOUS_TURN_UNRESOLVED"
+        )
+        assert receipt.error_code == "SESSION_PREVIOUS_TURN_UNRESOLVED"
+        # Peers keep the closed public vocabulary.
+        assert terminal_failure_category(receipt.outcome, receipt.reason) == (
+            "PROCESS_OUTCOME_UNKNOWN", False
+        )
+        assert not (invocation.workspace / "calls.jsonl").exists()
+    finally:
+        await m.close()
+
+
+async def test_recover_scope_after_restart_starts_a_fresh_session(
+    tmp_path, executable, invocation
+):
+    """#1046 — a turn cut off by a node restart no longer blocks its room."""
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(invocation)
+        await done(m)
+        assert m.has_session(invocation.scope)
+    finally:
+        await m.close()
+    store = ReceiptStore(tmp_path / "receipts")
+    interrupted = replace(invocation, execution_id="interrupted")
+    store.accept(interrupted)
+    store.transition("interrupted", "running", "running")
+    store.close()
+    m = manager(tmp_path, executable)
+    try:
+        assert (await m.reconcile("interrupted")).outcome == "unknown"
+        assert m.recover_scope(invocation.scope).recovered == 1
+        assert not m.has_session(invocation.scope)
+        await m.start(replace(invocation, execution_id="after"))
+        receipt, _ = await done(m, "after")
+        assert receipt.outcome == "succeeded"
+        assert "resume" not in calls(invocation)[-1]["argv"]
+        # The evidence of the cut-off turn is kept for replay protection.
+        assert (await m.reconcile("interrupted")).outcome == "unknown"
+        assert m.recover_scope(invocation.scope).recovered == 0
+    finally:
+        await m.close()
+
+
+async def test_recover_scope_keeps_blocking_a_live_process(
+    tmp_path, executable, invocation
+):
+    child = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", "import time; time.sleep(60)", start_new_session=True
+    )
+    try:
+        store = ReceiptStore(tmp_path / "receipts")
+        store.accept(invocation)
+        store.transition(invocation.execution_id, "running", "running", child.pid)
+        store.close()
+        m = manager(tmp_path, executable)
+        try:
+            result = m.recover_scope(invocation.scope)
+            assert (result.recovered, result.blocked) == (0, True)
+            child.kill()
+            await child.wait()
+            assert m.recover_scope(invocation.scope).recovered == 1
+        finally:
+            await m.close()
+    finally:
+        if child.returncode is None:
+            child.kill()
+            await child.wait()
+
+
+async def test_recover_scope_retires_a_stopped_unknown(tmp_path, executable, invocation):
+    m = manager(tmp_path, executable)
+    try:
+        partial = replace(invocation, prompt="partial")
+        await m.start(partial)
+        receipt, _ = await done(m)
+        assert receipt.outcome == "unknown" and receipt.process_state == "stopped"
+        assert m.recover_scope(invocation.scope).recovered == 1
+        await m.start(replace(invocation, execution_id="next"))
+        receipt, _ = await done(m, "next")
+        assert receipt.outcome == "succeeded"
     finally:
         await m.close()

@@ -281,6 +281,9 @@ _CODEX_AUTH_NOTICE = "⚠️ Codex 로그인이 필요합니다. 이 에이전�
 _PI_PROVIDER_NOTICE = "⚠️ Pi 공급자 설정을 확인해야 합니다. 에이전트 설정의 모델 연결에서 Provider를 확인하세요."
 _PI_NATIVE_AUTH_NOTICE = "⚠️ 이 Pi 에이전트의 공급자 API 키가 없습니다. 에이전트 설정의 모델 연결에서 키를 등록하세요."
 _PI_NATIVE_CONFIG_NOTICE = "⚠️ Pi 공급자 또는 모델 인증 확인에 실패했습니다. 에이전트 설정의 모델 연결을 확인하세요."
+# #1046 — an earlier turn in this session ended without a confirmed result
+# and its process may still be running.
+_SESSION_UNRESOLVED_NOTICE = "⚠️ 이전 작업이 아직 끝나지 않아 이 메시지를 처리하지 못했습니다. 잠시 후 다시 멘션하거나 /clear 로 새 세션을 시작하세요."
 _ENGINE_AUTH_NOTICES = {"codex-cli": _CODEX_AUTH_NOTICE}
 _FAILURE_NOTICES = {
     "ENGINE_AUTH_ERROR": _AUTH_NOTICE,
@@ -288,6 +291,7 @@ _FAILURE_NOTICES = {
     "AUTH_MISSING": _PI_NATIVE_AUTH_NOTICE,
     "UNKNOWN_PROVIDER": _PI_NATIVE_CONFIG_NOTICE,
     "AUTH_CHECK_FAILED": _PI_NATIVE_CONFIG_NOTICE,
+    "SESSION_PREVIOUS_TURN_UNRESOLVED": _SESSION_UNRESOLVED_NOTICE,
 }
 _REJECTED_NOTICE = "⚠️ 에이전트가 다른 요청을 처리 중이라 이 메시지를 받지 못했습니다."
 # #457 — a queued follow-up sat past its TTL before the queue drained;

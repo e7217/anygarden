@@ -94,6 +94,9 @@ def terminal_failure_category(outcome: str | None, reason: str | None) -> tuple[
     """Project a persisted terminal receipt without trusting raw error text."""
     if outcome == "unknown":
         return "PROCESS_OUTCOME_UNKNOWN", False
+    if outcome == "failed" and reason == "SESSION_PREVIOUS_TURN_UNRESOLVED":
+        # #1046 — blocked by an earlier unknown turn; peers see that outcome.
+        return "PROCESS_OUTCOME_UNKNOWN", False
     if outcome != "failed":
         return None, False
     if reason in {"ENGINE_AUTH_ERROR", "AUTH_MISSING", "AUTH_CHECK_FAILED"}:

@@ -110,6 +110,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | ENG-13 | 응답 대기 표시는 서버가 센 에이전트의 작업 경과 시간을 보여주고 새로고침해도 이어서 센다. 도구를 쓴 답변의 "작업 과정" 머리글은 총 소요 시간을 보여준다 | pytest, vitest, e2e |
 | ENG-14 | 엔진에 넘기는 입력은 `/`로 시작하지 않아 채팅 메시지가 엔진의 슬래시 명령·템플릿으로 해석되지 않는다 | pytest |
 | ENG-15 | Codex 실행(새 세션·resume, 방 대화·실행 런타임 모두)은 anygarden이 관리하는 개념과 겹치는 Codex 내장 기능(`goals`)을 `-c features.<x>=false`로 끈다 | pytest |
+| ENG-16 | 노드 재시작 등으로 결과를 알 수 없게 끝난 턴이 남아도 그 프로세스가 끝났으면 다음 턴은 새 엔진 세션으로 답하고 답변 앞에 그 사실을 한 줄로 알린다(기록은 재배달 중복 방지 증거로 남는다). 프로세스가 아직 살아 있거나 확인할 수 없으면 `SESSION_PREVIOUS_TURN_UNRESOLVED`로 거부하고 `/clear` 안내를 보낸다 | pytest, vitest |
 
 ## 에이전트 협업 (COL)
 

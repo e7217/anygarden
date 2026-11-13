@@ -67,6 +67,7 @@ describe('AgentSettingsDialog recent turn health (#716)', () => {
 
   it.each([
     ['POLICY_DENIED', 'Blocked by execution policy'],
+    ['SESSION_PREVIOUS_TURN_UNRESOLVED', 'Earlier turn unresolved'],
     ['ENGINE_AUTH_ERROR', 'Model connection'],
     ['TIMEOUT_STOPPED', 'Timed out'],
   ])('labels %s as %s', async (error, label) => {
