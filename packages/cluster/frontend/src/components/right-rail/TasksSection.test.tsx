@@ -242,14 +242,17 @@ describe('TasksSection detail dialog', () => {
   })
 
   it('puts failed attempts on the timeline of finished work', () => {
+    // The last attempt and the task finish at the same instant; one stamp keeps
+    // the tie exact instead of drifting a millisecond between two ago() calls.
+    const finishedAt = ago(5 * 60_000)
     mocks.tasks = [task({
       status: 'done',
       created_at: ago(70 * 60_000),
       started_at: ago(65 * 60_000),
-      finished_at: ago(5 * 60_000),
+      finished_at: finishedAt,
       recovery: { state: 'completed', attempts: [
         { ordinal: 1, state: 'failed', outcome: 'timeout', started_at: ago(65 * 60_000), finished_at: ago(40 * 60_000) },
-        { ordinal: 2, state: 'completed', outcome: 'succeeded', started_at: ago(39 * 60_000), finished_at: ago(5 * 60_000) },
+        { ordinal: 2, state: 'completed', outcome: 'succeeded', started_at: ago(39 * 60_000), finished_at: finishedAt },
       ] },
     })]
     renderTasksSection()
