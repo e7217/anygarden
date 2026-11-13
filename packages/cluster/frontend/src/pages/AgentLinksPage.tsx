@@ -1,6 +1,7 @@
-import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeftRight, ChevronRight, Network, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { AlertTriangle, ArrowLeftRight, ChevronRight, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
 import PageShell from '@/components/PageShell'
+import PanelResizeHandle from '@/components/PanelResizeHandle'
 import { Button } from '@/components/ui/button'
 import AgentLinksCanvas, { type LinkSelection } from '@/components/agent-links/AgentLinksCanvas'
 import LinkCreateDialog, { linkErrorMessage, type LinkCreateTarget } from '@/components/agent-links/LinkCreateDialog'
@@ -13,7 +14,9 @@ import { useAgentLinks } from '@/hooks/useAgentLinks'
 import { useActiveTurns } from '@/hooks/useActiveTurns'
 import { useAgentAlerts } from '@/hooks/useAgentAlerts'
 import { useActivePeerEdges } from '@/hooks/useActivePeerEdges'
+import { useOverviewPanelLayout } from '@/hooks/useOverviewPanelLayout'
 import { useProjectInbox } from '@/hooks/useProjectInbox'
+import { RIGHT_RAIL_WIDTH } from '@/hooks/useRightSidebarLayout'
 import { useRooms } from '@/hooks/useRooms'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { agentActivity, findCycles, reachableFrom, type AgentLink, type LinkAgent } from '@/lib/agentLinks'
@@ -136,6 +139,15 @@ export default function AgentLinksPage() {
     setFocusAgent(previous => ({ id, seq: (previous?.seq ?? 0) + 1 }))
   }, [])
 
+  // The side panel folds and resizes on desktop (#1042). Picking something
+  // on the map means "show me", so a folded panel opens again.
+  const panel = useOverviewPanelLayout()
+  const panelRef = useRef<HTMLElement>(null)
+  const { setCollapsed: setPanelCollapsed } = panel
+  useEffect(() => {
+    if (selection) setPanelCollapsed(false)
+  }, [selection, setPanelCollapsed])
+
   const selectedLink = selection?.kind === 'link' ? links.find(link => link.id === selection.id) ?? null : null
   const selectedAgent = selection?.kind === 'agent' ? agents.find(agent => agent.id === selection.id) ?? null : null
 
@@ -177,9 +189,23 @@ export default function AgentLinksPage() {
               onOpenHref={openHref}
               focusAgent={focusAgent}
               leadingActions={
-                <Button variant="outline" size="icon" onClick={() => void refresh()} disabled={loading} aria-label={t('common.refresh')} title={t('common.refresh')}>
-                  <RefreshCcw className={loading ? 'motion-safe:animate-spin' : undefined} />
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="hidden lg:inline-flex"
+                    onClick={panel.toggleCollapsed}
+                    aria-controls={PANEL_ID}
+                    aria-expanded={!panel.collapsed}
+                    aria-label={panel.collapsed ? t('agentLinks.showPanel') : t('agentLinks.hidePanel')}
+                    title={panel.collapsed ? t('agentLinks.showPanel') : t('agentLinks.hidePanel')}
+                  >
+                    {panel.collapsed ? <PanelRightOpen /> : <PanelRightClose />}
+                  </Button>
+                  <Button variant="outline" size="icon" onClick={() => void refresh()} disabled={loading} aria-label={t('common.refresh')} title={t('common.refresh')}>
+                    <RefreshCcw className={loading ? 'motion-safe:animate-spin' : undefined} />
+                  </Button>
+                </>
               }
               actions={
                 <Button size="sm" onClick={() => setEditor({})} disabled={agents.length < 2} title={t('agentLinks.dragHint')}>
@@ -218,12 +244,12 @@ export default function AgentLinksPage() {
           )}
         </section>
         {!selectedLink && !selectedAgent && (
-          <DetailsPanel label={t('agentLinks.overview')}>
+          <DetailsPanel label={t('agentLinks.overview')} layout={panel} panelRef={panelRef}>
             <AgentOverviewSummary needsYou={needsYou} running={running} activeEdges={activeEdges} roomsWithNews={roomsWithNews} nameOf={nameOf} />
           </DetailsPanel>
         )}
         {(selectedLink || selectedAgent) && (
-          <DetailsPanel label={t('agentLinks.details')} onClose={() => setSelection(null)}>
+          <DetailsPanel label={t('agentLinks.details')} layout={panel} panelRef={panelRef} onClose={() => setSelection(null)}>
             {selectedLink && (
               <LinkDetails
                 link={selectedLink}
@@ -267,23 +293,53 @@ export default function AgentLinksPage() {
   )
 }
 
-function DetailsPanel({ label, onClose, children }: { label: string; onClose?: () => void; children: ReactNode }) {
+const PANEL_ID = 'agent-links-panel'
+
+function DetailsPanel({ label, layout, panelRef, onClose, children }: {
+  label: string
+  layout: ReturnType<typeof useOverviewPanelLayout>
+  panelRef: RefObject<HTMLElement | null>
+  onClose?: () => void
+  children: ReactNode
+}) {
   const { t } = useLocale()
+  // Below lg the panel is a bottom sheet with a fixed height; folding and
+  // the width apply to the desktop column only. The resize handle overhangs
+  // the left border, so the scrolling happens on an inner box.
   return (
     <aside
+      ref={panelRef}
+      id={PANEL_ID}
       aria-label={label}
-      className="relative z-20 max-h-[55%] shrink-0 overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-deep lg:static lg:max-h-none lg:w-80 lg:shrink-0 lg:border-l lg:border-t-0 lg:shadow-none"
+      data-collapsed={layout.collapsed || undefined}
+      style={{ '--overview-panel-w': `${layout.width}px` } as CSSProperties}
+      className={`relative z-20 flex max-h-[55%] shrink-0 flex-col border-t border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep lg:max-h-none lg:w-[var(--overview-panel-w)] lg:max-w-[60%] lg:border-l lg:border-t-0 lg:shadow-none ${layout.collapsed ? 'lg:hidden' : ''}`}
     >
-      {onClose ? (
-        <div className="mb-2 flex justify-end">
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label={t('agentLinks.closeDetails')}>
-            <X />
-          </Button>
-        </div>
-      ) : (
-        <h2 className="mb-3 text-body font-semibold text-[var(--color-foreground)]">{label}</h2>
-      )}
-      {children}
+      <PanelResizeHandle
+        panelRef={panelRef}
+        controls={PANEL_ID}
+        cssVar="--overview-panel-w"
+        edge="left"
+        bounds={RIGHT_RAIL_WIDTH}
+        value={layout.width}
+        onCommit={layout.setWidth}
+        onReset={layout.resetWidth}
+        label={t('agentLinks.resizePanel')}
+        testId="agent-links-panel-resize-handle"
+        showClassName="lg:block"
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {onClose ? (
+          <div className="mb-2 flex justify-end">
+            <Button variant="ghost" size="icon" onClick={onClose} aria-label={t('agentLinks.closeDetails')}>
+              <X />
+            </Button>
+          </div>
+        ) : (
+          <h2 className="mb-3 text-body font-semibold text-[var(--color-foreground)]">{label}</h2>
+        )}
+        {children}
+      </div>
     </aside>
   )
 }

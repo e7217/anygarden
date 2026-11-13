@@ -16,8 +16,9 @@ vi.mock('@/components/PageShell', () => ({
   default: ({ children }: { children: ReactNode }) => <main>{children}</main>,
 }))
 vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
-  default: ({ agents, onSelect, onConnect, activity, activeEdges, alerts, focusAgent }: {
+  default: ({ agents, onSelect, onConnect, activity, activeEdges, alerts, focusAgent, leadingActions }: {
     agents: { id: string; name: string }[]
+    leadingActions?: ReactNode
     onSelect: (selection: { kind: 'agent'; id: string } | null) => void
     onConnect: (from: string, to: string) => void
     activity?: Map<string, { state: string; roomIds: string[] }>
@@ -26,6 +27,7 @@ vi.mock('@/components/agent-links/AgentLinksCanvas', () => ({
     focusAgent?: { id: string; seq: number } | null
   }) => (
     <div data-testid="canvas">
+      {leadingActions}
       {agents.map(agent => (
         <button key={agent.id} type="button" onClick={() => onSelect({ kind: 'agent', id: agent.id })}>
           select {agent.name}
@@ -60,7 +62,7 @@ function renderPage() {
   return render(<MemoryRouter><AgentLinksPage /></MemoryRouter>)
 }
 
-afterEach(() => { cleanup(); vi.resetAllMocks(); roomsMock.rooms = {} })
+afterEach(() => { cleanup(); vi.resetAllMocks(); roomsMock.rooms = {}; localStorage.clear() })
 
 /** Answers each endpoint the overview reads with a fresh response. */
 function serve({ graph, turns = [], edges = [], inbox = [], alerts = [] }: {
@@ -215,5 +217,33 @@ describe('AgentLinksPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'select Coder' }))
     expect(screen.queryByTestId('agent-overview-quiet')).not.toBeInTheDocument()
     expect(screen.getByTestId('agent-reach-details')).toBeInTheDocument()
+  })
+
+  it('[COL-21] folds the side panel from the toolbar and opens it again when an agent is picked', async () => {
+    serve({ graph: { agents, links: [] } })
+    renderPage()
+    const panel = await screen.findByRole('complementary', { name: 'What is happening' })
+    const toggle = screen.getByRole('button', { name: 'Hide side panel' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(toggle).toHaveAttribute('aria-controls', panel.id)
+
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Show side panel' })).toHaveAttribute('aria-expanded', 'false')
+    expect(panel).toHaveAttribute('data-collapsed')
+    expect(localStorage.getItem('anygarden_overview_panel_collapsed')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'select Coder' }))
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    expect(details).not.toHaveAttribute('data-collapsed')
+    expect(screen.getByRole('button', { name: 'Hide side panel' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('[COL-21] resizes the side panel from the keyboard and keeps the width', async () => {
+    serve({ graph: { agents, links: [] } })
+    renderPage()
+    const handle = await screen.findByRole('separator', { name: 'Resize side panel' })
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    expect(localStorage.getItem('anygarden_overview_panel_width')).toBe('336')
+    expect(screen.getByRole('complementary', { name: 'What is happening' }).style.getPropertyValue('--overview-panel-w')).toBe('336px')
   })
 })
