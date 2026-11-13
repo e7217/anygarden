@@ -564,7 +564,9 @@ test.describe('agent links', () => {
             expect(box.y).toBeGreaterThanOrEqual(canvas.y)
             expect(box.y + box.height).toBeLessThanOrEqual(canvas.y + canvas.height)
             for (const control of controls) {
-              const button = (await control.boundingBox())!
+              // The panel fold button (#1042) is desktop only and has no box below lg.
+              const button = await control.boundingBox()
+              if (!button) continue
               expect(box.x >= button.x + button.width || box.x + box.width <= button.x
                 || box.y >= button.y + button.height || box.y + box.height <= button.y).toBe(true)
             }
@@ -671,5 +673,70 @@ test.describe('question chains', () => {
     const viewport = page.getByTestId('thread-panel-root').locator('[data-radix-scroll-area-viewport]')
     await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2)
     expect(await viewport.evaluate(el => (el.parentElement as HTMLElement).scrollTop)).toBe(0)
+  })
+})
+
+/** #1042 — the overview's side panel folds and resizes like the chat rail, on its own. */
+test.describe('overview side panel', () => {
+  const panel = (page: Page) => page.getByRole('complementary', { name: 'What is happening' })
+  const handle = (page: Page) => page.getByTestId('agent-links-panel-resize-handle')
+  const width = async (locator: Locator) => Math.round((await locator.boundingBox())!.width)
+
+  async function openOverview(page: Page, width = 1440) {
+    await page.setViewportSize({ width, height: 800 })
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await signIn(page)
+    await expect(page).toHaveURL(/\/agents\/links$/)
+  }
+
+  test('[COL-21] dragging the edge resizes the panel and the width survives a reload', async ({ page }) => {
+    await openOverview(page)
+    await expect(panel(page)).toBeVisible()
+    expect(await width(panel(page))).toBe(320)
+
+    const box = (await handle(page).boundingBox())!
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x - 60, y, { steps: 3 })
+    await page.mouse.move(x - 120, y, { steps: 3 })
+    await page.mouse.up()
+    expect(await width(panel(page))).toBe(440)
+
+    await page.reload()
+    await expect(panel(page)).toBeVisible()
+    expect(await width(panel(page))).toBe(440)
+
+    await handle(page).dblclick()
+    await expect.poll(() => width(panel(page))).toBe(320)
+  })
+
+  test('[COL-21] the toolbar folds the panel, the map widens, and picking an agent opens it again', async ({ page }) => {
+    // Folding the chat rail must not fold the overview panel.
+    await page.addInitScript(() => localStorage.setItem('anygarden_right_sidebar_collapsed', 'true'))
+    await openOverview(page)
+    const canvas = page.getByRole('region', { name: 'Agent link map' })
+    await expect(panel(page)).toBeVisible()
+    const before = await width(canvas)
+
+    await page.getByRole('button', { name: 'Hide side panel' }).click()
+    await expect(panel(page)).toBeHidden()
+    await expect.poll(() => width(canvas)).toBeGreaterThan(before)
+
+    await page.reload()
+    await expect(page.getByRole('button', { name: 'Show side panel' })).toHaveAttribute('aria-expanded', 'false')
+    await expect(panel(page)).toBeHidden()
+
+    await page.getByTestId('rf__node-a-dev').locator('.agent-link-node').click()
+    await expect(page.getByRole('complementary', { name: 'Details' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Hide side panel' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  test('[COL-21] below the desktop breakpoint there is no fold button or handle', async ({ page }) => {
+    await openOverview(page, 800)
+    await expect(page.getByRole('button', { name: 'Hide side panel' })).toBeHidden()
+    await expect(handle(page)).toBeHidden()
   })
 })
