@@ -30,6 +30,11 @@ jobs:
         working-directory: packages/cluster/frontend
         run: npm test
 
+      # Before E2E: on CI Playwright serves this bundle with ``vite preview``.
+      - name: Build frontend (typecheck + bundle)
+        working-directory: packages/cluster/frontend
+        run: npm run build
+
       - name: Install Playwright Chromium
         working-directory: packages/cluster/frontend
         run: npx playwright install --with-deps chromium
@@ -46,10 +51,6 @@ jobs:
           path: packages/cluster/frontend/test-results/
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Build frontend (typecheck + bundle)
-        working-directory: packages/cluster/frontend
-        run: npm run build
 
   build-and-release:
     name: Build & Release ${{ github.ref_name }}
