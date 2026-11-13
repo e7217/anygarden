@@ -1,4 +1,4 @@
-# test(tasks): share one finish stamp in the failed-attempt timeline test
+# fix(ci): build before the release browser gate and fix a timeline test flake
 
 - Author: Claude (assisted, user-directed)
 - Date: 2026-11-13
@@ -8,12 +8,12 @@
 
 The `anygarden-v0.29.0` release gate (Vitest) failed on
 `TasksSection detail dialog > puts failed attempts on the timeline of finished work`:
-the last timeline row was "Attempt 2: Succeeded" instead of "Done". PR CI does
-not run Vitest, so it had not shown up before.
+the last timeline row was "Attempt 2: Succeeded" instead of "Done". On re-run
+Vitest passed but the browser E2E step timed out waiting for its web server.
 
 ## Task
 
-Find whether the timeline order is wrong or the test is flaky.
+Find out why the release gate fails and make the tag release cleanly.
 
 ## Action
 
@@ -23,8 +23,12 @@ Find whether the timeline order is wrong or the test is flaky.
 - `TaskTimeline` sorts stably and pushes "Done" after the attempts, so an exact
   tie already ends with "Done"; the product code is fine.
 - The test now shares one `finishedAt` stamp.
+- Since #1002, Playwright on CI serves the built bundle with `vite preview`.
+  `ci.yml` builds before E2E, but `release.yml` still ran E2E first and built
+  afterwards, so there was no bundle to serve. `release.yml` now builds before
+  the E2E step.
 
 ## Result
 
-`TasksSection.test.tsx` passes (16/16). The release gate was re-run for the
-existing tag.
+`TasksSection.test.tsx` passes (16/16). `anygarden-v0.29.0` had published
+nothing (gate failed before build), so the tag is re-pointed at the merged fix.
