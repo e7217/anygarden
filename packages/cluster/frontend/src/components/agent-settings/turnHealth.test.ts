@@ -20,6 +20,7 @@ describe('classifyTurnFailure', () => {
     ['UNKNOWN_PROVIDER', 'model_connection'],
     ['AUTH_CHECK_FAILED', 'model_connection'],
     ['POLICY_DENIED', 'policy'],
+    ['SESSION_PREVIOUS_TURN_UNRESOLVED', 'session'],
     ['TIMEOUT_STOPPED', 'timeout'],
     ['missing_terminal_event', 'engine'],
     ['UNSUPPORTED_RUNTIME: pi 0.85.0 found, 0.85.1 required', 'engine'],
@@ -110,5 +111,12 @@ describe('latestTurnHealth', () => {
       row('o', 'handler_started', '2026-09-28T02:00:00.000000Z'),
       row('o', 'handler_orphaned', '2026-09-28T02:05:00.000000Z'),
     ))).toMatchObject({ status: 'failed', category: 'engine' })
+  })
+})
+
+describe('[ENG-16] unresolved earlier turn', () => {
+  it('is its own category, not an execution-policy block', () => {
+    expect(classifyTurnFailure('SESSION_PREVIOUS_TURN_UNRESOLVED', 'failed')).toBe('session')
+    expect(summaryErrorCode('SESSION_PREVIOUS_TURN_UNRESOLVED')).toBe('SESSION_PREVIOUS_TURN_UNRESOLVED')
   })
 })

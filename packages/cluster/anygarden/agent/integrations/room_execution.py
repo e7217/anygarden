@@ -14,6 +14,7 @@ from uuid import uuid4
 from anygarden.agent.integrations._turn_timeout import resolve_turn_timeout
 from anygarden.agent.integrations.codex_cli import (
     CodexCliAdapter,
+    logger,
     register_room_adapter,
 )
 from anygarden.agent.runtime.execution.contracts import SessionScope
@@ -114,6 +115,11 @@ class _Progress:
         }
 
 
+# #1046 — prefixed to the reply of a turn that had to drop a session left
+# behind by a turn cut off without a known result (e.g. a node restart).
+_SESSION_RECOVERED_NOTICE = "ℹ️ 이전 작업이 중단되어 새 세션으로 이어갑니다."
+
+
 class RoomExecutionAdapter(CodexCliAdapter):
     """Reuse room prompt/context composition; execute only through the manager."""
 
@@ -125,6 +131,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
         self._usage = ContextVar("room_execution_usage", default=None)
         self._delivered_turn = ContextVar("delivered_project_turn", default=None)
         self._local_invocation = ContextVar("delivered_local_invocation", default=None)
+        self._session_recovered = ContextVar("room_session_recovered", default=False)
         self._last_project_context: dict[str, tuple] = {}
         self._manager = None
         self._progress_by_room: dict[str, _Progress] = {}
@@ -283,7 +290,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
     async def on_message(self, msg):
         token = self._turn_metadata.set(msg)
         self._usage.set(None)
-        delivery_token = local_token = context_token = None
+        delivery_token = local_token = context_token = recovered_token = None
         try:
             metadata = msg.get("metadata") or {}
             identity = turn_identity(msg.get("room_id", "_default"), metadata)
@@ -301,6 +308,10 @@ class RoomExecutionAdapter(CodexCliAdapter):
             project_scope = self._project_session_scope(msg)
             room_id = msg.get("room_id", "_default")
             self._forget_context_of_a_cleared_session(room_id)
+            # Before the prompt is composed: a dropped session re-seeds (#805).
+            recovered_token = self._session_recovered.set(
+                self._recover_session(msg, room_id)
+            )
             if project_scope is not None:
                 if self._last_project_context.get(room_id) != project_scope:
                     self._pending_context.pop(room_id, None)
@@ -311,6 +322,8 @@ class RoomExecutionAdapter(CodexCliAdapter):
                 raise EngineCancelledError() from None
             raise EngineError(str(exc)) from None
         finally:
+            if recovered_token is not None:
+                self._session_recovered.reset(recovered_token)
             if context_token is not None:
                 self._client._execution_input_context.reset(context_token)
             if local_token is not None:
@@ -348,6 +361,20 @@ class RoomExecutionAdapter(CodexCliAdapter):
             retry_request_id=retry_request_id,
             retry_attempt=retry_attempt,
         )
+
+    def _recover_session(self, msg, room_id) -> bool:
+        """#1046 — drop a session blocked by a cut-off turn whose process is gone."""
+        scope = self._launch.bind_scope(self._session_scope(msg, room_id, self._workspace()))
+        recovery = self._manager.recover_scope(scope)
+        if recovery.recovered:
+            logger.info("room_execution.session_recovered", room_id=room_id,
+                        retired=recovery.recovered)
+        return recovery.recovered > 0
+
+    def _with_recovery_notice(self, text):
+        if text and self._session_recovered.get():
+            return f"{_SESSION_RECOVERED_NOTICE}\n\n{text}"
+        return text
 
     def _has_resumable_session(self, msg) -> bool:
         # #805 — ask the execution store, which records a native handle
@@ -476,7 +503,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
             }
         )
         if receipt.outcome == "succeeded":
-            return receipt.text
+            return self._with_recovery_notice(receipt.text)
         if receipt.outcome == "cancelled":
             raise EngineCancelledError(turn)
         error_cls = (

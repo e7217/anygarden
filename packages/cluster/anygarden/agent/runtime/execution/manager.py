@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .contracts import (
@@ -17,6 +17,14 @@ from .contracts import (
     SessionScope,
 )
 from .store import ReceiptStore
+
+
+@dataclass(frozen=True)
+class ScopeRecovery:
+    """#1046 — what ``recover_scope`` did to a scope's unknown executions."""
+
+    recovered: int = 0
+    blocked: bool = False
 
 
 class LocalExecutionManager:
@@ -224,10 +232,12 @@ class LocalExecutionManager:
                     result = RuntimeResult(
                         "cancelled", "not_started", "cancelled_before_start"
                     )
-                elif not self._authorize(invocation.scope) or self._store.scope_blocked(
-                    key
-                ):
+                elif not self._authorize(invocation.scope):
                     result = RuntimeResult("failed", "not_started", "POLICY_DENIED")
+                elif self._store.scope_blocked(key):
+                    result = RuntimeResult(
+                        "failed", "not_started", "SESSION_PREVIOUS_TURN_UNRESOLVED"
+                    )
                 else:
                     self._store.transition(execution_id, "launching", "unknown")
 
@@ -348,6 +358,32 @@ class LocalExecutionManager:
     async def owned_cancel(self, execution_id: str) -> Receipt:
         """Trusted local owner can stop an execution after its grant is revoked."""
         return await self._cancel(execution_id)
+
+    def recover_scope(self, scope: SessionScope) -> ScopeRecovery:
+        """#1046 — lift a block left by unknown executions whose process is gone.
+
+        An unknown turn may have left its native session half-updated, so the
+        session is never resumed: the next turn starts a fresh one. A process
+        that is still alive, or cannot be verified, keeps the scope blocked.
+        """
+        from .codex import ProcessTree
+
+        rows = self._store.blocking_unknowns(scope.key)
+        for row in rows:
+            task = self._tasks.get(row["id"])
+            if task is not None and not task.done():
+                return ScopeRecovery(blocked=True)
+            if row["process_state"] in {"not_started", "finished", "stopped"}:
+                continue
+            # No PID means the spawn was never recorded; the window between
+            # spawn and the launched() write is assumed to be negligible.
+            if row["pid"] is not None:
+                tree = ProcessTree(row["pid"])
+                if tree.live() or tree.uncertain:
+                    return ScopeRecovery(blocked=True)
+        if rows:
+            self._store.retire_unknowns(scope.key, [row["id"] for row in rows])
+        return ScopeRecovery(recovered=len(rows))
 
     def has_session(self, scope: SessionScope) -> bool:
         """Whether the next invocation in *scope* resumes a native session."""

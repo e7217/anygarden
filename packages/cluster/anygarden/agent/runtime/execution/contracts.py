@@ -26,6 +26,9 @@ FAILURE_CODES = frozenset(
         "TIMEOUT_AFTER_SIDE_EFFECT",
         "UNSUPPORTED_RUNTIME",
         "POLICY_DENIED",
+        # #1046 — an earlier turn in the same session ended unknown and its
+        # process may still be running, so the session cannot be resumed.
+        "SESSION_PREVIOUS_TURN_UNRESOLVED",
         "AUTH_MISSING",
         "UNKNOWN_PROVIDER",
         "AUTH_CHECK_FAILED",

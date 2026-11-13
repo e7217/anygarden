@@ -29,7 +29,12 @@ if TYPE_CHECKING:
     from anygarden.agent.runtime.execution import Invocation, SessionScope
     from anygarden.agent.runtime.execution.contracts import Runtime
 
-_WIRE_ERROR_CODES = {"TIMEOUT_AFTER_SIDE_EFFECT": "TIMEOUT_STOPPED"}
+_WIRE_ERROR_CODES = {
+    "TIMEOUT_AFTER_SIDE_EFFECT": "TIMEOUT_STOPPED",
+    # #1046 — the local split of the unknown-session block; peers keep
+    # receiving the closed POLICY_DENIED they already understand.
+    "SESSION_PREVIOUS_TURN_UNRESOLVED": "POLICY_DENIED",
+}
 
 
 @dataclass(frozen=True)

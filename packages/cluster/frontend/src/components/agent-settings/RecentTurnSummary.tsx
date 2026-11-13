@@ -36,6 +36,7 @@ function reasonKey(category: TurnFailureCategory, code: string | null): MessageK
   const byCategory: Record<TurnFailureCategory, MessageKey> = {
     model_connection: 'admin.overview.recentTurn.reason.modelConnection',
     policy: 'admin.overview.recentTurn.reason.policy',
+    session: 'admin.overview.recentTurn.reason.session',
     timeout: 'admin.overview.recentTurn.reason.timeout',
     busy: 'admin.overview.recentTurn.reason.busy',
     engine: 'admin.overview.recentTurn.reason.engine',
@@ -54,6 +55,7 @@ const STATUS_LABEL: Record<TurnHealthStatus, MessageKey> = {
 const CATEGORY_LABEL: Record<TurnFailureCategory, MessageKey> = {
   model_connection: 'admin.overview.recentTurn.category.modelConnection',
   policy: 'admin.overview.recentTurn.category.policy',
+  session: 'admin.overview.recentTurn.category.session',
   timeout: 'admin.overview.recentTurn.category.timeout',
   busy: 'admin.overview.recentTurn.category.busy',
   engine: 'admin.overview.recentTurn.category.engine',

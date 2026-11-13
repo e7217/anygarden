@@ -4,7 +4,7 @@ import type { Turn } from './ActivityPanel'
 // connected; this says whether its latest turn actually produced an answer.
 
 export type TurnHealthStatus = 'none' | 'succeeded' | 'failed' | 'in_flight' | 'cancelled'
-export type TurnFailureCategory = 'model_connection' | 'policy' | 'timeout' | 'busy' | 'engine'
+export type TurnFailureCategory = 'model_connection' | 'policy' | 'session' | 'timeout' | 'busy' | 'engine'
 
 export interface TurnHealth {
   status: TurnHealthStatus
@@ -37,6 +37,8 @@ export function classifyTurnFailure(error: string | null, outcome: string | null
   const code = summaryErrorCode(error)
   if (code && MODEL_CONNECTION_CODES.has(code)) return 'model_connection'
   if (code === 'POLICY_DENIED') return 'policy'
+  // #1046 — an earlier unknown turn may still be running in this session.
+  if (code === 'SESSION_PREVIOUS_TURN_UNRESOLVED') return 'session'
   if (code === 'TIMEOUT_STOPPED' || outcome === 'timeout') return 'timeout'
   if (outcome === 'rejected') return 'busy'
   return 'engine'
