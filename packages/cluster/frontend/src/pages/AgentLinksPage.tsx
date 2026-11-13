@@ -50,7 +50,7 @@ function Notice({ title, body, action, tone = 'neutral' }: { title: string; body
  * sums up what needs the person.
  */
 export default function AgentLinksPage() {
-  const { t, formatNumber } = useLocale()
+  const { t } = useLocale()
   const { confirm, notify } = useFeedback()
   const { graph, loading, errorStatus, refresh, create, remove } = useAgentLinks()
   const { user } = useAuth()
@@ -80,7 +80,6 @@ export default function AgentLinksPage() {
     () => new Map(agents.map(agent => [agent.id, agentActivity(agent, activeTurns.roomsByAgent.get(agent.id) ?? [])])),
     [agents, activeTurns],
   )
-  const busyCount = useMemo(() => [...activity.values()].filter(a => a.state === 'busy').length, [activity])
   const running = useMemo(() => [...activeTurns.roomIds].map(id => ({
     room: { id, name: roomName(id) ?? t('agentLinks.someRoom') },
     agentIds: agents.filter(agent => activity.get(agent.id)?.roomIds.includes(id)).map(agent => agent.id),
@@ -177,15 +176,44 @@ export default function AgentLinksPage() {
               alerts={alerts}
               onOpenHref={openHref}
               focusAgent={focusAgent}
+              leadingActions={
+                <Button variant="outline" size="icon" onClick={() => void refresh()} disabled={loading} aria-label={t('common.refresh')} title={t('common.refresh')}>
+                  <RefreshCcw className={loading ? 'motion-safe:animate-spin' : undefined} />
+                </Button>
+              }
+              actions={
+                <Button size="sm" onClick={() => setEditor({})} disabled={agents.length < 2} title={t('agentLinks.dragHint')}>
+                  <Plus /> {t('agentLinks.addLink')}
+                </Button>
+              }
             />
           </CanvasBoundary>
-          {links.length === 0 && (
-            // Non-blocking: the agents stay draggable underneath.
-            <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex justify-center">
-              <div className="pointer-events-auto max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-4 shadow-card" data-testid="agent-links-empty">
-                <h2 className="text-body font-semibold text-[var(--color-foreground)]">{t('agentLinks.emptyTitle')}</h2>
-                <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.emptyBody')}</p>
-              </div>
+          {(links.length === 0 || cycles.length > 0 || saving > 0) && (
+            // Non-blocking: the agents stay draggable underneath. Starts below the toolbar.
+            <div className="pointer-events-none absolute inset-x-3 top-14 z-10 flex flex-col items-center gap-2">
+              {saving > 0 && <p role="status" className="rounded-[var(--radius-pill)] bg-[var(--color-surface-elevated)] px-3 py-1 text-caption text-[var(--color-foreground-muted)] shadow-whisper">{t('agentLinks.saving')}</p>}
+              {cycles.length > 0 && (
+                <div role="status" data-testid="agent-links-cycles" className="pointer-events-auto flex max-w-md gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] px-3 py-2 shadow-card">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
+                  <div className="min-w-0 text-caption text-[var(--color-foreground)]">
+                    <p className="font-semibold">{t('agentLinks.cycleTitle')}</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {cycles.map(cycle => (
+                        <li key={cycle.join('>')} className="break-words">
+                          {[...cycle, cycle[0]].map(nameOf).join(' → ')}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-1 text-[var(--color-foreground-muted)]">{t('agentLinks.cycleBody')}</p>
+                  </div>
+                </div>
+              )}
+              {links.length === 0 && (
+                <div className="pointer-events-auto max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-4 shadow-card" data-testid="agent-links-empty">
+                  <h2 className="text-body font-semibold text-[var(--color-foreground)]">{t('agentLinks.emptyTitle')}</h2>
+                  <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.emptyBody')}</p>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -223,45 +251,7 @@ export default function AgentLinksPage() {
 
   return (
     <PageShell title={t('agentLinks.title')} scroll={false}>
-      <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 md:px-6">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h1 className="text-body font-bold tracking-tight text-[var(--color-foreground)] max-md:sr-only">{t('agentLinks.title')}</h1>
-          {graph && (
-            <span className="text-badge text-[var(--color-foreground-muted)]">
-              {t('agentLinks.summary', { agents: formatNumber(agents.length), busy: formatNumber(busyCount), links: formatNumber(links.length) })}
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => void refresh()} disabled={loading} aria-label={t('common.refresh')} title={t('common.refresh')}>
-              <RefreshCcw className={loading ? 'motion-safe:animate-spin' : undefined} />
-              <span className="max-sm:sr-only">{t('common.refresh')}</span>
-            </Button>
-            <Button size="sm" onClick={() => setEditor({})} disabled={agents.length < 2}>
-              <Plus /> {t('agentLinks.addLink')}
-            </Button>
-          </div>
-        </div>
-        {saving > 0 && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.saving')}</p>}
-        <p className="mt-1 max-w-3xl text-caption text-[var(--color-foreground-muted)]">
-          {t('agentLinks.description')} <span className="max-md:hidden">{t('agentLinks.dragHint')}</span>
-        </p>
-        {cycles.length > 0 && (
-          <div role="status" data-testid="agent-links-cycles" className="mt-3 flex gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] px-3 py-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
-            <div className="min-w-0 text-caption text-[var(--color-foreground)]">
-              <p className="font-semibold">{t('agentLinks.cycleTitle')}</p>
-              <ul className="mt-1 space-y-0.5">
-                {cycles.map(cycle => (
-                  <li key={cycle.join('>')} className="break-words">
-                    {[...cycle, cycle[0]].map(nameOf).join(' → ')}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-1 text-[var(--color-foreground-muted)]">{t('agentLinks.cycleBody')}</p>
-            </div>
-          </div>
-        )}
-      </div>
+      <h1 className="sr-only">{t('agentLinks.title')}</h1>
       {body}
       <LinkCreateDialog
         target={editor}
