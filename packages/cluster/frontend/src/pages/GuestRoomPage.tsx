@@ -64,7 +64,7 @@ export default function GuestRoomPage() {
     }
   }, [errorStatus, navigate])
 
-  const { messages, connected, typingUsers, typingStages, typingProgress, typingWork, send, sendTyping } = useWebSocket(
+  const { messages, historyLoading, connected, typingUsers, typingStages, typingProgress, typingWork, send, sendTyping } = useWebSocket(
     scope,
   )
 
@@ -194,6 +194,7 @@ export default function GuestRoomPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <ChatArea
           messages={messages}
+          loading={historyLoading}
           participants={participants}
           myParticipantId={myParticipantId}
           typingUsers={typingUsers}
