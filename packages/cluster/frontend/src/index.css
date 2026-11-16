@@ -28,11 +28,13 @@
   --color-link: #0b5f58;
   --color-on-brand: #ffffff;
   --color-brand-tint-bg: #e6f4f1;
-  /* #1031 — the ring that turns around an agent while it answers. */
+  /* #1047 — overview rings: a comet (1–3 to the head) turns around an agent while it
+     answers; the full 1–4 gradient turns slowly around the one you selected. */
   --color-aurora-1: #0f766e;
   --color-aurora-2: #14b8a6;
   --color-aurora-3: #0891b2;
   --color-aurora-4: #10b981;
+  --color-aurora-head: #06b6d4;
   --color-brand-tint-text: #0b5f58;
   --color-brand-secondary: #164a45;
   --color-brand-light: #5eead4;
@@ -182,6 +184,7 @@
   --color-aurora-2: #5eead4;
   --color-aurora-3: #67e8f9;
   --color-aurora-4: #34d399;
+  --color-aurora-head: #cffafe;
   --color-brand-tint-text: #a5f3e5;
   --color-brand-secondary: #5eead4;
   --color-brand-light: #5eead4;

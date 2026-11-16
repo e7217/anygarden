@@ -375,11 +375,66 @@ test.describe('agent links', () => {
     await expect(path).toHaveCSS('marker-end', 'none')
     // A question between room members needs no link; it draws while it runs.
     await expect(page.getByTestId('rf__edge-activity:a-rev>a-dev')).toBeVisible()
+    // #1047 — both running lines carry the answering dots halfway along.
+    await expect(edge.locator('.agent-link-edge-busy')).toHaveCount(1)
+    await expect(page.getByTestId('rf__edge-activity:a-rev>a-dev').locator('.agent-link-edge-busy')).toHaveCount(1)
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await expect(path).toHaveCSS('animation-name', 'none')
     await expect(path).toHaveCSS('stroke-dasharray', 'none')
     await expect(path).toHaveCSS('marker-end', 'none')
     await expect(path).toHaveCSS('stroke-width', '2px')
+    await expect(edge.locator('.agent-link-edge-busy circle').first()).toHaveCSS('animation-name', 'none')
+  })
+
+  test('[COL-19] an answering agent wears a comet; the selected one wears the slow gradient instead', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await page.route('**/api/v1/turns/active', route => fulfillJson(route, 200, [{ room_id: ROOM_ID, agent_ids: ['a-dev'] }]))
+    await signIn(page)
+    await page.goto('/agents/links')
+    const dev = page.getByTestId('rf__node-a-dev'), sec = page.getByTestId('rf__node-a-sec')
+    await expect(dev.locator('.agent-link-node__aurora')).toHaveClass(/is-busy/)
+    await expect(sec.locator('.agent-link-node__aurora')).toHaveCount(0)
+    // A resting link has no dots.
+    await expect(page.getByTestId('rf__edge-l-1').locator('.agent-link-edge-busy')).toHaveCount(0)
+
+    const circle = sec.locator('.agent-link-node')
+    const border = await circle.evaluate(el => getComputedStyle(el).borderColor)
+    await circle.click()
+    await expect(sec.locator('.agent-link-node__aurora')).toHaveClass(/is-select/)
+    await expect(circle).toHaveCSS('border-color', border)
+    await expect(sec.locator('.agent-link-node__aurora > .agent-link-node__aurora-arc')).toHaveCSS('animation-duration', '6s')
+    await expect(dev.locator('.agent-link-node__aurora')).toHaveClass(/is-busy/)
+
+    // One ring per circle: picking the answering agent swaps its comet for the gradient; the card still says it answers.
+    await dev.locator('.agent-link-node').click()
+    await expect(dev.locator('.agent-link-node__aurora')).toHaveCount(1)
+    await expect(dev.locator('.agent-link-node__aurora')).toHaveClass(/is-select/)
+    await expect(page.getByTestId('agent-link-card-a-dev')).toContainText('Answering in')
+    await expect(sec.locator('.agent-link-node__aurora')).toHaveCount(0)
+    // Its paths are drawn in ink; teal stays for a question running now.
+    await expect(page.getByTestId('rf__edge-l-1').locator('.react-flow__edge-path')).toHaveAttribute('style', /var\(--color-foreground\)/)
+
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await expect(dev.locator('.agent-link-node__aurora > .agent-link-node__aurora-arc')).toHaveCSS('animation-name', 'none')
+  })
+
+  test('[COL-19] picking an agent reopens the panel without changing the zoom', async ({ page }) => {
+    await stubWebSocket(page)
+    await stubApi(page, [])
+    await signIn(page)
+    await page.goto('/agents/links')
+    await expect(page.getByTestId('rf__node-a-dev')).toBeVisible()
+    await page.getByRole('button', { name: 'Hide side panel' }).click()
+    await expect(page.getByTestId('agent-reach-details')).toHaveCount(0)
+    const scale = () => page.locator('.react-flow__viewport').evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a)
+    // Folding the panel with nothing picked still fits the map; let it settle first.
+    await expect.poll(scale).toBeGreaterThan(0)
+    const before = await scale()
+    await page.getByTestId('rf__node-a-dev').locator('.agent-link-node').click()
+    await expect(page.getByTestId('agent-reach-details')).toBeVisible()
+    await page.waitForTimeout(400)
+    expect(await scale()).toBeCloseTo(before, 5)
   })
 
   test('[ROOM-16] home opens the overview and its cards show who is answering', async ({ page }) => {

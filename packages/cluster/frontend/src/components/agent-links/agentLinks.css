@@ -7,7 +7,7 @@
 .agent-links-root .react-flow__controls-button svg { fill: currentColor; }
 /* #1035 — no arrowheads; a link leaves the asker's right port and enters the answerer's left one. */
 .agent-links-root .react-flow__edge-path { stroke-width: 1.5; }
-.agent-links-root .react-flow__edge.is-emphasized .react-flow__edge-path { stroke-width: 2; }
+.agent-links-root .react-flow__edge.is-emphasized .react-flow__edge-path { stroke-width: 1.75; }
 .agent-links-root .react-flow__edge:focus-visible { outline: none; }
 /* Every edge is dashed while it flows, so keyboard focus reads through width. */
 .agent-links-root .react-flow__edge:focus-visible .react-flow__edge-path { stroke-width: 2.5; }
@@ -30,28 +30,47 @@
   width: 7.75rem; text-align: center; font-size: 0.75rem; font-weight: 500; line-height: 1.3; color: var(--color-foreground);
   overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
-/* Answering: an aurora ring turns around the circle. Without motion it stays, still. */
+/* #1047 — one ring per circle. Answering: a comet whose tail fades in to a bright head.
+   Selected: the full gradient, turning slowly. The glow is blurred outside the mask so it spreads,
+   and only the direct layers turn (the arc inside the glow rides along). Without motion both stay still. */
 .agent-link-node__aurora { position: absolute; inset: -5px; border-radius: 9999px; pointer-events: none; }
-.agent-link-node__aurora::before, .agent-link-node__aurora::after {
-  content: ''; position: absolute; inset: 0; border-radius: inherit;
-  background: conic-gradient(from 0deg, var(--color-aurora-1), var(--color-aurora-2), var(--color-aurora-3), var(--color-aurora-4), var(--color-aurora-1));
+.agent-link-node__aurora > span, .agent-link-node__aurora-glow > .agent-link-node__aurora-arc { position: absolute; inset: 0; border-radius: inherit; }
+.agent-link-node__aurora-arc {
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
           mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
 }
-.agent-link-node__aurora::after { inset: -2px; filter: blur(4px); opacity: 0.5; }
+.agent-link-node__aurora-glow { filter: blur(3px); opacity: 0.6; }
+.agent-link-node__aurora.is-busy .agent-link-node__aurora-arc {
+  background: conic-gradient(from 0deg, transparent 0deg, transparent 30deg, var(--color-aurora-1) 190deg,
+    var(--color-aurora-2) 290deg, var(--color-aurora-3) 340deg, var(--color-aurora-head) 360deg);
+}
+.agent-link-node__aurora.is-select .agent-link-node__aurora-arc {
+  background: conic-gradient(from 0deg, var(--color-aurora-1), var(--color-aurora-2), var(--color-aurora-3), var(--color-aurora-4), var(--color-aurora-1));
+}
 @media (prefers-reduced-motion: no-preference) {
-  .agent-link-node__aurora::before, .agent-link-node__aurora::after { animation: agent-link-aurora 2.4s linear infinite; }
+  .agent-link-node__aurora > .agent-link-node__aurora-arc, .agent-link-node__aurora > .agent-link-node__aurora-glow {
+    animation: agent-link-aurora 2s linear infinite;
+  }
+  .agent-link-node__aurora.is-select > .agent-link-node__aurora-arc, .agent-link-node__aurora.is-select > .agent-link-node__aurora-glow {
+    animation-duration: 6s;
+  }
 }
 @keyframes agent-link-aurora { to { transform: rotate(1turn); } }
-.agent-link-node.is-busy { border-color: transparent; }
 .agent-link-node.is-unavailable { border-style: dashed; background: var(--color-surface-alt); }
 .agent-link-node.is-unavailable .agent-link-node__icon { filter: grayscale(1); opacity: 0.45; }
 .agent-link-node.is-unavailable .agent-link-node__name { color: var(--color-foreground-muted); }
-.agent-link-node.is-reachable { border-color: var(--color-brand-text); }
-.agent-link-node.is-selected {
-  border: 2px solid var(--color-brand-text); background: var(--color-surface-selected);
-  box-shadow: 0 0 0 3px var(--color-brand-tint-bg);
+/* Selection reads without colour or motion too. */
+.agent-link-node.is-selected .agent-link-node__name { font-weight: 600; }
+/* #1047 — a question running now: three dots light in turn halfway along its line. */
+.agent-link-edge-busy { pointer-events: none; }
+.agent-link-edge-busy rect { fill: var(--color-brand); stroke: var(--color-surface-alt); stroke-width: 2; }
+.agent-link-edge-busy circle { fill: var(--color-on-brand); }
+@media (prefers-reduced-motion: no-preference) {
+  .agent-link-edge-busy circle { opacity: 0.35; animation: agent-link-busy 1.2s ease-in-out infinite; }
+  .agent-link-edge-busy circle:nth-of-type(2) { animation-delay: 0.15s; }
+  .agent-link-edge-busy circle:nth-of-type(3) { animation-delay: 0.3s; }
 }
+@keyframes agent-link-busy { 30% { opacity: 1; } 60%, 100% { opacity: 0.35; } }
 /* Hover or selection shows the full name, what it is doing and its room. */
 .agent-link-card {
   min-width: 11rem; max-width: 16rem; display: grid; gap: 0.125rem; padding: 0.5rem 0.75rem;
@@ -80,7 +99,6 @@
 @media (pointer: coarse) {
   .agent-links-root .react-flow__handle.source::after { width: 2.75rem; height: 2.75rem; }
 }
-.agent-link-node.is-unavailable.is-selected { border-style: solid; }
 /* COL-20 — top right: the one thing that needs you (a problem first); bottom right: queued tasks.
    Placed at 45° on the circle so they never cover the side ports. Shapes differ, not only colours. */
 .agent-link-alert {

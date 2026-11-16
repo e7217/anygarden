@@ -40,9 +40,8 @@ interface Props {
   leadingActions?: ReactNode
   actions?: ReactNode
 }
-type Emphasis = 'reach' | 'none'
 interface AgentNodeData extends Record<string, unknown> {
-  name: string; engine: string | null; emphasis: Emphasis; diameter: number
+  name: string; engine: string | null; diameter: number
   status: AgentActivity['state']; statusText: string | null
   room: { id: string; label: string } | null
   onOpenRoom?: (roomId: string) => void
@@ -74,10 +73,16 @@ const LinkAgentNode = memo(function LinkAgentNode({ id, data, selected }: NodePr
   useEffect(() => { updateInternals(id) }, [id, data.diameter, updateInternals])
   const [hovered, setHovered] = useState(false)
   const tone = data.status === 'busy' ? ' is-busy' : data.status === 'unavailable' ? ' is-unavailable' : ''
+  // #1047 — one ring per circle: the slow gradient for the agent you picked, else a comet while it
+  // answers. The card that opens on selection still says it is answering.
+  const ring = selected ? 'select' : data.status === 'busy' ? 'busy' : null
   // #1031 — the circle carries the engine and the state; the card on hover or selection says the rest.
-  return <div className={`agent-link-node${tone}${selected ? ' is-selected' : data.emphasis === 'reach' ? ' is-reachable' : ''}`}
+  return <div className={`agent-link-node${tone}${selected ? ' is-selected' : ''}`}
     onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-    {data.status === 'busy' && <span className="agent-link-node__aurora" aria-hidden="true" />}
+    {ring && <span className={`agent-link-node__aurora is-${ring}`} aria-hidden="true">
+      <span className="agent-link-node__aurora-glow"><span className="agent-link-node__aurora-arc" /></span>
+      <span className="agent-link-node__aurora-arc" />
+    </span>}
     <span className="agent-link-node__icon" aria-hidden="true"><EngineGlyph engine={data.engine ?? undefined} size={Math.round(data.diameter / 2)} /></span>
     <span className="agent-link-node__name">{data.name}</span>
     {data.alert && <span className={`agent-link-alert is-${data.alert}`} aria-hidden="true">
@@ -112,15 +117,24 @@ function nodeIdAt(event: MouseEvent | TouchEvent) {
   if (!point) return null
   return document.elementFromPoint(point.clientX, point.clientY)?.closest('.react-flow__node')?.getAttribute('data-id') ?? null
 }
-const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style }: EdgeProps) {
+const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, data }: EdgeProps) {
   // A stronger curve keeps the run into each card level instead of hooking at the end.
-  const [bezier] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, curvature: 0.5 })
+  const [bezier, midX, midY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, curvature: 0.5 })
   // A return connection uses a separate lane, keeping both arrows readable.
   const y = Math.max(sourceY, targetY) + 64
-  const path = sourceX > targetX
+  const back = sourceX > targetX
+  const path = back
     ? `M ${sourceX} ${sourceY} C ${sourceX + 48} ${sourceY}, ${sourceX + 48} ${y}, ${sourceX} ${y} L ${targetX - 24} ${y} C ${targetX - 48} ${y}, ${targetX - 48} ${targetY}, ${targetX} ${targetY}`
     : bezier
-  return <BaseEdge id={id} path={path} style={style} interactionWidth={28} />
+  const [x, badgeY] = back ? [(sourceX + targetX) / 2, y] : [midX, midY]
+  return <>
+    <BaseEdge id={id} path={path} style={style} interactionWidth={28} />
+    {/* #1047 — a question running now carries the answering dots halfway along its line. */}
+    {data?.live === true && <g className="agent-link-edge-busy" transform={`translate(${x} ${badgeY})`} aria-hidden="true">
+      <rect x={-12} y={-7} width={24} height={14} rx={7} />
+      <circle cx={-5} r={1.7} /><circle r={1.7} /><circle cx={5} r={1.7} />
+    </g>}
+  </>
 })
 // Reserve room for the top-right tools, the bottom-left zoom controls and the last row's names.
 const fitViewOptions = { padding: { top: '64px', bottom: '64px', left: '64px', right: '24px' }, maxZoom: 1 } as const
@@ -198,7 +212,7 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
         const mine = now.state === 'unavailable' ? undefined : alerts?.get(a.id)
         const alertLines = mine ? alertLinesFor(mine, id => `#${roomName?.(id) ?? t('agentLinks.someRoom')}`, t) : []
         return { ...existing, id: a.id, type: 'agent', position: existing?.position ?? initialView.current.positions[a.id] ?? positions.get(a.id)!,
-          style: { width: diameter, height: diameter }, data: { name: a.name, engine: a.engine ?? null, diameter, emphasis: 'none' as Emphasis, status: now.state, statusText,
+          style: { width: diameter, height: diameter }, data: { name: a.name, engine: a.engine ?? null, diameter, status: now.state, statusText,
             room: firstRoom ? { id: firstRoom, label } : null, onOpenRoom,
             alert: topAlert(mine), queued: mine?.queued_tasks ?? 0, alertLines, onOpenHref } }
       })
@@ -217,6 +231,21 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
     // Initial dimensions must not overwrite a restored user viewport.
     if (previous.width > 0 && previous.height > 0 && restored.current
       && (previous.width !== canvasWidth || previous.height !== canvasHeight)) {
+      // #1047 — on desktop, picking an agent reopens the side panel; keep the zoom and only
+      // pan when the picked circle would sit outside the map. On mobile the details stack
+      // below and take height, so the map still refits there to keep every agent in view.
+      const picked = selectionRef.current
+      if (picked?.kind === 'agent' && previous.height === canvasHeight) {
+        const node = rf.getInternalNode(picked.id)
+        if (!node) return
+        const { x, y, zoom } = rf.getViewport(), at = node.internals.positionAbsolute
+        const left = at.x * zoom + x, top = at.y * zoom + y
+        const right = left + (node.measured.width ?? 0) * zoom, bottom = top + (node.measured.height ?? 0) * zoom
+        if (left < 0 || top < 0 || right > canvasWidth || bottom > canvasHeight) {
+          void rf.fitView({ nodes: [{ id: picked.id }], minZoom: zoom, maxZoom: zoom, duration: viewportDuration() })
+        }
+        return
+      }
       void rf.fitView(fitViewOptions)
     }
   }, [canvasWidth, canvasHeight, rf])
@@ -229,13 +258,12 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
   const reach = useMemo(() => selection?.kind === 'agent' ? reachableFrom(selection.id, links) : null, [selection, links])
   const names = useMemo(() => new Map(agents.map(a => [a.id, a.name])), [agents])
   const nodes = useMemo(() => localNodes.map(node => {
-    const emphasis: Emphasis = reach?.agents.has(node.id) ? 'reach' : 'none'
     return { ...node, selected: selection?.kind === 'agent' && selection.id === node.id,
       // The state moved off the circle into its card, so the accessible name keeps it.
       ariaLabel: [t('agentLinks.agentNode', { name: node.data.name }), node.data.statusText,
         node.data.alert && t(ALERT_LABELS[node.data.alert]),
-        node.data.queued > 0 && t('agentLinks.alert.queued', { count: node.data.queued })].filter(Boolean).join(', '), data: { ...node.data, emphasis } }
-  }), [localNodes, selection, reach, t])
+        node.data.queued > 0 && t('agentLinks.alert.queued', { count: node.data.queued })].filter(Boolean).join(', ') }
+  }), [localNodes, selection, t])
   const edges = useMemo<Edge[]>(() => {
     const running = new Set((activeEdges ?? []).map(e => `${e.from_agent_id}>${e.to_agent_id}`))
     const ids = new Set(agents.map(a => a.id))
@@ -244,9 +272,10 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
     const linked = links.map(l => {
       const emphasized = selection?.kind === 'link' && selection.id === l.id || !!reach?.links.has(l.id)
       const live = running.delete(`${l.from_agent_id}>${l.to_agent_id}`)
-      const color = emphasized || live ? 'var(--color-brand-text)' : 'var(--color-foreground-subtle)'
+      // #1047 — teal belongs to a question running now; the selected agent's paths are drawn in ink.
+      const color = live ? 'var(--color-brand-text)' : emphasized ? 'var(--color-foreground)' : 'var(--color-foreground-subtle)'
       // COL-19 — only a question running now flows; a resting link is a still line.
-      return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link', animated: live,
+      return { id: l.id, source: l.from_agent_id, target: l.to_agent_id, type: 'link', animated: live, data: { live },
         selected: selection?.kind === 'link' && selection.id === l.id, focusable: true,
         ariaLabel: t(live ? 'agentLinks.linkLabelActive' : 'agentLinks.linkLabel', { from: names.get(l.from_agent_id) ?? '?', to: names.get(l.to_agent_id) ?? '?' }),
         className: [emphasized && 'is-emphasized', live && 'is-active'].filter(Boolean).join(' ') || undefined,
@@ -254,7 +283,7 @@ function CanvasInner({ agents, links, userId, selection, onSelect, onConnect, ac
     })
     // A question between room members needs no link; draw it dashed while it runs.
     const unlinked = [...running].map(key => key.split('>')).filter(([from, to]) => ids.has(from) && ids.has(to)).map(([from, to]) => ({
-      id: `activity:${from}>${to}`, source: from, target: to, type: 'link', animated: true,
+      id: `activity:${from}>${to}`, source: from, target: to, type: 'link', animated: true, data: { live: true },
       selectable: false, focusable: false, className: 'is-activity',
       style: { stroke: 'var(--color-brand-text)', strokeDasharray: '3 4' } }))
     return [...linked, ...unlinked]
