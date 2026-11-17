@@ -60,6 +60,7 @@ export const coreEn = {
   'workspace.createRoom': 'New room',
   'workspace.openSidebar': 'Open navigation',
   'workspace.selectRoom': 'Browse rooms',
+  'workspace.navigation': 'Workspace',
 } as const
 
 export const coreKo: Record<keyof typeof coreEn, string> = {
@@ -123,4 +124,5 @@ export const coreKo: Record<keyof typeof coreEn, string> = {
   'workspace.createRoom': '새 방',
   'workspace.openSidebar': '탐색 메뉴 열기',
   'workspace.selectRoom': '방 찾아보기',
+  'workspace.navigation': '작업 공간',
 }

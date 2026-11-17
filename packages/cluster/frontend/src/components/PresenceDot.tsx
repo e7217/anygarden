@@ -100,7 +100,7 @@ export default function PresenceDot({
   const title = working ? `${baseTitle} · ${t('common.responding')}` : baseTitle
 
   // Semantic colors follow the active light or dark theme.
-  const onlineBg = 'var(--color-status-online, #5b9e6d)'
+  const onlineBg = 'var(--color-status-online)'
   const offlineBg = 'var(--color-foreground-subtle)'
   const ringColor = 'var(--presence-ring, var(--color-surface))'
   const bg = online ? onlineBg : ring ? ringColor : offlineBg

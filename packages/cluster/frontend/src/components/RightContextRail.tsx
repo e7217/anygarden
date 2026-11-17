@@ -110,14 +110,14 @@ export default function RightContextRail({
       >
         {!collapsed && <RailResizeHandle panelRef={panelRef} controls="room-context-rail" />}
         <div data-testid="right-rail-header" className="flex h-14 lg:h-[var(--room-header-h,3.5rem)] shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
-          <h2 className="text-sm font-semibold text-[var(--color-foreground-muted)]">
+          <h2 className="text-caption font-semibold text-[var(--color-foreground-muted)]">
             {t('chat.context')}
           </h2>
           <button
             type="button"
             onClick={onClose}
             data-drawer-close
-            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] lg:hidden"
+            className="flex size-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] lg:hidden"
             aria-label={t('chat.closeContext')}
           >
             <X className="h-4 w-4" />
@@ -131,7 +131,7 @@ export default function RightContextRail({
           <CampaignSection roomId={roomId} room={room} participants={participants} />
           <TasksSection roomId={roomId} participants={participants} onNavigate={onClose} />
           <details className="min-w-0 border-t border-[var(--color-border)]">
-            <summary className="min-h-11 cursor-pointer content-center px-3 py-2 text-sm font-semibold">{t('contextRail.resources')}</summary>
+            <summary className="min-h-[var(--control-height)] cursor-pointer content-center px-3 py-2 text-caption font-semibold">{t('contextRail.resources')}</summary>
             <GoalsSection roomId={roomId} agentParticipants={agentParticipants} />
             <FilesSection roomId={roomId} />
           </details>

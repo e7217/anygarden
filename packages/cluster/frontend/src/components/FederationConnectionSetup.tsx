@@ -33,7 +33,7 @@ interface SetupProps {
  * addresses explicitly, and confirms the fingerprint out of band.
  */
 
-const hint = 'text-sm text-[var(--color-foreground-muted)]'
+const hint = 'text-caption text-[var(--color-foreground-muted)]'
 
 function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) {
   return (
@@ -61,7 +61,7 @@ export function ConnectionError({ error }: { error: string | null }) {
   if (!error) return null
   const key = ERROR_KEYS[error.split(' ')[0]]
   return (
-    <p role="alert" className="text-sm text-[var(--color-danger)]">
+    <p role="alert" className="text-caption text-[var(--color-danger)]">
       {t('federation.errorPrefix')} · {key ? `${t(key)} (${error})` : error}
     </p>
   )
@@ -102,7 +102,7 @@ export function CertificateExpiry({ expiresAt, owner }: { expiresAt: string; own
 export function Fingerprint({ value }: { value: string }) {
   const groups = value.match(/.{1,4}/g) ?? [value]
   return (
-    <code className="block break-words font-mono text-sm leading-6 text-[var(--color-foreground)]">
+    <code className="block break-words font-mono text-caption leading-6 text-[var(--color-foreground)]">
       {groups.join(' ')}
     </code>
   )
@@ -133,7 +133,7 @@ function CopyableCode({ label, value }: { label: string; value: string }) {
           {copied ? t('federation.connect.copied') : t('federation.connect.copy')}
         </Button>
       </div>
-      <Textarea id={id} readOnly value={value} className="min-h-20 font-mono text-sm" onFocus={(e) => e.currentTarget.select()} />
+      <Textarea id={id} readOnly value={value} className="min-h-20 font-mono text-caption" onFocus={(e) => e.currentTarget.select()} />
     </div>
   )
 }
@@ -179,7 +179,7 @@ function PeerReview({
   const ids = { ips: useId(), ipsHint: useId(), priv: useId(), privHint: useId(), confirm: useId() }
   return (
     <div className="space-y-4 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4">
-      <dl className="grid gap-3 text-sm sm:grid-cols-[max-content_1fr] sm:gap-x-4">
+      <dl className="grid gap-3 text-caption sm:grid-cols-[max-content_1fr] sm:gap-x-4">
         <dt className="text-[var(--color-foreground-muted)]">{t('federation.connect.nodeId')}</dt>
         <dd className="break-all font-mono">{nodeId}</dd>
         <dt className="text-[var(--color-foreground-muted)]">{t('federation.connect.address')}</dt>
@@ -214,7 +214,7 @@ function PeerReview({
         />
         <div className="min-w-0 space-y-1">
           <Label htmlFor={ids.priv}>{t('federation.connect.allowPrivate')}</Label>
-          <p id={ids.privHint} className={preview.requires_private ? 'text-sm text-[var(--color-warning)]' : hint}>
+          <p id={ids.privHint} className={preview.requires_private ? 'text-caption text-[var(--color-warning)]' : hint}>
             {preview.requires_private
               ? t('federation.connect.allowPrivateRequired')
               : t('federation.connect.allowPrivateHint')}
@@ -264,7 +264,7 @@ export function NodeConnectionCard({ federation, error = null, onAction }: Setup
       </CardHeader>
       <CardContent className="space-y-4">
         {identity ? (
-          <dl className="grid gap-3 text-sm sm:grid-cols-[max-content_1fr] sm:gap-x-4">
+          <dl className="grid gap-3 text-caption sm:grid-cols-[max-content_1fr] sm:gap-x-4">
             <dt className="text-[var(--color-foreground-muted)]">{t('federation.connect.nodeId')}</dt>
             <dd className="break-all font-mono">{identity.node_id}</dd>
             <dt className="text-[var(--color-foreground-muted)]">{t('federation.connect.fingerprint')}</dt>
@@ -385,7 +385,7 @@ export function InviteComposer({ federation, error = null, onAction }: SetupProp
         <Field label={t('federation.connect.peerCard')} htmlFor={ids.card}>
           <Textarea
             id={ids.card}
-            className="min-h-20 font-mono text-sm"
+            className="min-h-20 font-mono text-caption"
             value={cardText}
             onChange={(e) => {
               setCardText(e.target.value)
@@ -449,7 +449,7 @@ export function InviteComposer({ federation, error = null, onAction }: SetupProp
             ) : (
               <CopyableCode label={t('federation.bundleCopyNow')} value={created.bundle} />
             )}
-            <p className="text-sm text-[var(--color-warning)]">{t('federation.connect.inviteCodeSecret')}</p>
+            <p className="text-caption text-[var(--color-warning)]">{t('federation.connect.inviteCodeSecret')}</p>
           </>
         )}
       </CardContent>
@@ -496,7 +496,7 @@ export function InviteAcceptor({ federation, error = null, onAction }: SetupProp
         <Field label={t('federation.connect.inviteCode')} htmlFor={codeId}>
           <Textarea
             id={codeId}
-            className="min-h-20 font-mono text-sm"
+            className="min-h-20 font-mono text-caption"
             value={codeText}
             onChange={(e) => {
               setCodeText(e.target.value)
@@ -533,7 +533,7 @@ export function InviteAcceptor({ federation, error = null, onAction }: SetupProp
             </p>
             <div className="flex items-center justify-between gap-3">
               {accepted && (
-                <p className="flex items-center gap-1 text-sm text-[var(--color-success)]">
+                <p className="flex items-center gap-1 text-caption text-[var(--color-success)]">
                   <Check className="size-4" aria-hidden="true" /> {t('federation.acceptedGrants')}
                 </p>
               )}
@@ -594,7 +594,7 @@ export function PeerCertificateRotation({
       <Field label={t('federation.cert.rotateCard')} htmlFor={ids.card}>
         <Textarea
           id={ids.card}
-          className="min-h-20 font-mono text-sm"
+          className="min-h-20 font-mono text-caption"
           value={cardText}
           onChange={(e) => {
             setCardText(e.target.value)
@@ -611,11 +611,11 @@ export function PeerCertificateRotation({
       </div>
       {preview && samePeer && (
         <>
-          <div className="space-y-1 text-sm">
+          <div className="space-y-1 text-caption">
             <p className="text-[var(--color-foreground-muted)]">{t('federation.connect.fingerprint')}</p>
             <Fingerprint value={preview.fingerprint} />
           </div>
-          <p className="text-sm text-[var(--color-warning)]">{t('federation.cert.rotateWarning')}</p>
+          <p className="text-caption text-[var(--color-warning)]">{t('federation.cert.rotateWarning')}</p>
           <div className="flex items-start gap-3">
             <input
               id={ids.confirm}
@@ -636,7 +636,7 @@ export function PeerCertificateRotation({
         </>
       )}
       {error && (
-        <p role="alert" className="text-sm text-[var(--color-danger)]">
+        <p role="alert" className="text-caption text-[var(--color-danger)]">
           {error}
         </p>
       )}

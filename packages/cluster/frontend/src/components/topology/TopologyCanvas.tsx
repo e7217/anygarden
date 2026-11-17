@@ -27,6 +27,7 @@ import { UserNode } from './nodes/UserNode'
 import { ProjectGroup } from './nodes/ProjectGroup'
 import { PeerNode } from './nodes/PeerNode'
 import { RelationEdge } from './edges/RelationEdge'
+import { SHADOW_SOFT } from './constants'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 const nodeTypes: NodeTypes = {
@@ -247,7 +248,7 @@ function CanvasInner({
             borderRadius: 8,
             border: '1px solid var(--color-border)',
             background: 'var(--color-surface-elevated)',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+            boxShadow: SHADOW_SOFT,
           }}
         />
         {miniMapOn && (
@@ -266,7 +267,7 @@ function CanvasInner({
       </ReactFlow>
 
       {!miniMapOn && (
-        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/90 px-3 py-1.5 text-center text-xs text-[var(--color-foreground-muted)] shadow-card md:hidden">
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/90 px-3 py-1.5 text-center text-badge text-[var(--color-foreground-muted)] shadow-card md:hidden">
           {t('topology.panHint')}
         </div>
       )}
@@ -303,7 +304,7 @@ function CanvasInner({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+              boxShadow: SHADOW_SOFT,
               cursor: hasOverrides ? 'pointer' : 'default',
             }}
           >
@@ -325,7 +326,7 @@ function CanvasInner({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+            boxShadow: SHADOW_SOFT,
             cursor: 'pointer',
           }}
         >
@@ -346,7 +347,7 @@ function CanvasInner({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+            boxShadow: SHADOW_SOFT,
             cursor: 'pointer',
           }}
         >

@@ -7,7 +7,14 @@ import type { ReactNode } from 'react'
 import { apiFetch } from '@/lib/api'
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }))
-vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'u', is_admin: true } }) }))
+const authMock = vi.hoisted(() => ({ user: { id: 'u', is_admin: true } }))
+vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: authMock.user }) }))
+// The create-agent flow is the sidebar's own dialog; here it only has to open.
+vi.mock('@/components/SidebarCreateAgentDialog', () => ({
+  default: ({ open, onCreated }: { open: boolean; onCreated: (agent: unknown) => void }) => open
+    ? <div role="dialog" aria-label="create agent"><button type="button" onClick={() => onCreated({ id: 'new' })}>created</button></div>
+    : null,
+}))
 const roomsMock = vi.hoisted(() => ({ rooms: {} as Record<string, { id: string; name: string; has_updates?: boolean }[]> }))
 vi.mock('@/hooks/useRooms', () => ({ useRooms: () => ({ createAgentDM: vi.fn(), rooms: roomsMock.rooms, agentDMs: [] }) }))
 // The page frame and the xyflow canvas need a real layout engine; the
@@ -62,7 +69,7 @@ function renderPage() {
   return render(<MemoryRouter><AgentLinksPage /></MemoryRouter>)
 }
 
-afterEach(() => { cleanup(); vi.resetAllMocks(); roomsMock.rooms = {}; localStorage.clear() })
+afterEach(() => { cleanup(); vi.resetAllMocks(); roomsMock.rooms = {}; authMock.user = { id: 'u', is_admin: true }; localStorage.clear() })
 
 /** Answers each endpoint the overview reads with a fresh response. */
 function serve({ graph, turns = [], edges = [], inbox = [], alerts = [] }: {
@@ -84,6 +91,26 @@ function serve({ graph, turns = [], edges = [], inbox = [], alerts = [] }: {
 }
 
 describe('AgentLinksPage', () => {
+  it('offers an admin the create-agent flow when there are no agents', async () => {
+    serve({ graph: { agents: [], links: [] } })
+    renderPage()
+    expect(await screen.findByText('Add your first agent to get started.', { exact: false })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    const dialog = screen.getByRole('dialog', { name: 'create agent' })
+    const graphReads = () => fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/agent-links').length
+    const before = graphReads()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'created' }))
+    await waitFor(() => expect(graphReads()).toBeGreaterThan(before))
+  })
+
+  it('tells someone who cannot add agents who can', async () => {
+    authMock.user = { id: 'u', is_admin: false }
+    serve({ graph: { agents: [], links: [] } })
+    renderPage()
+    expect(await screen.findByText('Once an administrator adds agents', { exact: false })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add agent' })).not.toBeInTheDocument()
+  })
+
   it('explains links when there are none', async () => {
     fetchMock.mockResolvedValue(json({ agents, links: [] }))
     renderPage()

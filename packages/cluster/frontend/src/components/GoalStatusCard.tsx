@@ -13,10 +13,10 @@ import MessageAttachments from '@/components/MessageAttachments'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 const TONE: Record<GoalNoticeStatus, { icon: typeof Target; color: string }> = {
-  active: { icon: Activity, color: 'text-[var(--color-brand-text)]' },
+  active: { icon: Activity, color: 'text-[var(--color-success)]' },
   blocked: { icon: AlertTriangle, color: 'text-[var(--color-warning)]' },
   plateau: { icon: AlertTriangle, color: 'text-[var(--color-warning)]' },
-  awaiting_confirmation: { icon: Target, color: 'text-[var(--color-brand-text)]' },
+  awaiting_confirmation: { icon: Target, color: 'text-[var(--color-warning)]' },
   achieved: { icon: CheckCircle2, color: 'text-[var(--color-success)]' },
   deadline_reached: { icon: CircleSlash, color: 'text-[var(--color-foreground-muted)]' },
   budget_exhausted: { icon: CircleSlash, color: 'text-[var(--color-danger)]' },
@@ -40,7 +40,7 @@ export default function GoalStatusCard({
   return (
     <div
       data-testid="goal-status-card"
-      className="flex max-w-full flex-col gap-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm shadow-whisper"
+      className="flex max-w-full flex-col gap-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-caption shadow-whisper"
     >
       <div className="flex min-w-0 items-center gap-2">
         <Icon className={`h-3.5 w-3.5 shrink-0 ${color}`} aria-hidden />
@@ -53,15 +53,15 @@ export default function GoalStatusCard({
         </span>
       </div>
       {meta.stopReason && (
-        <p data-testid="goal-stop-reason" className="text-caption text-[var(--color-foreground-muted)]">
+        <p data-testid="goal-stop-reason" className="text-caption font-medium text-[var(--color-foreground-muted)]">
           {t(`chat.goalStopReason.${meta.stopReason}`)}
         </p>
       )}
       {meta.detail && (
-        <p className="text-caption text-[var(--color-foreground-muted)] break-words">{meta.detail}</p>
+        <p className="text-caption font-medium text-[var(--color-foreground-muted)] break-words">{meta.detail}</p>
       )}
       {report && (
-        <p data-testid="goal-report-request" className="text-caption text-[var(--color-foreground-muted)] break-words">
+        <p data-testid="goal-report-request" className="text-caption font-medium text-[var(--color-foreground-muted)] break-words">
           {report.leadParticipantId && leadName
             ? t('chat.goalReportRequested', { name: leadName })
             : report.leadParticipantId

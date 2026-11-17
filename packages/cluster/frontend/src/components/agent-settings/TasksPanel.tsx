@@ -215,11 +215,11 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
-        {loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('admin.tasks.loading')}</p>}
+        {loading && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('admin.tasks.loading')}</p>}
         <Button className="ml-auto" variant="outline" size="sm" disabled={loading || busy} onClick={() => void fetchTasks()}>{error ? t('common.retry') : t('common.refresh')}</Button>
       </div>
-      {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error === 'admin_only' ? t('admin.tasks.adminOnly') : error}</p>}
-      {!loading && !error && tasks?.length === 0 && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.tasks.none')}</p>}
+      {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error === 'admin_only' ? t('admin.tasks.adminOnly') : error}</p>}
+      {!loading && !error && tasks?.length === 0 && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.tasks.none')}</p>}
       {(tasks?.length ? STATUS_ORDER : []).map(status => {
         const rows = grouped[status]
         const total = rows.length
@@ -276,13 +276,13 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
                       data-testid={`agent-task-row-${task.id}`}
                       className="group/row flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
                     >
-                      <span className="flex-1 truncate text-sm text-[var(--color-foreground)]">
+                      <span className="flex-1 truncate text-caption text-[var(--color-foreground)]">
                         {task.title}
                       </span>
                       <button
                         type="button"
                         onClick={() => { onNavigateAway?.(); navigate(`/rooms/${task.room_id}`) }}
-                        className="inline-flex min-h-[var(--control-sm-height)] max-w-[12rem] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-0.5 text-badge text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-link)] transition-colors"
+                        className="inline-flex min-h-[var(--control-sm-height)] max-w-[12rem] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-0.5 text-badge font-semibold text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-link)] transition-colors"
                         title={t('admin.tasks.openRoom', { name: task.room_name })}
                       >
                         <span className="truncate">{task.room_name}</span>
@@ -341,7 +341,7 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
               type="button"
               onClick={() => setConfirmClear(null)}
               disabled={busy}
-              className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-1.5 text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] transition-colors"
+              className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-1.5 text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] transition-colors"
             >
               {t('common.cancel')}
             </button>
@@ -349,7 +349,7 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
               type="button"
               onClick={() => confirmClear && handleClearAll(confirmClear)}
               disabled={busy}
-              className="rounded-[var(--radius-sm)] bg-[var(--color-brand)] px-3 py-1.5 text-sm text-[var(--color-on-brand)] hover:bg-[var(--color-brand-hover)] transition-colors disabled:opacity-50"
+              className="rounded-[var(--radius-sm)] bg-[var(--color-brand)] px-3 py-1.5 text-caption text-[var(--color-on-brand)] hover:bg-[var(--color-brand-hover)] transition-colors disabled:opacity-50"
               data-testid="tasks-clear-all-confirm"
             >
               {busy ? t('admin.tasks.clearing') : t('admin.tasks.clear')}

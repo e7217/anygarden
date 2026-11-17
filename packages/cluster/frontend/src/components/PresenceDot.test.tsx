@@ -18,7 +18,7 @@ describe('PresenceDot', () => {
   it('cuts the dot out of its surface with a --presence-ring halo when ringed', () => {
     render(<PresenceDot online ring />)
     const dot = screen.getByRole('status')
-    expect(dot.style.background).toBe('var(--color-status-online, #5b9e6d)')
+    expect(dot.style.background).toBe('var(--color-status-online)')
     expect(dot.style.boxShadow).toContain('var(--presence-ring, var(--color-surface))')
   })
 

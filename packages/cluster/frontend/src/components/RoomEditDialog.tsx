@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useLocale } from '@/i18n/LocaleProvider'
@@ -88,18 +89,18 @@ function PerAgentTokenPanel({
     >
       <div className="flex items-baseline justify-between">
         <Label>{t('rooms.tokenUsage')}</Label>
-        <span className="text-caption text-[var(--color-foreground-muted)]">
+        <span className="text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('rooms.tokenEstimate')}
         </span>
       </div>
       {rows.length === 0 ? (
-        <p className="text-caption text-[var(--color-foreground-muted)]">
+        <p className="text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('rooms.noRecentTokens')}
         </p>
       ) : (
-        <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)]">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-[var(--color-surface-alt)] text-caption text-[var(--color-foreground-muted)]">
+        <div className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
+          <table className="w-full text-left text-caption">
+            <thead className="bg-[var(--color-surface-alt)] text-caption font-medium text-[var(--color-foreground-muted)]">
               <tr>
                 <th className="px-3 py-1.5 font-medium">{t('rooms.agent')}</th>
                 <th className="px-3 py-1.5 text-right font-medium">{t('rooms.oneHour')}</th>
@@ -260,9 +261,9 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
           </div>
           <div className="space-y-2">
             <Label htmlFor="room-edit-desc">{t('rooms.description')}</Label>
-            <textarea
+            <Textarea
               id="room-edit-desc"
-              className="flex w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1 resize-none"
+              className="min-h-0 resize-none"
               placeholder={t('rooms.descriptionPlaceholder')}
               rows={3}
               value={description}
@@ -293,10 +294,10 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
                     className="mt-0.5"
                   />
                   <span className="flex-1 space-y-0.5">
-                    <span className="block text-sm font-medium text-[var(--color-foreground)]">
+                    <span className="block text-caption font-medium text-[var(--color-foreground)]">
                       {t('rooms.context')}
                     </span>
-                    <span className="block text-caption text-[var(--color-foreground-muted)]">
+                    <span className="block text-caption font-medium text-[var(--color-foreground-muted)]">
                       {t('rooms.contextDescription')}
                     </span>
                   </span>
@@ -315,7 +316,7 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
         </div>
 
         {error && (
-          <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+          <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-caption text-[var(--color-warning)]">
             {error}
           </div>
         )}
@@ -323,7 +324,7 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
         {successFlash && (
           <div
             role="status"
-            className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 text-sm text-[var(--color-foreground)]"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 text-caption text-[var(--color-foreground)]"
           >
             {successFlash}
           </div>

@@ -29,7 +29,7 @@ export default function ExecutionTrace({ metadata }: { metadata?: Record<string,
         aria-controls={open ? stepsId : undefined}
         title={open ? t('chat.traceHide') : t('chat.traceShow')}
         onClick={() => setOpen(value => !value)}
-        className="-ml-1 flex min-h-[var(--control-sm-height)] max-w-full items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-caption text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+        className="-ml-1 flex min-h-[var(--control-sm-height)] max-w-full items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-caption font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
       >
         {open
           ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -39,19 +39,19 @@ export default function ExecutionTrace({ metadata }: { metadata?: Record<string,
       {open && (
         <ol id={stepsId} className="mt-1 ml-2 space-y-2 border-l border-[var(--color-border)] pl-3">
           {trace.truncated > 0 && (
-            <li className="text-caption text-[var(--color-foreground-subtle)]">
+            <li className="text-caption font-medium text-[var(--color-foreground-subtle)]">
               {t('chat.traceTruncated', { count: trace.truncated })}
             </li>
           )}
           {trace.steps.map((step, index) => (
             <li key={index} className="space-y-0.5">
               {step.narration && (
-                <p className="whitespace-pre-wrap break-words text-caption text-[var(--color-foreground)]">
+                <p className="whitespace-pre-wrap break-words text-caption font-medium text-[var(--color-foreground)]">
                   {step.narration}
                 </p>
               )}
               {step.activities && (
-                <p className="text-caption text-[var(--color-foreground-muted)]">
+                <p className="text-caption font-medium text-[var(--color-foreground-muted)]">
                   {traceTotalsLabels(t, step.activities).join(' · ')}
                 </p>
               )}

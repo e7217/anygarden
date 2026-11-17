@@ -91,6 +91,7 @@ export default function AgentSettingsMenu({
           size="icon"
           onClick={() => setOpen(v => !v)}
           title={t('admin.agentSettings.title')}
+          aria-label={t('admin.agentSettings.title')}
           aria-haspopup="dialog"
           aria-expanded={open}
           data-testid="agent-settings-menu-trigger"
@@ -111,7 +112,7 @@ export default function AgentSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(onOpenSettings)}
                   data-testid="agent-menu-settings"
-                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
                 >
                   <Settings className="h-4 w-4" />
                   <span>{t('admin.agentSettings.settingsAction')}</span>
@@ -135,7 +136,7 @@ export default function AgentSettingsMenu({
                       handleSelect(onToggleContextWindowOptOut!)
                     }
                     data-testid="agent-menu-context-window-opt-out"
-                    className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                    className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
                   >
                     <EyeOff className="h-4 w-4" />
                     <span className="flex-1">{t('admin.agentSettings.contextOptOut')}</span>
@@ -161,7 +162,7 @@ export default function AgentSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(onDelete)}
                   data-testid="agent-menu-delete"
-                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-caption text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
                   <span>{t('admin.agentSettings.deleteAgent')}</span>

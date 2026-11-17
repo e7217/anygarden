@@ -77,11 +77,11 @@ describe('MarkdownContent — ANSI rendering in code blocks (#290 Phase A)', () 
 })
 
 describe('MarkdownContent — regression: plain markdown still renders', () => {
-  it('renders headings and paragraphs unchanged', () => {
+  it('renders headings (two levels below the page) and paragraphs', () => {
     const content = '# Title\n\nbody text'
     render(<MarkdownContent content={content} />)
     expect(
-      screen.getByRole('heading', { name: 'Title', level: 1 }),
+      screen.getByRole('heading', { name: 'Title', level: 3 }),
     ).toBeInTheDocument()
     expect(screen.getByText('body text')).toBeInTheDocument()
   })
@@ -249,5 +249,39 @@ describe('MarkdownContent — linked local files (#1017)', () => {
       />,
     )
     expect(screen.getAllByRole('link')).toHaveLength(5)
+  })
+})
+
+describe('MarkdownContent — headings sit below the page outline', () => {
+  it('shifts markdown heading levels down two, capped at h6', () => {
+    const content = '# One\n\n## Two\n\n### Three\n\n#### Four\n\n###### Six'
+    render(<MarkdownContent content={content} />)
+    expect(screen.getByRole('heading', { name: 'One' }).tagName).toBe('H3')
+    expect(screen.getByRole('heading', { name: 'Two' }).tagName).toBe('H4')
+    expect(screen.getByRole('heading', { name: 'Three' }).tagName).toBe('H5')
+    expect(screen.getByRole('heading', { name: 'Four' }).tagName).toBe('H6')
+    expect(screen.getByRole('heading', { name: 'Six' }).tagName).toBe('H6')
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+  })
+
+  it('marks the source level the prose styles key on', () => {
+    render(<MarkdownContent content={'# Title\n\n## Section'} />)
+    expect(screen.getByRole('heading', { name: 'Title' })).toHaveAttribute('data-md-level', '1')
+    expect(screen.getByRole('heading', { name: 'Section' })).toHaveAttribute('data-md-level', '2')
+  })
+
+  it('still resolves mentions inside a heading', () => {
+    render(<MarkdownContent content={'# Hi <@user:u1>'} resolveUser={() => 'Kim'} />)
+    expect(screen.getByRole('heading', { name: 'Hi @Kim' })).toBeInTheDocument()
+  })
+})
+
+describe('MarkdownContent — renderer map', () => {
+  it('keeps rendered elements across a re-render with the same inputs', () => {
+    const resolveUser = () => 'Kim'
+    const { container, rerender } = render(<MarkdownContent content={'hello **there**'} resolveUser={resolveUser} />)
+    const strong = container.querySelector('strong')
+    rerender(<MarkdownContent content={'hello **there**'} resolveUser={resolveUser} />)
+    expect(container.querySelector('strong')).toBe(strong)
   })
 })

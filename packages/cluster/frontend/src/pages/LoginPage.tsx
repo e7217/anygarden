@@ -18,7 +18,7 @@ export default function LoginPage() {
   if (loading) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)]">
-        <p className="text-caption text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
+        <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
       </main>
     )
   }

@@ -10,7 +10,7 @@
   --color-background: #ffffff;
   --color-foreground: #122522;
   --color-foreground-muted: #52645f;
-  --color-foreground-subtle: #657870;
+  --color-foreground-subtle: #5b6d66;              /* ≥4.86:1 on every light surface (selected is the floor) */
 
   --color-surface: #ffffff;
   --color-surface-alt: #f5f8f7;
@@ -81,6 +81,8 @@
   --color-accent: #eef4f1;
   --color-accent-foreground: #122522;
   --color-destructive: var(--color-danger);
+  /* Ink for --color-danger-solid fills (Button destructive), not for --color-destructive,
+     which is a text/border colour. White on danger-solid: 6.57:1 light, 6.29:1 dark. */
   --color-destructive-foreground: #ffffff;
   --color-input: #849891;
   --color-ring: #0f766e;
@@ -225,7 +227,7 @@
   --color-accent: #20332d;
   --color-accent-foreground: #edf6f2;
   --color-destructive: #fda4af;
-  --color-destructive-foreground: #ffffff;
+  --color-destructive-foreground: #ffffff;           /* on danger-solid #be123c, 6.29:1 */
   --color-input: #657c71;
   --color-ring: #5eead4;
 
@@ -356,7 +358,12 @@ code, pre, kbd, samp {
    overlapped and clustered; #435 collapses them to a single ladder:
    display 48 · title 32 · heading 24 · lead 20 · body 16 · caption 14 ·
    badge 12. h1→title, h2→heading, h3→lead. Utilities set size only —
-   color is applied separately so a size utility never couples the two. */
+   color is applied separately so a size utility never couples the two.
+   The heading steps (display–lead) carry their weight; the reading steps
+   (body, caption, badge) set size, line-height and tracking only, so they
+   inherit weight like Tailwind's text-base/sm/xs did and a label adds
+   font-medium/semibold explicitly. Line heights match text-base/sm/xs
+   (24/20/16px) so swapping those for the named steps doesn't move rows. */
 @utility text-display {
   font-size: 3rem;             /* 48px */
   line-height: 1.05;
@@ -388,20 +395,17 @@ code, pre, kbd, samp {
 @utility text-body {
   font-size: 1rem;             /* 16px — regular body text */
   line-height: 1.5;
-  font-weight: 400;
 }
 
 @utility text-caption {
   font-size: 0.875rem;         /* 14px — secondary labels, captions */
-  line-height: 1.43;
-  font-weight: 500;
+  line-height: calc(1.25 / 0.875); /* 20px, as Tailwind's sm step */
 }
 
 @utility text-badge {
   font-size: 0.75rem;          /* 12px — pill badges, micro labels */
-  line-height: 1.33;
+  line-height: calc(1 / 0.75);  /* 16px, as Tailwind's xs step */
   letter-spacing: 0.008em;     /* 0.125px positive */
-  font-weight: 600;
 }
 
 /* ==========================================================================
@@ -423,21 +427,22 @@ code, pre, kbd, samp {
   margin-top: 0.5em;
 }
 
-/* Headings — scaled down for bubble context */
-.markdown-prose h1 {
+/* Headings — scaled down for bubble context. MarkdownContent renders them
+   two levels lower (h1→h3) and marks the source level in data-md-level. */
+.markdown-prose [data-md-level="1"] {
   font-size: 1rem;               /* 16px */
   font-weight: 700;
   line-height: 1.3;
   letter-spacing: -0.01em;
   margin: 0.75em 0 0.25em;
 }
-.markdown-prose h2 {
+.markdown-prose [data-md-level="2"] {
   font-size: 0.9375rem;          /* 15px */
   font-weight: 700;
   line-height: 1.3;
   margin: 0.75em 0 0.25em;
 }
-.markdown-prose h3 {
+.markdown-prose [data-md-level="3"] {
   font-size: 0.875rem;           /* 14px */
   font-weight: 700;
   line-height: 1.4;

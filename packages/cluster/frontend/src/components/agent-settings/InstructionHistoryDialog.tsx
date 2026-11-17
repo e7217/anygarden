@@ -85,10 +85,10 @@ export default function InstructionHistoryDialog({
           <DialogTitle>{t('admin.instructionHistory.title')}</DialogTitle>
           <DialogDescription>{t('admin.instructionHistory.description')}</DialogDescription>
         </DialogHeader>
-        {state.kind === 'loading' && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.instructionHistory.loading')}</p>}
-        {state.kind === 'error' && <p role="alert" className="text-sm text-[var(--color-danger)]">{t('admin.instructionHistory.loadFailed')}</p>}
+        {state.kind === 'loading' && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.instructionHistory.loading')}</p>}
+        {state.kind === 'error' && <p role="alert" className="text-caption text-[var(--color-danger)]">{t('admin.instructionHistory.loadFailed')}</p>}
         {state.kind === 'ready' && revisions.length === 0 && (
-          <p className="text-sm text-[var(--color-foreground-muted)]" data-testid="instruction-history-empty">{t('admin.instructionHistory.empty')}</p>
+          <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="instruction-history-empty">{t('admin.instructionHistory.empty')}</p>
         )}
         {revisions.length > 0 && (
           <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
@@ -99,7 +99,7 @@ export default function InstructionHistoryDialog({
                     type="button"
                     onClick={() => setSelected(revision.revision)}
                     aria-current={revision.revision === selected}
-                    className={`flex w-full min-h-[var(--control-height)] flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-hover)] ${
+                    className={`flex w-full min-h-[var(--control-height)] flex-col items-start gap-0.5 px-3 py-2 text-left text-caption hover:bg-[var(--color-surface-hover)] ${
                       revision.revision === selected ? 'bg-[var(--color-surface-selected)]' : ''
                     }`}
                   >
@@ -108,7 +108,7 @@ export default function InstructionHistoryDialog({
                       <Badge variant="outline" data-testid={`instruction-source-${revision.revision}`}>{SOURCE_KEYS[revision.source] ? t(SOURCE_KEYS[revision.source]) : revision.source}</Badge>
                       {revision.revision === currentRevision && <Badge variant="outline">{t('admin.instructionHistory.current')}</Badge>}
                     </span>
-                    <span className="text-caption text-[var(--color-foreground-muted)]">
+                    <span className="text-caption font-medium text-[var(--color-foreground-muted)]">
                       {formatDate(new Date(revision.created_at), { dateStyle: 'medium', timeStyle: 'short' })}
                       {revision.restored_from != null && ` · ${t('admin.instructionHistory.restoredFrom', { revision: revision.restored_from })}`}
                     </span>
@@ -119,14 +119,14 @@ export default function InstructionHistoryDialog({
             {chosen && (
               <div className="min-w-0 space-y-2" data-testid="instruction-history-preview">
                 {chosen.context?.rationale && (
-                  <p className="text-caption text-[var(--color-foreground)] [overflow-wrap:anywhere]" data-testid="instruction-history-rationale">
+                  <p className="text-caption font-medium text-[var(--color-foreground)] [overflow-wrap:anywhere]" data-testid="instruction-history-rationale">
                     {t('admin.instructionHistory.rationale', { rationale: chosen.context.rationale })}
                   </p>
                 )}
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 font-mono text-xs text-[var(--color-foreground)]">
+                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 font-mono text-badge text-[var(--color-foreground)]">
                   {chosen.agents_md || t('admin.instructionHistory.noInstructions')}
                 </pre>
-                <p className="text-caption text-[var(--color-foreground-muted)]">
+                <p className="text-caption font-medium text-[var(--color-foreground-muted)]">
                   {t('admin.instructionHistory.skills', { count: Object.keys(chosen.skills).length })}
                   {Object.keys(chosen.skills).length > 0 && `: ${Object.keys(chosen.skills).join(', ')}`}
                 </p>
@@ -144,7 +144,7 @@ export default function InstructionHistoryDialog({
             )}
           </div>
         )}
-        {error && <p role="alert" className="text-sm text-[var(--color-danger)]">{error}</p>}
+        {error && <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>}
       </DialogContent>
     </Dialog>
   )

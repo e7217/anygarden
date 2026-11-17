@@ -55,7 +55,7 @@ export default function PeerChainProgressCard({ chain, onOpenThread, onCancel }:
       data-chain-id={chain.id}
       className="mt-2 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-1.5"
     >
-      <p className="flex min-w-0 flex-1 basis-60 items-start gap-2 text-caption text-[var(--color-foreground-muted)]">
+      <p className="flex min-w-0 flex-1 basis-60 items-start gap-2 text-caption font-medium text-[var(--color-foreground-muted)]">
         {/* A busy signal, so it keeps turning (slowly) under reduced motion. */}
         <LoaderCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
         <span className="min-w-0">
@@ -69,7 +69,7 @@ export default function PeerChainProgressCard({ chain, onOpenThread, onCancel }:
         {threadRootId && onOpenThread && (
           <Button type="button" variant="outline" size="sm" onClick={() => onOpenThread(threadRootId)} className="gap-1.5">
             <MessagesSquare aria-hidden="true" />
-            <span className="text-caption">{t('peerChains.openThread')}</span>
+            <span className="text-caption font-medium">{t('peerChains.openThread')}</span>
           </Button>
         )}
         {onCancel && <PeerChainStopButton chain={chain} onCancel={onCancel} />}

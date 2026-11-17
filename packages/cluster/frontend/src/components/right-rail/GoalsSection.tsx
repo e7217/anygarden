@@ -97,11 +97,11 @@ export default function GoalsSection({
   return (
     <section className="flex min-w-0 flex-col">
       <header className="flex items-baseline justify-between px-3 py-2">
-        <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+        <h3 className="text-caption font-semibold text-[var(--color-foreground)]">
           {t('chat.responsibilities')}
         </h3>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-[var(--color-foreground-subtle)]">
+          <span className="text-badge text-[var(--color-foreground-subtle)]">
             {goals.length}
           </span>
           {hasCandidates && (
@@ -136,8 +136,8 @@ export default function GoalsSection({
       )}
 
       <div className="min-w-0 px-1">
-        {error && <p className="px-3 py-2 text-xs text-[var(--color-danger)]" role="alert">{t('goals.loadFailed')} {error}</p>}
-        {loading && <p className="px-3 py-2 text-xs text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
+        {error && <p className="px-3 py-2 text-caption text-[var(--color-danger)]" role="alert">{t('goals.loadFailed')} {error}</p>}
+        {loading && <p className="px-3 py-2 text-badge text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
         {!loading && !error && goals.length === 0 && !showForm && (
           <div className="px-3 py-4 text-center text-caption font-normal text-[var(--color-foreground-subtle)]">
             {t('goals.empty')}
@@ -156,7 +156,7 @@ export default function GoalsSection({
             />
             <div className="min-w-0 flex-1">
               <p
-                className="truncate text-sm text-[var(--color-foreground)]"
+                className="truncate text-caption text-[var(--color-foreground)]"
                 title={g.title}
               >
                 {g.title}
@@ -168,7 +168,7 @@ export default function GoalsSection({
                   trigger label so the row never has a dead second
                   line. ``#312`` ordering preserved: assignee first. */}
               <p
-                className="truncate text-xs text-[var(--color-foreground-muted)]"
+                className="truncate text-badge text-[var(--color-foreground-muted)]"
                 data-testid={`right-rail-goal-assignee-${g.id}`}
                 title={
                   agentNameById[g.assignee_agent_id] ??
@@ -178,7 +178,7 @@ export default function GoalsSection({
                 {agentNameById[g.assignee_agent_id] ??
                   `${t('goals.agent')} ${g.assignee_agent_id.slice(0, 6)}`}
               </p>
-              <p className="truncate text-xs text-[var(--color-foreground-subtle)]">
+              <p className="truncate text-badge text-[var(--color-foreground-subtle)]">
                 {statusLabel(g.status)} ·{' '}
                 {t(g.trigger_type === 'cron' ? 'goals.cron' : g.trigger_type === 'interval' ? 'goals.interval' : 'goals.manual')}
                 {g.trigger_type !== 'manual' && (
@@ -197,9 +197,9 @@ export default function GoalsSection({
                 #327 — opaque ``bg-surface-alt`` so meta text under the
                 cluster doesn't bleed through on hover; the row's hover
                 state paints the same surface, so the cluster blends
-                seamlessly. ``shadow-sm`` gives a faint lift so the
+                seamlessly. ``shadow-card`` gives a faint lift so the
                 cluster reads as floating over the row, not glued. */}
-            <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] opacity-100 shadow-sm transition-opacity md:pointer-fine:bottom-auto md:pointer-fine:right-2 md:pointer-fine:top-1/2 md:pointer-fine:-translate-y-1/2 md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100">
+            <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] opacity-100 shadow-card transition-opacity md:pointer-fine:bottom-auto md:pointer-fine:right-2 md:pointer-fine:top-1/2 md:pointer-fine:-translate-y-1/2 md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100">
               <Button
                 variant="ghost"
                 size="icon"

@@ -17,7 +17,7 @@ import {
   type Scope,
 } from '@/components/topology/useTopologyLayoutOverrides'
 import type { GraphEdge, GraphNode, NodeKind } from '@/components/topology/types'
-import { TEXT_MUTED, TEXT_PRIMARY } from '@/components/topology/constants'
+import { SHADOW_SOFT, TEXT_MUTED, TEXT_PRIMARY } from '@/components/topology/constants'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
@@ -83,7 +83,7 @@ function EmptyState({
           background: 'var(--color-surface-elevated)',
           border: '1px solid var(--color-border)',
           borderRadius: 12,
-          boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+          boxShadow: SHADOW_SOFT,
           textAlign: 'center',
           display: 'flex',
           flexDirection: 'column',
@@ -242,7 +242,7 @@ export default function TopologyPage() {
             {t('topology.title')}
           </h1>
           {data && (
-            <span className="text-xs text-[var(--color-foreground-muted)]">
+            <span className="text-badge text-[var(--color-foreground-muted)]">
               {t('topology.summary', {
                 scope: t(data.scope === 'global' ? 'topology.scopeGlobal' : 'topology.scopePersonal'),
                 nodes: formatNumber(data.nodes.length),
@@ -299,7 +299,7 @@ export default function TopologyPage() {
               </div>
               {filtersOpen && (
                 <div className="absolute inset-0 z-20 flex md:hidden">
-                  <div className="flex h-full max-w-[calc(100vw-48px)] flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
+                  <div className="flex h-full max-w-[calc(100vw-48px)] flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep">
                     <div className="flex h-14 items-center justify-between border-b border-[var(--color-border)] px-4">
                       <span className="font-semibold">{t('topology.filters')}</span>
                       <Button variant="ghost" size="icon" onClick={() => setFiltersOpen(false)} aria-label={t('topology.closeFilters')}><X className="h-4 w-4" /></Button>

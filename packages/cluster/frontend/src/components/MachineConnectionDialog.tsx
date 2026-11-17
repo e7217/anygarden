@@ -74,13 +74,13 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
     return (
       <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)]">
         <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-1">
-          <span className="text-xs font-medium text-[var(--color-foreground-muted)]">{name}</span>
+          <span className="text-caption font-medium text-[var(--color-foreground-muted)]">{name}</span>
           <Button variant="ghost" size="sm" onClick={() => void copy(value, name)} aria-label={t('admin.machines.copyCommand', { name })}>
             {copied === name ? <Check /> : <Copy />}
             {copied === name ? t('common.copied') : t('common.copy')}
           </Button>
         </div>
-        <pre className="overflow-x-auto p-3 text-xs leading-relaxed"><code>{value}</code></pre>
+        <pre className="overflow-x-auto p-3 text-badge leading-relaxed"><code>{value}</code></pre>
       </div>
     )
   }
@@ -92,7 +92,7 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
           <DialogTitle>{t('admin.machines.connectionTitle', { name: machine.name })}</DialogTitle>
           <DialogDescription>{t('admin.machines.connectionDescription')}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-5 text-sm">
+        <div className="space-y-5 text-caption">
           {refreshWarning && <p role="alert" className="rounded-[var(--radius-md)] border border-[var(--color-warning)] p-3 text-[var(--color-warning)]">{refreshWarning}</p>}
           <section className="space-y-2">
             <h3 className="font-semibold">{t('admin.machines.installStep')}</h3>
@@ -104,17 +104,17 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
             <div className="space-y-2">
               <Label htmlFor="machine-server-url">{t('admin.machines.serverUrl')}</Label>
               <Input id="machine-server-url" type="url" value={server} onChange={event => { setServer(event.target.value); setCopied(null) }} aria-describedby="machine-server-hint" aria-invalid={!serverUrl} autoComplete="url" />
-              <p id="machine-server-hint" className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.serverHint')}</p>
-              {loopback && <p className="text-xs text-[var(--color-warning)]">{t('admin.machines.localhostHint')}</p>}
-              {!serverUrl && <p role="alert" className="text-xs text-[var(--color-destructive)]">{t('admin.machines.invalidServerUrl')}</p>}
+              <p id="machine-server-hint" className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.serverHint')}</p>
+              {loopback && <p className="text-caption text-[var(--color-warning)]">{t('admin.machines.localhostHint')}</p>}
+              {!serverUrl && <p role="alert" className="text-caption text-[var(--color-destructive)]">{t('admin.machines.invalidServerUrl')}</p>}
             </div>
             {token && serverUrl ? (
               <div className="space-y-2">
                 <h4 className="font-medium">{t('admin.machines.linkCodeTitle')}</h4>
-                <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeHint')}</p>
+                <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeHint')}</p>
                 {commandBlock(machineLinkCode(serverUrl, machine.id, token, machine.name), t('admin.machines.linkCode'))}
               </div>
-            ) : !token && <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeNeedsToken')}</p>}
+            ) : !token && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeNeedsToken')}</p>}
             {token ? (
               <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -124,20 +124,20 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
                     {copied === 'token' ? t('common.copied') : t('common.copy')}
                   </Button>
                 </div>
-                <code className="block select-all break-all text-xs">{token}</code>
-                <p className="text-xs text-[var(--color-warning)]">{t('admin.machines.copyTokenWarning')}</p>
-                <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.tokenPromptHint')}</p>
+                <code className="block select-all break-all text-badge">{token}</code>
+                <p className="text-caption text-[var(--color-warning)]">{t('admin.machines.copyTokenWarning')}</p>
+                <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.tokenPromptHint')}</p>
               </div>
             ) : <div className="space-y-2">
-              <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.savedTokenHint')}</p>
-              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm md:min-h-8">
+              <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.savedTokenHint')}</p>
+              <label className="flex min-h-[var(--control-sm-height)] cursor-pointer items-center gap-2 text-caption">
                 <input type="checkbox" checked={enterToken} onChange={event => { setEnterToken(event.target.checked); setCopied(null) }} className="size-4 accent-[var(--color-brand)]" />
                 {t('admin.machines.enterToken')}
               </label>
             </div>}
             {command && commandBlock(command, `${t('admin.machines.runCommand')} (Bash)`)}
-            <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.foregroundHint')}</p>
-            <details className="space-y-2 text-xs text-[var(--color-foreground-muted)]">
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.foregroundHint')}</p>
+            <details className="space-y-2 text-caption text-[var(--color-foreground-muted)]">
               <summary className="cursor-pointer py-2 font-medium">{t('admin.machines.restartLater')}</summary>
               <p>{t('admin.machines.restartHint')}</p>
               {commandBlock('source ~/.anygarden/machine-venv/bin/activate\nanygarden machine run', t('admin.machines.restartCommand'))}
@@ -159,12 +159,12 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
               {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               {checking ? t('admin.machines.checkingConnection') : t('admin.machines.checkConnection')}
             </Button>
-            {!online && <details className="pt-1 text-xs text-[var(--color-foreground-muted)]">
+            {!online && <details className="pt-1 text-caption text-[var(--color-foreground-muted)]">
               <summary className="cursor-pointer py-2 font-medium">{t('admin.machines.troubleshoot')}</summary>
               <p className="leading-relaxed">{t('admin.machines.troubleshootHint')}</p>
             </details>}
           </section>
-          {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
+          {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
         </div>
         <DialogFooter><Button onClick={() => onOpenChange(false)}>{t('admin.machines.done')}</Button></DialogFooter>
       </DialogContent>

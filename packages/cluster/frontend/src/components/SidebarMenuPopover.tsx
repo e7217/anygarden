@@ -58,14 +58,22 @@ export default function SidebarMenuPopover({ anchorRef, label, onClose, children
     if (drawer) visibilityObserver.observe(drawer, { attributes: true, attributeFilter: ['aria-hidden', 'inert', 'class'] })
     updatePosition()
     menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
+    // Scroll (captured from any scroller) and resize fire often; measure once per frame.
+    let frame = 0
+    const schedulePosition = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => { frame = 0; updatePosition() })
+    }
+    const listenerOptions = { capture: true, passive: true } as const
+    window.addEventListener('resize', schedulePosition)
+    window.addEventListener('scroll', schedulePosition, listenerOptions)
     document.addEventListener('pointerdown', onOutside)
     document.addEventListener('keydown', onKey)
     return () => {
       visibilityObserver.disconnect()
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
+      if (frame) cancelAnimationFrame(frame)
+      window.removeEventListener('resize', schedulePosition)
+      window.removeEventListener('scroll', schedulePosition, listenerOptions)
       document.removeEventListener('pointerdown', onOutside)
       document.removeEventListener('keydown', onKey)
     }
@@ -77,7 +85,7 @@ export default function SidebarMenuPopover({ anchorRef, label, onClose, children
       role="group"
       aria-label={label}
       style={position}
-      className={`fixed z-[60] max-h-[calc(100dvh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg ${width === 'narrow' ? 'w-40' : 'w-52'}`}
+      className={`fixed z-[60] max-h-[calc(100dvh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-deep ${width === 'narrow' ? 'w-40' : 'w-52'}`}
     >
       {children}
     </div>,

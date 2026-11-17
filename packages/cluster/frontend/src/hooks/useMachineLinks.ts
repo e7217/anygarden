@@ -50,9 +50,16 @@ export function useMachineLinks() {
   useEffect(() => {
     let active = true
     const tick = () => { if (active) void refresh().catch(() => {}) }
+    // A hidden tab skips its polls and catches up when shown again.
+    const tickIfVisible = () => { if (document.visibilityState !== 'hidden') tick() }
     tick()
-    const timer = window.setInterval(tick, POLL_MS)
-    return () => { active = false; window.clearInterval(timer) }
+    const timer = window.setInterval(tickIfVisible, POLL_MS)
+    document.addEventListener('visibilitychange', tickIfVisible)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', tickIfVisible)
+    }
   }, [refresh])
 
   const addLink = useCallback(async (code: string) => {

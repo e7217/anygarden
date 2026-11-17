@@ -22,7 +22,7 @@ import { isHiddenSystemMessage } from '@/lib/systemMessages'
 import { alignsRight } from '@/lib/messageLayout'
 import { useLocale } from '@/i18n/LocaleProvider'
 import PeerChainProgressCard from '@/components/peer-chains/PeerChainProgressCard'
-import { activeChainsForMessage, type PeerChain } from '@/lib/peerChains'
+import { activeChainsForMessage, chainAnchorId, type PeerChain } from '@/lib/peerChains'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -64,6 +64,24 @@ interface ChatAreaProps {
   onCancelPeerChain?: (chainId: string) => Promise<boolean>
 }
 
+const NO_CHAINS: PeerChain[] = []
+const ANNOUNCE_EXCERPT_CHARS = 140
+
+/** Plain text for a screen-reader announcement: mention tokens become
+ *  names, markdown punctuation and extra whitespace go, and long
+ *  messages are cut to an excerpt. */
+function announcementExcerpt(content: string, nameOf: (pid: string) => string): string {
+  const text = content
+    .replace(/<@user:([^>]+)>/g, (_, id: string) => `@${nameOf(id)}`)
+    .replace(/<#room:[^>]+>/g, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[*_`#>~|]+/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return text.length > ANNOUNCE_EXCERPT_CHARS ? `${text.slice(0, ANNOUNCE_EXCERPT_CHARS).trimEnd()}…` : text
+}
+
 export default function ChatArea({
   messages,
   loading = false,
@@ -81,7 +99,7 @@ export default function ChatArea({
   canCancelTurns = true,
   openTurns = [],
   onCancelTurns,
-  peerChains = [],
+  peerChains = NO_CHAINS,
   onCancelPeerChain,
 }: ChatAreaProps) {
   const { t } = useLocale()
@@ -235,9 +253,24 @@ export default function ChatArea({
   const typingIds = Array.from(typingUsers ?? []).filter(pid => pid !== myParticipantId)
   const nameOf = (pid: string) => participants[pid]?.display_name ?? pid.slice(0, 8)
   // A thread shows its own work only when its reply row is on screen.
-  const shownRootIds = new Set(
-    threadIndex && onOpenThread ? timeline.filter(m => canHostThread(threadIndex, m.id)).map(m => m.id) : [],
+  // Also answers "does this row host a thread" for the timeline below.
+  const shownRootIds = useMemo(
+    () => new Set(
+      threadIndex && onOpenThread ? timeline.filter(m => canHostThread(threadIndex, m.id)).map(m => m.id) : [],
+    ),
+    [threadIndex, onOpenThread, timeline],
   )
+  // #1006 — running chains grouped by the message they hang off, once per
+  // change instead of a scan of every chain for every row on each render.
+  const chainsByMessage = useMemo(() => {
+    const byMessage = new Map<string, PeerChain[]>()
+    for (const chain of peerChains) {
+      if (chain.state !== 'active') continue
+      const anchor = chainAnchorId(chain)
+      if (!byMessage.has(anchor)) byMessage.set(anchor, activeChainsForMessage(peerChains, anchor))
+    }
+    return byMessage
+  }, [peerChains])
   const { main: mainTypingIds, byThread: threadTypingIds } = placeWorkingParticipants(
     typingIds,
     openTurns,
@@ -270,6 +303,39 @@ export default function ChatArea({
     scrollToEnd(bottomRef.current)
   }, [messages, typingNames.length, focusedMessageId])
 
+  // Screen readers hear each finished message that arrives while the room
+  // is open — not the history loaded on entry, older pages, or one's own
+  // sends. Messages land whole (work in progress is the typing row), so
+  // nothing is announced token by token.
+  const [announcement, setAnnouncement] = useState('')
+  const announcedRef = useRef<{ roomId: string; seq: number } | null>(null)
+  useEffect(() => {
+    if (!currentRoomId) return
+    const latestSeq = messages.reduce((max, m) => Math.max(max, m.seq || 0), 0)
+    const seen = announcedRef.current
+    announcedRef.current = { roomId: currentRoomId, seq: Math.max(latestSeq, seen?.roomId === currentRoomId ? seen.seq : 0) }
+    // The first snapshot of a room is its history.
+    if (!seen || seen.roomId !== currentRoomId || latestSeq <= seen.seq) return
+    const fresh = messages.filter(m =>
+      m.seq > seen.seq && m.participant_id !== myParticipantId && !isHiddenSystemMessage(m),
+    )
+    const latest = fresh[fresh.length - 1]
+    if (!latest) return
+    const sender = latest.participant_id
+      ? participants[latest.participant_id]?.display_name ?? latest.participant_id.slice(0, 8)
+      : t('chat.a11y.unknownSender')
+    const text = announcementExcerpt(latest.content, pid => participants[pid]?.display_name ?? pid.slice(0, 8))
+    setAnnouncement(text
+      ? t('chat.a11y.newMessage', { name: sender, text })
+      : t('chat.a11y.newMessageNoText', { name: sender }))
+    // ``participants``/``t`` only shape the text; a change to them must not
+    // re-announce.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, currentRoomId, myParticipantId])
+  const workingAnnouncement = mainTypingIds.length > 0
+    ? t('chat.threadWorking', { names: mainTypingIds.map(nameOf).join(', ') })
+    : ''
+
   if (messages.length === 0 && loading) {
     return <ChatHistorySkeleton label={t('chat.loadingMessages')} />
   }
@@ -279,13 +345,18 @@ export default function ChatArea({
       <div className="chat-column flex flex-1 flex-col items-center justify-center bg-[var(--color-surface)] py-4 text-center">
         <MessageSquare className="mb-4 h-12 w-12 text-[var(--color-foreground-subtle)] opacity-60" />
         <p className="text-lead text-[var(--color-foreground)]">{t('chat.noMessages')}</p>
-        <p className="text-caption text-[var(--color-foreground-muted)] mt-1">{t('chat.startConversation')}</p>
+        <p className="text-caption font-medium text-[var(--color-foreground-muted)] mt-1">{t('chat.startConversation')}</p>
       </div>
     )
   }
 
   return (
     <div className="flex flex-1 flex-col bg-[var(--color-surface)] min-h-0">
+      {/* Polite live regions, kept mounted so changes are announced. The
+          visible typing row is not live itself: its timers tick every
+          second. */}
+      <p role="status" aria-live="polite" className="sr-only" data-testid="chat-announcer">{announcement}</p>
+      <p role="status" aria-live="polite" className="sr-only" data-testid="chat-working-announcer">{workingAnnouncement}</p>
       <RoomQueryBanner
         queries={pendingQueries}
         onDismiss={handleDismiss}
@@ -303,8 +374,8 @@ export default function ChatArea({
             // are internal plumbing, not chat content. The cluster persists
             // them so the audit trail is complete; we just hide them.
             if (isHiddenSystemMessage(msg)) return null
-            const chains = activeChainsForMessage(peerChains, msg.id)
-            const hostsThread = Boolean(threadIndex && onOpenThread && canHostThread(threadIndex, msg.id))
+            const chains = chainsByMessage.get(msg.id) ?? NO_CHAINS
+            const hostsThread = shownRootIds.has(msg.id)
             return (
               <div key={msg.seq || i} data-message-id={msg.id} className="group/message relative">
                 <MessageBubble
@@ -348,7 +419,7 @@ export default function ChatArea({
           })}
           {typingNames.length > 0 && (
             <div className="flex flex-col items-start">
-              <span className="mb-1 flex max-w-full flex-wrap gap-x-1 pl-1 text-badge text-[var(--color-foreground-muted)]">
+              <span className="mb-1 flex max-w-full flex-wrap gap-x-1 pl-1 text-badge font-semibold text-[var(--color-foreground-muted)]">
                 {typingNames.map((entry, index) => (
                   <span key={entry.pid} className="flex min-w-0 max-w-full" data-testid="typing-name">
                     <span className="truncate">{entry.text}</span>
@@ -370,7 +441,7 @@ export default function ChatArea({
                 </div>
                 {narration && (
                   <p
-                    className="min-w-0 truncate text-caption text-[var(--color-foreground-muted)]"
+                    className="min-w-0 truncate text-caption font-medium text-[var(--color-foreground-muted)]"
                     title={narration}
                     data-testid="typing-narration"
                   >
@@ -431,7 +502,7 @@ function ChatHistorySkeleton({ label }: { label: string }) {
           </div>
         ))}
       </div>
-      <p className="chat-column pb-4 text-center text-caption text-[var(--color-foreground-muted)]">{label}</p>
+      <p className="chat-column pb-4 text-center text-caption font-medium text-[var(--color-foreground-muted)]">{label}</p>
     </div>
   )
 }

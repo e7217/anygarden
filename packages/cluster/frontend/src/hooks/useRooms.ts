@@ -9,6 +9,11 @@ import {
 } from 'react';
 import { createElement } from 'react';
 import { apiFetch } from '@/lib/api';
+import { getAuthToken } from '@/lib/authStorage';
+
+// How often a signed-out provider looks for a token (a localStorage read,
+// no request) so the tree loads as soon as sign-in stores one.
+const TOKEN_CHECK_MS = 500;
 
 // ``can_delete`` (#783): the caller is the project's creator or a global admin.
 interface Project { id: string; name: string; description?: string; created_by?: string | null; can_delete?: boolean; }
@@ -218,6 +223,7 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
 
   const refreshSidebarRooms = useCallback(() => {
     if (localStorage.getItem('anygarden_is_guest') === '1') return;
+    if (!getAuthToken()) return;
     projects.forEach(p => { void fetchRooms(p.id); });
     void fetchAgentDMs();
   }, [projects, fetchRooms, fetchAgentDMs]);
@@ -570,7 +576,19 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   // ``ready`` (or ``error``) without callers having to trigger
   // anything — this is what the Create Agent dialog keys off
   // on cold boot.
-  useEffect(() => { void refetch(); }, [refetch]);
+  //
+  // The provider sits above the routes, so it also mounts on /login and
+  // before the dev auto-login has stored a token. Fetching then only
+  // earns a 401, so the boot waits for a token to exist.
+  const [hasToken, setHasToken] = useState(() => getAuthToken() !== null);
+  useEffect(() => {
+    if (hasToken) return;
+    const id = window.setInterval(() => {
+      if (getAuthToken() !== null) setHasToken(true);
+    }, TOKEN_CHECK_MS);
+    return () => window.clearInterval(id);
+  }, [hasToken]);
+  useEffect(() => { if (hasToken) void refetch(); }, [hasToken, refetch]);
 
   // Whenever the projects list changes AFTER boot (e.g.
   // ``createProject`` just added one via the Sidebar), fan out

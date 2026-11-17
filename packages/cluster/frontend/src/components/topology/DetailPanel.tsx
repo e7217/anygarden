@@ -44,7 +44,6 @@ export default function DetailPanel({ selected, onClose, isAdmin }: Props) {
         flexDirection: 'column',
         gap: 16,
         overflowY: 'auto',
-        animation: 'topology-slide-in 180ms ease-out',
       }}
       aria-label={t('topology.detail', { kind: t(kindKeys[selected.kind]) })}
     >

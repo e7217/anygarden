@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type PointerEvent, type RefObject } from 'react'
+import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type RefObject } from 'react'
 
 export interface PanelWidthBounds {
   default: number
@@ -73,6 +73,18 @@ export default function PanelResizeHandle({
     const rendered = panel?.getBoundingClientRect().width ?? 0
     onCommit(rendered > 0 ? Math.min(state.current, Math.round(rendered)) : state.current)
   }
+
+  // Unmounting mid-drag (route change, breakpoint hides the handle)
+  // would otherwise leave the whole page with a resize cursor and no
+  // text selection.
+  useEffect(() => () => {
+    if (!drag.current) return
+    drag.current = null
+    const panel = panelRef.current
+    if (panel) delete panel.dataset.resizing
+    document.body.style.removeProperty('cursor')
+    document.body.style.removeProperty('user-select')
+  }, [panelRef])
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return

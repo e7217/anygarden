@@ -187,7 +187,7 @@ export default function RoomHeader({
         {immediateParent && (
           <button
             onClick={() => navigate(`/rooms/${immediateParent.id}`)}
-            className="flex h-[var(--control-icon-size)] shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+            className="flex h-[var(--control-icon-size)] shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-badge text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
             title={t('chat.backToParent', { name: immediateParent.name })}
             data-testid="room-header-parent-link"
           >
@@ -213,7 +213,7 @@ export default function RoomHeader({
         ) : (
           <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" />
         )}
-        <h1 className="min-w-0 truncate text-base font-semibold tracking-[-0.015em] text-[var(--color-foreground)]" title={roomName}>{roomName}</h1>
+        <h1 className="min-w-0 truncate text-body font-semibold tracking-[-0.015em] text-[var(--color-foreground)]" title={roomName}>{roomName}</h1>
       </div>
       <div className="col-start-2 row-start-1 flex shrink-0 items-center gap-1">
         {participantCount !== undefined && (
@@ -224,7 +224,7 @@ export default function RoomHeader({
               // ``hover:bg-[var(--color-surface-hover)] cursor-pointer`` matches the
               // project-wide ghost-button convention recorded in
               // docs/history/STATUS.md (PR #31/#32).
-              className="relative text-caption text-[var(--color-foreground-muted)] flex h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] shrink-0 items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer"
+              className="relative text-caption font-medium text-[var(--color-foreground-muted)] flex h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] shrink-0 items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer"
               aria-label={
                 agentsOfflineLabel
                   ? `${t('chat.showParticipants', { count: participantCount })}, ${agentsOfflineLabel}`
@@ -246,7 +246,7 @@ export default function RoomHeader({
               )}
             </button>
           ) : (
-            <div className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1 whitespace-nowrap">
+            <div className="text-caption font-medium text-[var(--color-foreground-muted)] flex items-center gap-1 whitespace-nowrap">
               <Users className="h-4 w-4" />
               <span>{participantCount}</span>
             </div>
@@ -263,6 +263,8 @@ export default function RoomHeader({
                 ? t('chat.disableTemporary')
                 : t('chat.enableTemporary')
             }
+            // A toggle keeps one name; ``aria-pressed`` carries the state.
+            aria-label={t('chat.temporaryShort')}
             aria-pressed={!!ephemeral}
             data-testid="room-header-ephemeral-toggle"
             className={`inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors ${

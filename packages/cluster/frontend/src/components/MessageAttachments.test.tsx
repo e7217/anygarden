@@ -120,4 +120,23 @@ describe('MessageAttachments', () => {
     expect(screen.getByText('Not attached · x.bin (file type not allowed)')).toBeInTheDocument()
     expect(screen.getByText('Not attached · junk (upload failed)')).toBeInTheDocument()
   })
+
+  it('reserves a seen image\'s box when it is shown again', async () => {
+    const sized = { ...image, id: 'a-sized' }
+    renderWith({ references: [sized] })
+    const first = await screen.findByRole('img', { name: 'chart.png' })
+    expect(first).not.toHaveAttribute('width')
+    Object.defineProperty(first, 'naturalWidth', { value: 1200 })
+    Object.defineProperty(first, 'naturalHeight', { value: 600 })
+    fireEvent.load(first)
+    cleanup()
+
+    renderWith({ references: [sized] })
+    const placeholder = screen.queryByTestId('message-attachment-image-placeholder')
+    if (placeholder) expect(placeholder.style.width).toBe('384px')
+    const again = await screen.findByRole('img', { name: 'chart.png' })
+    // Scaled into the 384 × 256 thumbnail frame, aspect kept.
+    expect(again).toHaveAttribute('width', '384')
+    expect(again).toHaveAttribute('height', '192')
+  })
 })

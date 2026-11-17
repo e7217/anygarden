@@ -28,7 +28,7 @@ export default function AgentSenderMenu({
   }
 
   const itemClass =
-    'flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer'
+    'flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer'
 
   return (
     <div ref={rootRef} className="relative">

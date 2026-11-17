@@ -15,6 +15,7 @@
 
 .topology-root {
   --color-topology-accent-soft: color-mix(in srgb, var(--color-brand-text) 50%, transparent);
+  --color-topology-running-soft: color-mix(in srgb, var(--color-status-online) 50%, transparent);
   --color-topology-mask: color-mix(in srgb, var(--color-surface-alt) 45%, transparent);
   background: var(--color-surface-alt);
 }

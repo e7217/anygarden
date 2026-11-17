@@ -65,7 +65,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
 
   if (!agentId) {
     return (
-      <p className="text-sm text-[var(--color-foreground-subtle)]">
+      <p className="text-caption text-[var(--color-foreground-subtle)]">
         {t('admin.goals.selectAgent')}
       </p>
     )
@@ -89,8 +89,8 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
         </Button>
         </div>
       </div>
-      {loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
-      {(error || actionError) && <p role="alert" className="text-sm text-[var(--color-destructive)]">{actionError || t('agentSetup.goalsLoadFailed')}</p>}
+      {loading && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
+      {(error || actionError) && <p role="alert" className="text-caption text-[var(--color-destructive)]">{actionError || t('agentSetup.goalsLoadFailed')}</p>}
 
       {showForm && (
         <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)]">
@@ -130,7 +130,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
             aria-hidden="true"
           />
           <div className="min-w-0 flex-1 basis-40">
-            <p className="truncate text-sm text-[var(--color-foreground)]">
+            <p className="truncate text-caption text-[var(--color-foreground)]">
               {g.title}
             </p>
             <p className="text-badge font-normal text-[var(--color-foreground-subtle)]">
@@ -161,6 +161,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
               variant="ghost"
               size="icon"
               title={t('admin.goals.runNow')}
+              aria-label={t('admin.goals.runNow')}
               disabled={busy || loading}
               onClick={() => void perform(() => runNow(g.id))}
             >
@@ -171,6 +172,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
                 variant="ghost"
                 size="icon"
                 title={t('admin.goals.pause')}
+                aria-label={t('admin.goals.pause')}
                 disabled={busy || loading}
                 onClick={() => void perform(() => pause(g.id))}
                 >
@@ -181,6 +183,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
                 variant="ghost"
                 size="icon"
                 title={t('admin.goals.resume')}
+                aria-label={t('admin.goals.resume')}
                 disabled={busy || loading}
                 onClick={() => void perform(() => resume(g.id))}
                 >
@@ -191,6 +194,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
               variant="ghost"
               size="icon"
               title={t('admin.goals.delete')}
+              aria-label={t('admin.goals.delete')}
               onClick={async () => {
                 if (await confirmAction({ title: t('admin.goals.delete'), description: t('admin.goals.confirmDelete', { title: g.title }), destructive: true })) { if (active.current) void perform(() => remove(g.id)) }
               }}

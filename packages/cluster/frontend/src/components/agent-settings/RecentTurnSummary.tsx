@@ -90,7 +90,7 @@ export default function RecentTurnSummary({ agentId, active, onShowTurn }: Props
           )}
         </div>
         {status === 'failed' && category && (
-          <p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]" data-testid="overview-recent-turn-reason">
+          <p className="text-badge leading-relaxed text-[var(--color-foreground-muted)]" data-testid="overview-recent-turn-reason">
             <span className="font-medium text-[var(--color-destructive)]">{t(CATEGORY_LABEL[category])}</span>
             {' — '}
             {t(reasonKey(category, code))}
@@ -101,7 +101,7 @@ export default function RecentTurnSummary({ agentId, active, onShowTurn }: Props
           <Button
             variant="link"
             size="sm"
-            className="h-auto p-0 text-xs"
+            className="h-auto p-0 text-badge"
             onClick={() => onShowTurn(turn.requestId)}
             data-testid="overview-recent-turn-details"
           >

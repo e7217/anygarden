@@ -94,10 +94,10 @@ function FileCard({ attachment, state = 'ready' }: { attachment: ArtifactReferen
     >
       <Icon className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-caption text-[var(--color-foreground)]" title={attachment.name}>
+        <p className="truncate text-caption font-medium text-[var(--color-foreground)]" title={attachment.name}>
           {attachment.name}
         </p>
-        <p className="text-badge text-[var(--color-foreground-muted)]">{status}</p>
+        <p className="text-badge font-semibold text-[var(--color-foreground-muted)]">{status}</p>
       </div>
       {current === 'ready' && attachment.mime === 'text/html' && <HtmlPreviewButton attachment={attachment} />}
       {current === 'ready' && <DownloadButton attachment={attachment} onExpired={() => setExpired(true)} />}
@@ -155,7 +155,7 @@ function HtmlPreviewButton({ attachment }: { attachment: ArtifactReference }) {
             <DialogDescription>{t('chat.attachmentPreviewHtmlNote')}</DialogDescription>
           </DialogHeader>
           {failed ? (
-            <p role="alert" className="text-caption text-[var(--color-danger)]">
+            <p role="alert" className="text-caption font-medium text-[var(--color-danger)]">
               {failed === 'expired'
                 ? t('chat.attachmentExpired')
                 : t('chat.attachmentPreviewFailed', { name: attachment.name })}
@@ -179,17 +179,38 @@ function HtmlPreviewButton({ attachment }: { attachment: ArtifactReference }) {
   )
 }
 
+// Attachment metadata carries no image dimensions, so the first view of
+// an image reserves a fixed placeholder. Once an image has loaded its
+// size is remembered for the session: revisiting the room, or the row
+// re-mounting, reserves the exact box and the timeline does not jump.
+const IMAGE_MAX_HEIGHT = 256 // max-h-64
+const IMAGE_MAX_WIDTH = 384 // sm:max-w-sm
+const imageSizes = new Map<string, { width: number; height: number }>()
+
+function displaySize(attachmentId: string): { width: number; height: number } | null {
+  const natural = imageSizes.get(attachmentId)
+  if (!natural) return null
+  const scale = Math.min(1, IMAGE_MAX_HEIGHT / natural.height, IMAGE_MAX_WIDTH / natural.width)
+  return {
+    width: Math.max(1, Math.round(natural.width * scale)),
+    height: Math.max(1, Math.round(natural.height * scale)),
+  }
+}
+
 function ImageAttachment({ attachment }: { attachment: ArtifactReference }) {
   const { t } = useLocale()
   const image = useArtifactBlobUrl(attachment.roomId, attachment.id)
   const [open, setOpen] = useState(false)
+  const size = displaySize(attachment.id)
 
   if (image.status === 'failed') return <FileCard attachment={attachment} state="unavailable" />
   if (image.status === 'expired') return <FileCard attachment={attachment} state="expired" />
   if (image.status === 'loading') {
     return (
       <div
-        className="flex h-40 w-full max-w-xs items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)]"
+        data-testid="message-attachment-image-placeholder"
+        className={`flex max-w-full items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] ${size ? 'box-content' : 'h-40 w-full max-w-xs'}`}
+        style={size ? { width: size.width, aspectRatio: `${size.width} / ${size.height}` } : undefined}
         aria-busy="true"
       >
         <ImageIcon className="h-6 w-6 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
@@ -209,6 +230,12 @@ function ImageAttachment({ attachment }: { attachment: ArtifactReference }) {
           alt={attachment.name}
           loading="lazy"
           decoding="async"
+          width={size?.width}
+          height={size?.height}
+          onLoad={event => {
+            const { naturalWidth: width, naturalHeight: height } = event.currentTarget
+            if (width > 0 && height > 0) imageSizes.set(attachment.id, { width, height })
+          }}
           className="block max-h-64 max-w-full object-contain"
         />
       </button>
@@ -280,7 +307,7 @@ export default function MessageAttachments({
               key={`${item.name}-${index}`}
               data-testid="undelivered-attachment"
               title={t('chat.attachmentUndeliveredTitle')}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-2 py-0.5 text-xs text-[var(--color-foreground-muted)]"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-2 py-0.5 text-badge text-[var(--color-foreground-muted)]"
             >
               <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
               <span className="min-w-0 break-words">

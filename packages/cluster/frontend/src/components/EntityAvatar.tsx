@@ -77,8 +77,8 @@ const PRESENCE_RING_PX: Record<EntityAvatarSize, number> = {
 const INITIAL_CLASS: Record<EntityAvatarSize, string> = {
   xs: 'text-[9px]',
   sm: 'text-[10px]',
-  md: 'text-xs',
-  lg: 'text-sm',
+  md: 'text-badge',
+  lg: 'text-caption',
 }
 
 // Font-size for the emoji override. Slightly smaller than the avatar

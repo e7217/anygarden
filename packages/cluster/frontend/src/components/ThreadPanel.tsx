@@ -172,7 +172,7 @@ export default function ThreadPanel({
             <h2 className="text-badge font-semibold uppercase tracking-wider text-[var(--color-brand-tint-text)]">
               {t('chat.thread')}
             </h2>
-            <span className="text-badge text-[var(--color-brand-tint-text)] opacity-80">
+            <span className="text-badge font-semibold text-[var(--color-brand-tint-text)] opacity-80">
               {replies.length === 0
                 ? t('chat.noReplies')
                 : t(replies.length === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count: replies.length })}
@@ -181,7 +181,7 @@ export default function ThreadPanel({
           <button
             type="button"
             onClick={onClose}
-            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
+            className="flex size-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
             aria-label={t('chat.closeThread')}
           >
             <X className="h-4 w-4" />
@@ -210,7 +210,7 @@ export default function ThreadPanel({
 
             <div className="flex items-center gap-3" aria-hidden="true">
               <span className="h-px flex-1 bg-[var(--color-border)]" />
-              <span className="text-badge text-[var(--color-foreground-subtle)]">
+              <span className="text-badge font-semibold text-[var(--color-foreground-subtle)]">
                 {replies.length === 0
                   ? t('chat.startThread')
                   : t(replies.length === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count: replies.length })}
@@ -223,16 +223,16 @@ export default function ThreadPanel({
                 data-testid="peer-branch-filter"
                 className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-selected)] px-3 py-1"
               >
-                <p className="min-w-0 text-caption text-[var(--color-foreground)]">
+                <p className="min-w-0 text-caption font-medium text-[var(--color-foreground)]">
                   {t('peerChains.tree.filtering', { label: rowLabel(branchEntry) })}
                 </p>
                 <Button type="button" variant="ghost" size="sm" onClick={() => selectBranch(null)}>
-                  <span className="text-caption">{t('peerChains.tree.showAll')}</span>
+                  <span className="text-caption font-medium">{t('peerChains.tree.showAll')}</span>
                 </Button>
               </div>
             )}
             {branchEntry && shownReplies.length === 0 && (
-              <p className="text-caption text-[var(--color-foreground-muted)]">{t('peerChains.tree.branchEmpty')}</p>
+              <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('peerChains.tree.branchEmpty')}</p>
             )}
 
             {shownReplies.map(msg => {
@@ -257,14 +257,14 @@ export default function ThreadPanel({
                   <li key={worker.participantId} className="flex min-h-[var(--control-icon-size)] items-center gap-2">
                     <BrailleSpinner />
                     <span
-                      className="min-w-0 flex-1 truncate text-caption text-[var(--color-foreground-muted)]"
+                      className="min-w-0 flex-1 truncate text-caption font-medium text-[var(--color-foreground-muted)]"
                       title={worker.narration}
                     >
                       {worker.stage ? `${worker.name} · ${worker.stage}` : worker.name}
                       {worker.narration && ` — ${worker.narration}`}
                     </span>
                     {worker.since !== undefined && (
-                      <Elapsed since={worker.since} className="shrink-0 text-caption text-[var(--color-foreground-muted)]" />
+                      <Elapsed since={worker.since} className="shrink-0 text-caption font-medium text-[var(--color-foreground-muted)]" />
                     )}
                     {onCancelTurns && (
                       <TurnCancelControl

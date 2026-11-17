@@ -98,7 +98,7 @@ export default function WorkspaceActionCard({ meta, fallbackText, participants =
   return (
     <div
       data-testid="workspace-action-card"
-      className="flex w-full max-w-xl flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm shadow-whisper"
+      className="flex w-full max-w-xl flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-caption shadow-whisper"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="inline-flex items-center gap-1.5 text-caption font-semibold text-[var(--color-foreground)]">
@@ -116,7 +116,7 @@ export default function WorkspaceActionCard({ meta, fallbackText, participants =
       )}
       {request && (
         // The summary is a preview; approval runs these exact values.
-        <details open={request.status === 'pending' && !editable} className="text-caption">
+        <details open={request.status === 'pending' && !editable} className="text-caption font-medium">
           <summary className="cursor-pointer text-[var(--color-foreground-muted)]">{t('chat.workspaceAction.details')}</summary>
           <pre data-testid="workspace-action-params" className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-2 text-[var(--color-foreground)]">
             {JSON.stringify(request.params, null, 2)}
@@ -124,10 +124,10 @@ export default function WorkspaceActionCard({ meta, fallbackText, participants =
         </details>
       )}
       {request?.status === 'pending' && request.admin_only && (
-        <p className="text-caption text-[var(--color-foreground-muted)]">{t('chat.workspaceAction.adminOnly')}</p>
+        <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('chat.workspaceAction.adminOnly')}</p>
       )}
-      {request?.error && <p className="text-caption text-[var(--color-danger)]">{request.error}</p>}
-      {error && <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>}
+      {request?.error && <p className="text-caption font-medium text-[var(--color-danger)]">{request.error}</p>}
+      {error && <p role="alert" className="text-caption font-medium text-[var(--color-danger)]">{error}</p>}
       {request?.status === 'pending' && request.can_decide && (
         <div className="flex gap-2">
           <Button type="button" size="sm" disabled={busy} onClick={() => void decide('approve')}>

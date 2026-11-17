@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { en, ko, type MessageKey } from './messages'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { loadMessages, messagesFor, type MessageKey } from './messages'
 
 export type Locale = 'ko' | 'en'
 export const LOCALE_STORAGE_KEY = 'anygarden_locale'
@@ -19,7 +19,9 @@ export function readInitialLocale(): Locale {
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string
 
 function translate(locale: Locale, key: MessageKey, values?: Record<string, string | number>): string {
-  let result: string = (locale === 'ko' ? ko[key] : en[key]) ?? en[key]
+  // main.tsx loads the starting locale before the first render, so a raw key
+  // only shows if its chunk failed to load.
+  let result: string = messagesFor(locale)?.[key] ?? messagesFor('en')?.[key] ?? key
   if (values) {
     for (const [name, value] of Object.entries(values)) {
       result = result.split(`{{${name}}}`).join(String(value))
@@ -49,10 +51,21 @@ const LocaleContext = createContext<LocaleContextValue>({
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readInitialLocale)
+  const requested = useRef(locale)
 
   const setLocale = useCallback((next: Locale) => {
-    setLocaleState(next)
+    requested.current = next
     try { localStorage.setItem(LOCALE_STORAGE_KEY, next) } catch { /* Storage may be disabled. */ }
+    // A language that is not loaded yet keeps the current one on screen until
+    // its chunk arrives, then swaps in place — no reload, no raw keys.
+    if (messagesFor(next)) {
+      setLocaleState(next)
+      return
+    }
+    loadMessages(next).then(
+      () => { if (requested.current === next) setLocaleState(next) },
+      () => { /* Stay on the current language; the toggle can be pressed again. */ },
+    )
   }, [])
 
   useEffect(() => {

@@ -56,9 +56,9 @@ export default function SidebarPreferencesMenu({ email, serverVersion, isAdmin =
       >
         <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-xs" title={email}>{email}</span>
+          <span className="truncate text-badge" title={email}>{email}</span>
           {serverVersion && (
-            <span className="truncate text-xs text-[var(--color-foreground-subtle)]" title={t('chat.serverVersion')}>
+            <span className="truncate text-badge text-[var(--color-foreground-subtle)]" title={t('chat.serverVersion')}>
               v{serverVersion}
             </span>
           )}
@@ -72,15 +72,15 @@ export default function SidebarPreferencesMenu({ email, serverVersion, isAdmin =
           role="group"
           data-drawer-popup
           aria-label={t('common.personalSettings')}
-          className="absolute bottom-full left-0 z-50 mb-3 w-60 max-w-[calc(100vw-1.5rem)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-lg"
+          className="absolute bottom-full left-0 z-50 mb-3 w-60 max-w-[calc(100vw-1.5rem)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-deep"
         >
-          <p className="mb-3 text-sm font-semibold text-[var(--color-foreground)]">{t('common.personalSettings')}</p>
+          <p className="mb-3 text-caption font-semibold text-[var(--color-foreground)]">{t('common.personalSettings')}</p>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('common.language')}</span>
+            <span className="text-badge font-medium text-[var(--color-foreground-muted)]">{t('common.language')}</span>
             <LocaleToggle />
           </div>
           <div className="mt-2 flex items-center justify-between gap-3 border-t border-[var(--color-border-subtle)] pt-2">
-            <span className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('common.theme')}</span>
+            <span className="text-badge font-medium text-[var(--color-foreground-muted)]">{t('common.theme')}</span>
             <ThemeToggle showLabel className="aria-pressed:bg-[var(--color-brand-tint-bg)] aria-pressed:text-[var(--color-brand-tint-text)]" />
           </div>
           <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-2">
@@ -90,7 +90,7 @@ export default function SidebarPreferencesMenu({ email, serverVersion, isAdmin =
                 setOpen(false)
                 setApiKeysOpen(true)
               }}
-              className="flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-xs font-medium text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+              className="flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-badge font-medium text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
             >
               <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" />
               {t('apiKeys.menuItem')}

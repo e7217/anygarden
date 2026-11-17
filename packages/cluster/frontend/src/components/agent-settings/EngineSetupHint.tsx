@@ -68,21 +68,21 @@ export default function EngineSetupHint({ machineId, machineName, onDetected }: 
   return (
     <div data-testid="engine-setup-hint" className="space-y-3 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3">
       <div className="space-y-1">
-        <p className="text-sm font-medium text-[var(--color-foreground)]">{t('agentSetup.engineSetup.title', { machine })}</p>
-        <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.engineSetup.body', { machine })}</p>
+        <p className="text-caption font-medium text-[var(--color-foreground)]">{t('agentSetup.engineSetup.title', { machine })}</p>
+        <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.engineSetup.body', { machine })}</p>
       </div>
       <ul className="space-y-2">
         {ENGINES.map(engine => (
           <li key={engine.name} className="space-y-1">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-[var(--color-foreground)]">{t(engine.label)}</span>
+              <span className="text-caption text-[var(--color-foreground)]">{t(engine.label)}</span>
               <Button variant="ghost" size="sm" onClick={() => void copy(engine.name, engine.command)}
                 aria-label={t('agentSetup.engineSetup.copy', { name: engine.name })}>
                 {copied === engine.name ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
                 {copied === engine.name ? t('common.copied') : t('common.copy')}
               </Button>
             </div>
-            <code className="block overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm">{engine.command}</code>
+            <code className="block overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-caption">{engine.command}</code>
           </li>
         ))}
       </ul>
@@ -91,7 +91,7 @@ export default function EngineSetupHint({ machineId, machineName, onDetected }: 
           <RefreshCw className={`h-3.5 w-3.5 ${detecting ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
           {detecting ? t('agentSetup.engineSetup.detecting') : t('agentSetup.engineSetup.detect')}
         </Button>
-        {message && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{message}</p>}
+        {message && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{message}</p>}
       </div>
     </div>
   )

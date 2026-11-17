@@ -30,8 +30,8 @@ interface CampaignFormProps {
 }
 
 const labelClass = 'text-caption font-medium text-[var(--color-foreground)]'
-const hintClass = 'text-caption text-[var(--color-foreground-muted)]'
-const errorClass = 'text-caption text-[var(--color-danger)]'
+const hintClass = 'text-caption font-medium text-[var(--color-foreground-muted)]'
+const errorClass = 'text-caption font-medium text-[var(--color-danger)]'
 const legendClass = 'mb-2 text-body font-semibold text-[var(--color-foreground)]'
 
 /**
@@ -190,7 +190,7 @@ export default function CampaignForm({ open, onOpenChange, onSubmit, onCreated, 
             open={advancedOpen}
             onToggle={event => setAdvancedOpen(event.currentTarget.open)}
           >
-            <summary className="min-h-11 cursor-pointer content-center px-3 text-caption font-medium">{t('campaigns.form.advanced')}</summary>
+            <summary className="min-h-[var(--control-height)] cursor-pointer content-center px-3 text-caption font-medium">{t('campaigns.form.advanced')}</summary>
             <div className="flex flex-col gap-4 border-t border-[var(--color-border)] p-3">
               {field('budgetTokens', `${t('campaigns.form.budget')} ${t('campaigns.form.optional')}`,
                 <Input {...inputProps('budgetTokens', true)} inputMode="numeric" value={draft.budgetTokens} onChange={e => set('budgetTokens', e.target.value)} />,

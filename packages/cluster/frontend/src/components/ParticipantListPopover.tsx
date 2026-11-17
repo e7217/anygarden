@@ -113,7 +113,7 @@ export default function ParticipantListPopover({
     <div
       ref={rootRef}
       className={
-        'absolute top-12 z-40 w-72 max-w-[calc(100vw-2rem)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg [--presence-ring:var(--color-surface-elevated)] ' +
+        'absolute top-12 z-40 w-72 max-w-[calc(100vw-2rem)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-deep [--presence-ring:var(--color-surface-elevated)] ' +
         (anchorRight ? 'right-4' : 'left-4')
       }
       // ``role="dialog"`` would contract us into the APG-specified
@@ -126,16 +126,16 @@ export default function ParticipantListPopover({
       role="group"
       aria-label={t('participants.title')}
     >
-      <div className="border-b border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-foreground-muted)]">
+      <div className="border-b border-[var(--color-border)] px-3 py-2 text-badge font-medium text-[var(--color-foreground-muted)]">
         {t(sorted.length === 1 ? 'participants.countOne' : 'participants.countMany', { count: sorted.length })}
       </div>
       {onSetRepresentative && agents.length > 0 && (
-        <label className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 text-caption text-[var(--color-foreground-muted)]">
+        <label className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 text-caption font-medium text-[var(--color-foreground-muted)]">
           <span className="shrink-0">{t('participants.representativeLabel')}</span>
           <Select
             value={representativeAgentId ?? ''}
             onChange={(e) => void onSetRepresentative(e.target.value || null)}
-            className="h-[var(--control-icon-size)] flex-1 px-2 text-sm"
+            className="h-[var(--control-icon-size)] flex-1 px-2 text-caption"
           >
             <option value="">{t('chat.noRepresentative')}</option>
             {agents.map((p) => (
@@ -168,7 +168,7 @@ export default function ParticipantListPopover({
           return (
             <li
               key={p.id}
-              className="flex items-center gap-2 px-3 py-2 text-sm"
+              className="flex items-center gap-2 px-3 py-2 text-caption"
             >
               <EntityAvatar
                 id={p.id}
@@ -246,7 +246,7 @@ export default function ParticipantListPopover({
                   <button
                     type="button"
                     aria-label={t('participants.remove', { name: p.display_name || t('participants.fallback') })}
-                    className="ml-1 flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-destructive)] hover:bg-[var(--color-danger-soft)]"
+                    className="ml-1 flex min-h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-destructive)] hover:bg-[var(--color-danger-soft)]"
                     onClick={async () => {
                       const name = p.display_name || t('participants.fallback')
                       if (!await confirm({

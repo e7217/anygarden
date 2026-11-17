@@ -14,13 +14,13 @@ export default function NotFoundPage() {
           <Compass className="h-8 w-8 text-[var(--color-foreground-muted)]" aria-hidden="true" />
         </div>
         <h1 className="text-lead text-[var(--color-foreground)]">{t('common.notFoundTitle')}</h1>
-        <p className="mt-2 text-sm text-[var(--color-foreground-muted)]">
+        <p className="mt-2 text-caption text-[var(--color-foreground-muted)]">
           {t('common.notFoundDescription')}
         </p>
-        <code className="mt-3 max-w-full break-all rounded-[var(--radius-sm)] bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-foreground-muted)]">
+        <code className="mt-3 max-w-full break-all rounded-[var(--radius-sm)] bg-[var(--color-surface)] px-2 py-1 text-badge text-[var(--color-foreground-muted)]">
           {pathname}
         </code>
-        <Button asChild className="mt-6 min-h-11">
+        <Button asChild className="mt-6 ">
           <Link to="/">{t('common.goHome')}</Link>
         </Button>
       </div>

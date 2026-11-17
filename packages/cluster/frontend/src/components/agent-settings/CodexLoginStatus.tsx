@@ -82,14 +82,14 @@ export default function CodexLoginStatus({ machineId, machineName }: { machineId
     <div data-testid="codex-login-status" data-status={status} className="space-y-1 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3">
       <div className="flex items-center gap-2">
         <Icon className={`h-4 w-4 shrink-0 ${tone}`} aria-hidden="true" />
-        <span className="flex-1 text-sm font-medium">{t(COPY[status].title)}</span>
+        <span className="flex-1 text-caption font-medium">{t(COPY[status].title)}</span>
         <Button variant="ghost" size="sm" disabled={checking} onClick={() => void recheck()}>
           <RefreshCw className={`h-3.5 w-3.5 ${checking ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
           {checking ? t('agentSetup.codexLogin.checking') : t('agentSetup.codexLogin.recheck')}
         </Button>
       </div>
-      <p className="text-sm text-[var(--color-foreground-muted)]">{t(COPY[status].body, { machine })}</p>
-      {error && <p role="status" className="text-xs text-[var(--color-foreground-muted)]">{error}</p>}
+      <p className="text-caption text-[var(--color-foreground-muted)]">{t(COPY[status].body, { machine })}</p>
+      {error && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{error}</p>}
     </div>
   )
 }

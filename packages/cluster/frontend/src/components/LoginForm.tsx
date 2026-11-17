@@ -60,7 +60,7 @@ export default function LoginForm() {
     <div className="w-full max-w-sm rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-card sm:p-8">
       <div className="mb-6 text-center">
         <h1 className="text-title mb-1 text-[var(--color-foreground)]">Anygarden</h1>
-        <p className="text-sm text-[var(--color-foreground-muted)]">{t('auth.tagline')}</p>
+        <p className="text-caption text-[var(--color-foreground-muted)]">{t('auth.tagline')}</p>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -70,7 +70,7 @@ export default function LoginForm() {
         </TabsList>
 
         {error && (
-          <div role="alert" className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 p-3 text-sm text-[var(--color-danger)]">
+          <div role="alert" className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 p-3 text-caption text-[var(--color-danger)]">
             {error}
           </div>
         )}

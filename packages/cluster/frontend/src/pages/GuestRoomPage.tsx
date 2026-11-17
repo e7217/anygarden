@@ -98,8 +98,8 @@ export default function GuestRoomPage() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <div className="max-w-sm space-y-4 text-center">
-          <div className="text-lg font-semibold">{t('guest.unavailable')}</div>
-          <div className="text-sm text-[var(--color-foreground-muted)]">
+          <div className="text-lead font-semibold">{t('guest.unavailable')}</div>
+          <div className="text-caption text-[var(--color-foreground-muted)]">
             {initError}
           </div>
           <Button onClick={() => void refresh()} disabled={loading} variant="outline">
@@ -116,7 +116,7 @@ export default function GuestRoomPage() {
   return (
     <div className="flex h-dvh flex-col bg-[var(--color-background)]">
       {initError && (
-        <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2 text-sm">
+        <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2 text-caption">
           <span>{initError}</span>
           <Button variant="ghost" size="sm" onClick={() => void refresh()} disabled={loading}>{t('common.retry')}</Button>
         </div>
@@ -126,7 +126,7 @@ export default function GuestRoomPage() {
         <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-muted)]" />
-            <div className="truncate text-sm font-semibold" title={roomName}>{roomName || t('guest.room')}</div>
+            <div className="truncate text-caption font-semibold" title={roomName}>{roomName || t('guest.room')}</div>
             <Badge variant="outline" className="ml-2 hidden sm:inline-flex">
               {t('guest.guest', { name: displayName })}
             </Badge>
@@ -143,7 +143,7 @@ export default function GuestRoomPage() {
               // Ghost-button hover convention (see
               // docs/history/STATUS.md — ``hover:bg-black/5
               // cursor-pointer`` applied globally to ghost buttons).
-              className="text-caption flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)] cursor-pointer"
+              className="text-caption font-medium flex min-h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] items-center justify-center gap-1 rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)] cursor-pointer"
               title={t('guest.participants')}
               aria-label={t('guest.participants')}
               data-testid="guest-header-participants-toggle"
@@ -169,11 +169,11 @@ export default function GuestRoomPage() {
                   <DialogDescription>{t('guest.preferencesDescription')}</DialogDescription>
                 </DialogHeader>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-[var(--color-foreground-muted)]">{t('common.language')}</span>
+                  <span className="text-caption text-[var(--color-foreground-muted)]">{t('common.language')}</span>
                   <LocaleToggle compact />
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-[var(--color-foreground-muted)]">{t('common.theme')}</span>
+                  <span className="text-caption text-[var(--color-foreground-muted)]">{t('common.theme')}</span>
                   <ThemeToggle showLabel />
                 </div>
               </DialogContent>

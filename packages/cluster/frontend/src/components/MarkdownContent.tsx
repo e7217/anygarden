@@ -1,4 +1,4 @@
-import { Children, memo, type CSSProperties, type ReactElement, type ReactNode } from 'react'
+import { Children, memo, useMemo, type CSSProperties, type HTMLAttributes, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PluggableList } from 'unified'
@@ -102,7 +102,7 @@ interface MarkdownContentProps {
   content: string
   resolveUser?: (id: string) => string | undefined
   resolveRoom?: (id: string) => { name: string; id: string } | undefined
-  fileReferenceCandidates?: FileReferenceCandidate[]
+  fileReferenceCandidates?: readonly FileReferenceCandidate[]
   /** #964 — the message's attached files. A link to an agent's
    * ``memory/outbox/<room>/<name>`` opens the attached file of that name;
    * without one it is shown as text instead of a broken link. */
@@ -204,6 +204,26 @@ function renderInlineChildren(
   })
 }
 
+// A message's markdown sits inside the page, under the room's own
+// headings, so its ``#``/``##`` must not outrank them: levels shift down
+// two (h1→h3 … capped at h6). Its look follows the source level through
+// ``data-md-level`` (``.markdown-prose`` in index.css), not the tag.
+function MessageHeading({
+  level,
+  children,
+  ...props
+}: { level: number; children?: ReactNode } & HTMLAttributes<HTMLHeadingElement>) {
+  const Tag = `h${Math.min(level + 2, 6)}` as 'h3' | 'h4' | 'h5' | 'h6'
+  return (
+    <Tag
+      {...props}
+      data-md-level={level}
+    >
+      {children}
+    </Tag>
+  )
+}
+
 function createComponents(
   resolveUser?: (id: string) => string | undefined,
   resolveRoom?: (id: string) => { name: string; id: string } | undefined,
@@ -240,35 +260,46 @@ function createComponents(
         </AuthenticatedArtifactLink>
       )
     },
-    p: ({ children, ...props }) => <p {...props}>{inline(children, 'p')}</p>,
-    li: ({ children, ...props }) => <li {...props}>{inline(children, 'li')}</li>,
-    h1: ({ children, ...props }) => <h1 {...props}>{inline(children, 'h1')}</h1>,
-    h2: ({ children, ...props }) => <h2 {...props}>{inline(children, 'h2')}</h2>,
-    h3: ({ children, ...props }) => <h3 {...props}>{inline(children, 'h3')}</h3>,
-    h4: ({ children, ...props }) => <h4 {...props}>{inline(children, 'h4')}</h4>,
-    h5: ({ children, ...props }) => <h5 {...props}>{inline(children, 'h5')}</h5>,
-    h6: ({ children, ...props }) => <h6 {...props}>{inline(children, 'h6')}</h6>,
-    strong: ({ children, ...props }) => <strong {...props}>{inline(children, 'strong')}</strong>,
-    em: ({ children, ...props }) => <em {...props}>{inline(children, 'em')}</em>,
-    td: ({ children, ...props }) => <td {...props}>{inline(children, 'td')}</td>,
-    th: ({ children, ...props }) => <th {...props}>{inline(children, 'th')}</th>,
+    p: ({ children, node: _node, ...props }) => <p {...props}>{inline(children, 'p')}</p>,
+    li: ({ children, node: _node, ...props }) => <li {...props}>{inline(children, 'li')}</li>,
+    h1: ({ children, node: _node, ...props }) => <MessageHeading level={1} {...props}>{inline(children, 'h1')}</MessageHeading>,
+    h2: ({ children, node: _node, ...props }) => <MessageHeading level={2} {...props}>{inline(children, 'h2')}</MessageHeading>,
+    h3: ({ children, node: _node, ...props }) => <MessageHeading level={3} {...props}>{inline(children, 'h3')}</MessageHeading>,
+    h4: ({ children, node: _node, ...props }) => <MessageHeading level={4} {...props}>{inline(children, 'h4')}</MessageHeading>,
+    h5: ({ children, node: _node, ...props }) => <MessageHeading level={5} {...props}>{inline(children, 'h5')}</MessageHeading>,
+    h6: ({ children, node: _node, ...props }) => <MessageHeading level={6} {...props}>{inline(children, 'h6')}</MessageHeading>,
+    strong: ({ children, node: _node, ...props }) => <strong {...props}>{inline(children, 'strong')}</strong>,
+    em: ({ children, node: _node, ...props }) => <em {...props}>{inline(children, 'em')}</em>,
+    td: ({ children, node: _node, ...props }) => <td {...props}>{inline(children, 'td')}</td>,
+    th: ({ children, node: _node, ...props }) => <th {...props}>{inline(children, 'th')}</th>,
   }
 }
+
+// Shared empty defaults keep the memo below stable when a prop is omitted.
+const NO_CANDIDATES: readonly FileReferenceCandidate[] = []
+const NO_REFERENCES: readonly ArtifactReference[] = []
+const NO_LINKED_FILES: readonly LinkedFile[] = []
 
 export default memo(function MarkdownContent({
   content,
   resolveUser,
   resolveRoom,
-  fileReferenceCandidates = [],
-  references = [],
-  linkedFiles = [],
+  fileReferenceCandidates = NO_CANDIDATES,
+  references = NO_REFERENCES,
+  linkedFiles = NO_LINKED_FILES,
 }: MarkdownContentProps) {
+  // Rebuilding the renderer map makes react-markdown remount every
+  // element, so build it only when an input it closes over changes.
+  const components = useMemo(
+    () => createComponents(resolveUser, resolveRoom, fileReferenceCandidates, references, linkedFiles),
+    [resolveUser, resolveRoom, fileReferenceCandidates, references, linkedFiles],
+  )
   return (
     <div className="markdown-prose">
       <ReactMarkdown
         remarkPlugins={plugins}
         urlTransform={urlTransform}
-        components={createComponents(resolveUser, resolveRoom, fileReferenceCandidates, references, linkedFiles)}
+        components={components}
       >
         {content}
       </ReactMarkdown>

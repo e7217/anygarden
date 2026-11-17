@@ -89,7 +89,7 @@ export default function SidebarRoomMenu({ roomId, onRename, onDelete }: SidebarR
                 type="button"
                 onClick={pick(onRename)}
                 data-testid={`sidebar-room-menu-rename-${roomId}`}
-                className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
               >
                 <Pencil className="h-4 w-4" />
                 <span>{t('chat.rename')}</span>
@@ -103,7 +103,7 @@ export default function SidebarRoomMenu({ roomId, onRename, onDelete }: SidebarR
                 // Destructive — red text matches RoomSettingsMenu's
                 // delete row styling so the consequence is visually
                 // consistent across the two entry points.
-                className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-caption text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
               >
                 <Trash2 className="h-4 w-4" />
                 <span>{t('chat.deleteRoom')}</span>

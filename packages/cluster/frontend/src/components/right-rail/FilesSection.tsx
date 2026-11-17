@@ -53,7 +53,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
   return (
     <section className="flex min-w-0 flex-col border-t border-[var(--color-border)]">
       <header className="flex items-baseline justify-between px-3 py-2">
-        <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+        <h3 className="text-caption font-semibold text-[var(--color-foreground)]">
           {t('guest.sharedFiles')}
         </h3>
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
@@ -80,7 +80,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
           <div
             key={f.id}
             data-testid={`right-rail-file-row-${f.id}`}
-            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] py-1.5 pl-2 pr-[calc(var(--control-icon-size)+.5rem)] hover:bg-[var(--color-surface-alt)] md:pointer-fine:pr-2"
           >
             <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
             <div className="min-w-0 flex-1">
@@ -96,14 +96,17 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
             </div>
             {/* #325 — delete is absolute so the meta column reaches
                 the row's inner right edge at rest, aligning with the
-                section header's right-side counter. */}
-            <button
+                section header's right-side counter. On touch it stays
+                visible, so the row reserves its width instead. */}
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => handleDelete(f.id)}
-              className="absolute right-1 top-1/2 flex min-h-9 min-w-9 -translate-y-1/2 items-center justify-center rounded text-[var(--color-destructive)] opacity-100 transition-[background-color,opacity] hover:bg-[var(--color-danger-soft)] lg:right-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
+              className="absolute right-1 top-1/2 -translate-y-1/2 text-[var(--color-destructive)] opacity-100 transition-[background-color,opacity] hover:bg-[var(--color-danger-soft)] focus-visible:opacity-100 lg:right-2 md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
               aria-label={t('guest.deleteFile', { name: f.filename })}
             >
               <Trash2 className="h-3 w-3" />
-            </button>
+            </Button>
           </div>
         ))}
       </div>

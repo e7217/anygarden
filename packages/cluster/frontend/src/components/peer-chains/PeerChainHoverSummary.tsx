@@ -55,7 +55,7 @@ export default function PeerChainHoverSummary({ chain, id, alignEnd }: PeerChain
             className="flex min-w-0 items-center justify-between gap-2"
             style={{ paddingInlineStart: `calc(var(--space-3) * ${Math.min(level, MAX_THREAD_INDENT) - 1})` }}
           >
-            <span className="min-w-0 break-words text-caption text-[var(--color-foreground-muted)]">
+            <span className="min-w-0 break-words text-caption font-medium text-[var(--color-foreground-muted)]">
               {`${entry.node.caller_name} → ${entry.node.target_name}`}
             </span>
             <PeerStateBadge state={entry.node.state} />

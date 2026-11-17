@@ -311,7 +311,7 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
     return (
       <div
         key={f.path}
-        className={`group flex items-center justify-between pr-3 text-sm transition-colors ${
+        className={`group flex items-center justify-between pr-1 text-caption transition-colors ${
           isSelected
             ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
             : 'hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)]'
@@ -332,24 +332,26 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
               aria-hidden="true"
             />
           ) : null}
-          <span className="truncate font-mono text-xs">
+          <span className="truncate font-mono text-badge">
             {node.name}
             {f.dirty ? <span className="ml-1 opacity-70">•</span> : null}
           </span>
         </button>
         {showTrash ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={e => {
               e.stopPropagation()
               onRemove(f.path)
             }}
-            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity"
+            className="opacity-100 transition-opacity focus-visible:opacity-100 md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
             title={t('admin.manifest.removeFile', { path: f.path })}
             aria-label={t('admin.manifest.removeFile', { path: f.path })}
           >
             <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" aria-hidden="true" />
-          </button>
+          </Button>
         ) : null}
       </div>
     )
@@ -362,7 +364,7 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
   const fileCount = countFilesRec(node)
   return (
     <div key={node.path}>
-      <div className="group flex items-center justify-between pr-3 text-sm hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)] transition-colors">
+      <div className="group flex items-center justify-between pr-1 text-caption hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)] transition-colors">
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand-focus)]"
@@ -376,7 +378,7 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
           ) : (
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
           )}
-          <span className={`truncate text-xs ${depth === 0 ? 'uppercase tracking-wider text-[var(--color-foreground-muted)]' : 'font-mono text-[var(--color-foreground)]'}`}>
+          <span className={`truncate text-badge ${depth === 0 ? 'uppercase tracking-wider text-[var(--color-foreground-muted)]' : 'font-mono text-[var(--color-foreground)]'}`}>
             {label}
           </span>
           <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
@@ -384,19 +386,21 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
           </span>
         </button>
         {isSkill ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={e => {
               e.stopPropagation()
               onAddInSkill(node.name)
             }}
-            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity rounded p-0.5 hover:bg-[var(--color-surface-hover)]"
+            className="opacity-100 transition-opacity focus-visible:opacity-100 md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
             title={t('admin.manifest.addFileIn', { path: node.path })}
             aria-label={t('admin.manifest.addFileIn', { path: node.path })}
             data-testid={`agent-edit-add-in-skill-${node.name}`}
           >
             <Plus className="h-3.5 w-3.5 text-[var(--color-foreground-muted)]" aria-hidden="true" />
-          </button>
+          </Button>
         ) : null}
       </div>
       {isOpen &&
@@ -1133,7 +1137,7 @@ export default function ManifestPanel({
   return (
     <div className="flex h-full flex-col" data-testid="manifest-panel">
       <div className="flex flex-wrap items-start justify-between gap-2 pb-2">
-        <p className="min-w-0 flex-1 text-caption text-[var(--color-foreground-muted)]">
+        <p className="min-w-0 flex-1 text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('admin.manifest.description')}
           {agent?.instructions_mode === 'disk' && (
             <> {t('admin.manifest.diskSource', { machine: machineName })}</>
@@ -1147,7 +1151,7 @@ export default function ManifestPanel({
         ) : null}
       </div>
       {instructionsReadOnly ? (
-        <div role="status" className="mb-2 flex gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3 text-sm text-[var(--color-foreground)]" data-testid="manifest-offline">
+        <div role="status" className="mb-2 flex gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3 text-caption text-[var(--color-foreground)]" data-testid="manifest-offline">
           <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
           <span className="min-w-0">
             {t('admin.manifest.offlineReadOnly', {
@@ -1160,7 +1164,7 @@ export default function ManifestPanel({
         </div>
       ) : null}
       {loading ? (
-          <div className="py-8 text-center text-caption text-[var(--color-foreground-muted)]">
+          <div className="py-8 text-center text-caption font-medium text-[var(--color-foreground-muted)]">
             {t('common.loading')}
           </div>
         ) : (
@@ -1261,7 +1265,7 @@ export default function ManifestPanel({
 
               {showNewSkillForm ? (
                 <div className="flex flex-wrap gap-2 items-center bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
-                  <span className="shrink-0 font-mono text-xs text-[var(--color-foreground-muted)]">
+                  <span className="shrink-0 font-mono text-badge text-[var(--color-foreground-muted)]">
                     skills/
                   </span>
                   <Input
@@ -1278,7 +1282,7 @@ export default function ManifestPanel({
                     autoFocus
                     data-testid="agent-edit-new-skill-name"
                   />
-                  <span className="shrink-0 font-mono text-xs text-[var(--color-foreground-muted)]">
+                  <span className="shrink-0 font-mono text-badge text-[var(--color-foreground-muted)]">
                     /SKILL.md
                   </span>
                   <Button size="sm" onClick={handleCreateSkill} data-testid="agent-edit-create-skill">
@@ -1294,7 +1298,7 @@ export default function ManifestPanel({
                 {/* Left: file tree */}
                 <div className="max-h-64 min-w-0 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-background)] sm:max-h-none">
                   {treeRoots.length === 0 ? (
-                    <div className="p-4 text-caption text-[var(--color-foreground-subtle)]">
+                    <div className="p-4 text-caption font-medium text-[var(--color-foreground-subtle)]">
                       {t('admin.manifest.none')}
                     </div>
                   ) : (
@@ -1346,7 +1350,7 @@ export default function ManifestPanel({
                                     key={skill.id}
                                     type="button"
                                     onClick={() => void handleSelectAttachedSkill(skill.id)}
-                                    className={`w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm text-left transition-colors ${
+                                    className={`w-full flex items-center gap-1.5 pr-3 py-1.5 text-caption text-left transition-colors ${
                                       isSelected
                                         ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
                                         : 'hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)]'
@@ -1355,7 +1359,7 @@ export default function ManifestPanel({
                                     data-testid={`agent-edit-attached-skill-${skill.name}`}
                                   >
                                     <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
-                                    <span className="truncate font-mono text-xs">
+                                    <span className="truncate font-mono text-badge">
                                       {skill.name}
                                     </span>
                                   </button>
@@ -1373,13 +1377,13 @@ export default function ManifestPanel({
                   {selectedFile ? (
                     <>
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <div className="font-mono text-xs text-[var(--color-foreground-muted)] truncate">
+                        <div className="font-mono text-badge text-[var(--color-foreground-muted)] truncate">
                           {selectedFile.path}
                         </div>
                         <button
                           type="button"
                           onClick={handleDownload}
-                          className="inline-flex items-center gap-1 text-caption text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+                          className="inline-flex items-center gap-1 text-caption font-medium text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                           title={t('admin.manifest.downloadFile', { name: basename(selectedFile.path) })}
                           data-testid="agent-edit-download"
                         >
@@ -1388,7 +1392,7 @@ export default function ManifestPanel({
                         </button>
                       </div>
                       <textarea
-                        className="font-mono text-sm flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+                        className="font-mono text-caption flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
                         value={selectedFile.content}
                         onChange={e => handleFileContentChange(e.target.value)}
                         readOnly={instructionsReadOnly && isInstructionPath(selectedFile.path)}
@@ -1407,7 +1411,7 @@ export default function ManifestPanel({
                       <div className="mb-1 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <Lock className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
-                          <div className="font-mono text-xs text-[var(--color-foreground-muted)] truncate">
+                          <div className="font-mono text-badge text-[var(--color-foreground-muted)] truncate">
                             skills/{selectedAttachedSkill.name}/SKILL.md
                           </div>
                         </div>
@@ -1417,7 +1421,7 @@ export default function ManifestPanel({
                             onNavigateAway?.()
                             navigate('/admin/skills')
                           }}
-                          className="inline-flex items-center gap-1 text-caption text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+                          className="inline-flex items-center gap-1 text-caption font-medium text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                           data-testid="agent-edit-view-in-skills"
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
@@ -1430,7 +1434,7 @@ export default function ManifestPanel({
                       {selectedAttachedPreview ? (
                         <>
                           <textarea
-                            className="font-mono text-sm flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+                            className="font-mono text-caption flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
                             value={selectedAttachedPreview.skill_md}
                             readOnly
                             aria-label={t('admin.manifest.fileContent', { path: `skills/${selectedAttachedSkill.name}/SKILL.md` })}
@@ -1442,7 +1446,7 @@ export default function ManifestPanel({
                               <div className="text-badge font-normal uppercase tracking-wider text-[var(--color-foreground-muted)] mb-1">
                                 {t('admin.manifest.extraFiles', { count: selectedAttachedPreview.extra_files.length })}
                               </div>
-                              <ul className="rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-xs max-h-28 max-w-full overflow-auto">
+                              <ul className="rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-badge max-h-28 max-w-full overflow-auto">
                                 {selectedAttachedPreview.extra_files.map(p => (
                                   <li key={p} className="font-mono text-[var(--color-foreground-muted)]">
                                     {p}
@@ -1454,7 +1458,7 @@ export default function ManifestPanel({
                         </>
                       ) : (
                         <div
-                          className="flex-1 flex items-center justify-center text-caption text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-xs)]"
+                          className="flex-1 flex items-center justify-center text-caption font-medium text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-xs)]"
                           data-testid="agent-edit-attached-skill-loading"
                         >
                           {t('common.loading')}
@@ -1462,7 +1466,7 @@ export default function ManifestPanel({
                       )}
                     </>
                   ) : (
-                    <div className="flex-1 flex items-center justify-center text-caption text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-md)]">
+                    <div className="flex-1 flex items-center justify-center text-caption font-medium text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-md)]">
                       {t('admin.manifest.selectFile')}
                     </div>
                   )}
@@ -1473,7 +1477,7 @@ export default function ManifestPanel({
         )}
 
       {error ? (
-        <div className="mt-2 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+        <div className="mt-2 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-caption text-[var(--color-warning)]">
           {error}
         </div>
       ) : null}

@@ -203,32 +203,32 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
 
   return <section className="space-y-3" data-testid="managed-workspace-panel" aria-busy={workspace.loading || busy}>
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="flex items-center gap-2 text-sm font-medium"><FolderOpen className="h-4 w-4" />{t('agentSetup.managedWorkspace')}</h3>
+      <h3 className="flex items-center gap-2 text-caption font-medium"><FolderOpen className="h-4 w-4" />{t('agentSetup.managedWorkspace')}</h3>
       <Button variant="ghost" size="sm" disabled={!agentId || workspace.loading} onClick={() => void workspace.refresh()}><RefreshCw className={workspace.loading ? 'animate-spin' : ''} />{t('common.refresh')}</Button>
     </div>
-    <p className="text-sm leading-relaxed text-[var(--color-foreground-muted)]">{t('workspace.managed.hint')}</p>
-    {result?.machine_name && <p className="break-words text-sm">{t('workspace.managed.machine')}: {result.machine_name}</p>}
-    {snapshot?.cwd && <dl className="grid gap-2 text-xs sm:grid-cols-[auto_1fr]">
+    <p className="text-caption leading-relaxed text-[var(--color-foreground-muted)]">{t('workspace.managed.hint')}</p>
+    {result?.machine_name && <p className="break-words text-caption">{t('workspace.managed.machine')}: {result.machine_name}</p>}
+    {snapshot?.cwd && <dl className="grid gap-2 text-badge sm:grid-cols-[auto_1fr]">
       <dt className="text-[var(--color-foreground-muted)]">{t('workspace.managed.path')}</dt><dd className="min-w-0 break-all font-mono">{snapshot.cwd}</dd>
       <dt className="text-[var(--color-foreground-muted)]">{t('workspace.managed.runtime')}</dt><dd>{snapshot.engine} · {agentStates[result?.agent_state ?? ''] ?? t('admin.agentSettings.state.unknown')}{!snapshot.live && ` · ${t('workspace.managed.lastRun')}`}</dd>
       <dt className="text-[var(--color-foreground-muted)]">{t('workspace.managed.permission')}</dt><dd>{permission[snapshot.permission_level ?? ''] ?? snapshot.permission_level}</dd>
       {snapshot.reported_at && <><dt className="text-[var(--color-foreground-muted)]">{t('workspace.managed.reported')}</dt><dd>{formatDate(new Date(snapshot.reported_at), { dateStyle: 'short', timeStyle: 'medium' })}</dd></>}
     </dl>}
-    {workspace.loading && <p role="status" className="flex items-center gap-2 text-sm text-[var(--color-foreground-muted)]"><Loader2 className="h-4 w-4 animate-spin" />{t('workspace.managed.loading')}</p>}
-    {workspace.failed && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-destructive)]"><p>{t('workspace.managed.failed')}</p><Button variant="outline" size="sm" onClick={() => void workspace.retry()}>{t('common.retry')}</Button></div>}
-    {!workspace.loading && result && result.status !== 'ready' && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{statusMessage(result.status)}</p>}
+    {workspace.loading && <p role="status" className="flex items-center gap-2 text-caption text-[var(--color-foreground-muted)]"><Loader2 className="h-4 w-4 animate-spin" />{t('workspace.managed.loading')}</p>}
+    {workspace.failed && <div role="alert" className="flex flex-wrap items-center gap-2 text-caption text-[var(--color-destructive)]"><p>{t('workspace.managed.failed')}</p><Button variant="outline" size="sm" onClick={() => void workspace.retry()}>{t('common.retry')}</Button></div>}
+    {!workspace.loading && result && result.status !== 'ready' && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{statusMessage(result.status)}</p>}
     <div className="flex flex-wrap items-center gap-2">
       {(workspace.folder || workspace.filePath) && <Button variant="outline" size="sm" onClick={() => void workspace.openFolder(workspace.filePath ? workspace.folder : workspace.folder.split('/').slice(0, -1).join('/'))}><ArrowUp />{t('workspace.managed.back')}</Button>}
-      {folder?.status === 'ready' && <p className="min-w-0 break-all font-mono text-xs text-[var(--color-foreground-muted)]">/{workspace.folder}</p>}
+      {folder?.status === 'ready' && <p className="min-w-0 break-all font-mono text-badge text-[var(--color-foreground-muted)]">/{workspace.folder}</p>}
       {limits && workspace.filePath === null && folder?.status === 'ready' && <Button variant="outline" size="sm" className="ml-auto" disabled={busy} onClick={() => void downloadZip(workspace.folder)} data-testid="workspace-download-folder-zip"><FileArchive />{t('workspace.managed.downloadFolderZip')}</Button>}
     </div>
-    {folder?.status === 'ready' && folder.can_manage_files && !folder.can_transfer && <p className="text-xs text-[var(--color-foreground-muted)]" data-testid="workspace-transfer-unavailable">{t('workspace.managed.transferUnavailable', { limit: '20 MiB' })}</p>}
-    {progress && <div role="status" className="space-y-1 text-sm" data-testid="workspace-transfer-progress">
+    {folder?.status === 'ready' && folder.can_manage_files && !folder.can_transfer && <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="workspace-transfer-unavailable">{t('workspace.managed.transferUnavailable', { limit: '20 MiB' })}</p>}
+    {progress && <div role="status" className="space-y-1 text-caption" data-testid="workspace-transfer-progress">
       <p className="break-all">{t('workspace.managed.transferring', { name: progress.name })}</p>
       <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-alt)]" role="progressbar" aria-label={progress.name} aria-valuemin={0} aria-valuemax={progress.total ?? undefined} aria-valuenow={progress.loaded}>
         <div className="h-full bg-[var(--color-brand)] motion-safe:transition-[width]" style={{ width: progress.total ? `${Math.min(100, (progress.loaded / progress.total) * 100)}%` : '100%' }} />
       </div>
-      <p className="text-caption text-[var(--color-foreground-muted)]">{progress.total ? t('workspace.managed.progress', { loaded: formatBytes(progress.loaded), total: formatBytes(progress.total) }) : formatBytes(progress.loaded)}</p>
+      <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{progress.total ? t('workspace.managed.progress', { loaded: formatBytes(progress.loaded), total: formatBytes(progress.total) }) : formatBytes(progress.loaded)}</p>
     </div>}
     {agentId && workspace.filePath === null && folder?.status === 'ready' && folder.can_edit && folder.snapshot?.edit_token && <ManagedWorkspaceEditor
       key={`${agentId}:${workspace.folder}:directory`}
@@ -237,17 +237,17 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
       reloadFile={path => workspace.openFile(path)}
       onUploadFiles={files => void upload(files)}
     />}
-    {folder?.status === 'ready' && !folder.can_edit && <p className="text-xs text-[var(--color-foreground-muted)]">{t('workspace.managed.editUnavailable')}</p>}
-    {folder?.status === 'ready' && folder.can_edit && !folder.can_manage_files && <p className="text-xs text-[var(--color-foreground-muted)]" data-testid="workspace-manage-unavailable">{t('workspace.managed.manageUnavailable')}</p>}
+    {folder?.status === 'ready' && !folder.can_edit && <p className="text-caption text-[var(--color-foreground-muted)]">{t('workspace.managed.editUnavailable')}</p>}
+    {folder?.status === 'ready' && folder.can_edit && !folder.can_manage_files && <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="workspace-manage-unavailable">{t('workspace.managed.manageUnavailable')}</p>}
     {workspace.filePath === null && folder?.status === 'ready' && folder.snapshot && <div
       className={`relative overflow-hidden rounded-[var(--radius-md)] border ${dragging ? 'border-[var(--color-brand)]' : 'border-[var(--color-border)]'}`}
       data-testid="workspace-file-list"
       {...dragProps}
     >
-      {dragging && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[var(--color-surface-selected)] p-4 text-center text-sm font-medium text-[var(--color-brand-text)]" data-testid="workspace-drop-overlay">
+      {dragging && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[var(--color-surface-selected)] p-4 text-center text-caption font-medium text-[var(--color-brand-text)]" data-testid="workspace-drop-overlay">
         <Upload className="h-4 w-4 shrink-0" aria-hidden="true" />{t('workspace.managed.dropHere', { folder: workspace.folder })}
       </div>}
-      {folder.snapshot.entries.length === 0 && <p className="p-3 text-sm text-[var(--color-foreground-muted)]">{t('workspace.managed.empty')}{dropEnabled && ` ${t('workspace.managed.dropHint')}`}</p>}
+      {folder.snapshot.entries.length === 0 && <p className="p-3 text-caption text-[var(--color-foreground-muted)]">{t('workspace.managed.empty')}{dropEnabled && ` ${t('workspace.managed.dropHint')}`}</p>}
       <ul className="max-h-72 overflow-y-auto divide-y divide-[var(--color-border)]">
         {folder.snapshot.entries.map(entry => <li key={entry.name} className="flex items-center gap-1 pr-1">
           {renaming?.name === entry.name ? (
@@ -266,10 +266,10 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
               <Button type="button" variant="outline" size="sm" onClick={() => setRenaming(null)}>{t('common.cancel')}</Button>
             </form>
           ) : <>
-            <button type="button" className="flex min-h-[var(--control-height)] min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-alt)] disabled:cursor-default disabled:text-[var(--color-foreground-muted)]" disabled={entry.kind === 'link' || entry.kind === 'unavailable'} onClick={() => { if (entry.kind === 'directory') void workspace.openFolder(childPath(entry.name)); else void workspace.openFile(childPath(entry.name)) }}>
+            <button type="button" className="flex min-h-[var(--control-height)] min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-caption hover:bg-[var(--color-surface-alt)] disabled:cursor-default disabled:text-[var(--color-foreground-muted)]" disabled={entry.kind === 'link' || entry.kind === 'unavailable'} onClick={() => { if (entry.kind === 'directory') void workspace.openFolder(childPath(entry.name)); else void workspace.openFile(childPath(entry.name)) }}>
               {entry.kind === 'directory' ? <Folder className="h-4 w-4 shrink-0" /> : entry.kind === 'link' ? <Link2 className="h-4 w-4 shrink-0" /> : <FileText className="h-4 w-4 shrink-0" />}
               <span className="min-w-0 break-all">{entry.name}</span>
-              {(entry.kind === 'link' || entry.kind === 'unavailable') && <span className="ml-auto shrink-0 text-xs">{t('workspace.managed.unavailableEntry')}</span>}
+              {(entry.kind === 'link' || entry.kind === 'unavailable') && <span className="ml-auto shrink-0 text-badge">{t('workspace.managed.unavailableEntry')}</span>}
             </button>
             {canManage && (entry.kind === 'file' || entry.kind === 'directory') && <div className="flex shrink-0 items-center">
               {entry.kind === 'file' && <Button variant="ghost" size="icon" disabled={busy} aria-label={t('workspace.managed.downloadName', { name: entry.name })} title={t('workspace.managed.download')} onClick={() => void download(childPath(entry.name))} data-testid={`workspace-download-${entry.name}`}><Download /></Button>}
@@ -282,7 +282,7 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
       </ul>
       {folder.snapshot.next_cursor && <div className="border-t border-[var(--color-border)] p-2"><Button variant="outline" size="sm" disabled={workspace.loading} onClick={() => void workspace.loadMore()}>{t('workspace.managed.loadMore')}</Button></div>}
     </div>}
-    {uploads.length > 0 && <div role="status" className="space-y-1 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3 text-sm" data-testid="workspace-upload-results">
+    {uploads.length > 0 && <div role="status" className="space-y-1 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3 text-caption" data-testid="workspace-upload-results">
       <p className="font-medium">{t('workspace.managed.uploadResults')}</p>
       <ul className="space-y-0.5">
         {uploads.map((outcome, index) => <li key={`${outcome.name}-${index}`} className="flex flex-wrap gap-x-2">
@@ -293,10 +293,10 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
         </li>)}
       </ul>
     </div>}
-    {actionError && <p role="alert" className="text-sm text-[var(--color-destructive)]">{actionError}</p>}
+    {actionError && <p role="alert" className="text-caption text-[var(--color-destructive)]">{actionError}</p>}
     {workspace.filePath !== null && <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="min-w-0 break-all font-mono text-xs">{workspace.filePath}</p>
+        <p className="min-w-0 break-all font-mono text-badge">{workspace.filePath}</p>
         {file?.can_manage_files && file.status === 'ready' && <Button variant="outline" size="sm" onClick={() => void download(workspace.filePath!)} data-testid="workspace-download-current"><Download />{t('workspace.managed.download')}</Button>}
       </div>
       {agentId && folder?.status === 'ready' && folder.can_edit && folder.snapshot?.edit_token && <ManagedWorkspaceEditor
@@ -305,10 +305,10 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
         folderData={folder} fileData={file} reloadFolder={() => workspace.openFolder(workspace.folder)}
         reloadFile={path => workspace.openFile(path)}
       />}
-      {file?.status === 'ready' && file.snapshot?.preview_status === 'text' && (!folder?.can_edit || !file.snapshot.sha256) && <pre className="max-h-80 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs leading-relaxed" aria-label={t('workspace.managed.preview')}><code>{file.snapshot.text}</code></pre>}
+      {file?.status === 'ready' && file.snapshot?.preview_status === 'text' && (!folder?.can_edit || !file.snapshot.sha256) && <pre className="max-h-80 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-badge leading-relaxed" aria-label={t('workspace.managed.preview')}><code>{file.snapshot.text}</code></pre>}
       {imageUrl && <img src={imageUrl} alt={t('workspace.managed.imagePreview', { name: workspace.filePath.split('/').pop() ?? '' })} className="max-h-80 max-w-full rounded-[var(--radius-md)] border border-[var(--color-border)] object-contain" data-testid="workspace-image-preview" />}
-      {!imageUrl && file?.status === 'ready' && file.snapshot?.preview_status === 'binary' && <p className="text-sm text-[var(--color-foreground-muted)]">{t('workspace.managed.binary')}</p>}
-      {!imageUrl && file?.status === 'ready' && file.snapshot?.preview_status === 'too_large' && <p className="text-sm text-[var(--color-foreground-muted)]">{t('workspace.managed.tooLarge')}</p>}
+      {!imageUrl && file?.status === 'ready' && file.snapshot?.preview_status === 'binary' && <p className="text-caption text-[var(--color-foreground-muted)]">{t('workspace.managed.binary')}</p>}
+      {!imageUrl && file?.status === 'ready' && file.snapshot?.preview_status === 'too_large' && <p className="text-caption text-[var(--color-foreground-muted)]">{t('workspace.managed.tooLarge')}</p>}
     </div>}
   </section>
 }

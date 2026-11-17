@@ -27,6 +27,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
 
@@ -177,7 +178,7 @@ export default function CreateSubRoomDialog({
         </DialogHeader>
 
         {loading ? (
-          <div className="py-6 text-center text-caption text-[var(--color-foreground-muted)]">
+          <div className="py-6 text-center text-caption font-medium text-[var(--color-foreground-muted)]">
             {t('subroom.loadingMembers')}
           </div>
         ) : (
@@ -202,9 +203,9 @@ export default function CreateSubRoomDialog({
 
             <div className="space-y-2">
               <Label htmlFor="sub-room-desc">{t('subroom.descriptionLabel')}</Label>
-              <textarea
+              <Textarea
                 id="sub-room-desc"
-                className="flex w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1 resize-none"
+                className="min-h-0 resize-none"
                 placeholder={t('subroom.descriptionPlaceholder')}
                 rows={2}
                 value={description}
@@ -214,7 +215,7 @@ export default function CreateSubRoomDialog({
             </div>
 
             {myParticipantId === null && (
-              <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+              <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-caption text-[var(--color-warning)]">
                 {t('subroom.notMember')}
               </div>
             )}
@@ -222,7 +223,7 @@ export default function CreateSubRoomDialog({
             <div className="space-y-2">
               <Label>{t('subroom.invite')}</Label>
               {invitees.length === 0 ? (
-                <p className="text-caption text-[var(--color-foreground-subtle)]">
+                <p className="text-caption font-medium text-[var(--color-foreground-subtle)]">
                   {t('subroom.noInvitees')}
                 </p>
               ) : (
@@ -230,7 +231,7 @@ export default function CreateSubRoomDialog({
                   {invitees.map(p => (
                     <label
                       key={p.id}
-                      className="flex min-h-11 items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                      className="flex min-h-[var(--control-height)] items-center gap-2 px-3 py-1.5 text-caption hover:bg-[var(--color-surface-hover)] cursor-pointer"
                     >
                       <input
                         type="checkbox"
@@ -240,7 +241,7 @@ export default function CreateSubRoomDialog({
                       />
                       <span className="truncate">
                         {p.display_name}
-                        <span className="ml-1 text-xs text-[var(--color-foreground-muted)]">
+                        <span className="ml-1 text-badge text-[var(--color-foreground-muted)]">
                           ({p.kind})
                         </span>
                       </span>
@@ -253,7 +254,7 @@ export default function CreateSubRoomDialog({
         )}
 
         {error ? (
-          <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+          <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-caption text-[var(--color-warning)]">
             {error === '__subroom_load_failed__' ? t('subroom.loadFailed') : error}
           </div>
         ) : null}

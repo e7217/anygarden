@@ -76,10 +76,8 @@ export default function FilterPanel({
     >
       <div>
         <label
+          className="text-badge font-semibold"
           style={{
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: 0.125,
             textTransform: 'uppercase',
             color: TEXT_MUTED,
             display: 'block',
@@ -94,13 +92,14 @@ export default function FilterPanel({
           aria-label={t('topology.search')}
           value={filter.search}
           onChange={e => onChange({ ...filter, search: e.target.value })}
+          className="text-caption font-medium"
           style={{
             width: '100%',
             padding: '10px 12px',
             minHeight: 44,
             border: BORDER,
             borderRadius: 4,
-            fontSize: 13,
+            fontWeight: 400,
             color: TEXT_PRIMARY,
             background: 'var(--color-surface)',
           }}
@@ -109,10 +108,8 @@ export default function FilterPanel({
 
       <div>
         <p
+          className="text-badge font-semibold"
           style={{
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: 0.125,
             textTransform: 'uppercase',
             color: TEXT_MUTED,
             margin: '0 0 8px',
@@ -124,11 +121,12 @@ export default function FilterPanel({
           {kindList.map(kind => (
             <label
               key={kind}
+              className="text-caption font-medium"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                fontSize: 13,
+                fontWeight: 400,
                 color: TEXT_PRIMARY,
                 cursor: 'pointer',
                 minHeight: 40,
@@ -145,7 +143,7 @@ export default function FilterPanel({
                 }
               />
               <span style={{ flex: 1 }}>{t(kindKeys[kind])}</span>
-              <span style={{ fontSize: 11, color: TEXT_MUTED }}>
+              <span className="text-badge font-semibold" style={{ fontWeight: 400, color: TEXT_MUTED }}>
                 {counts[kind] ?? 0}
               </span>
             </label>
@@ -156,10 +154,8 @@ export default function FilterPanel({
       {knownEngines.length > 0 && (
         <div>
           <p
+            className="text-badge font-semibold"
             style={{
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: 0.125,
               textTransform: 'uppercase',
               color: TEXT_MUTED,
               margin: '0 0 8px',
@@ -178,10 +174,8 @@ export default function FilterPanel({
       {knownStates.length > 0 && (
         <div>
           <p
+            className="text-badge font-semibold"
             style={{
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: 0.125,
               textTransform: 'uppercase',
               color: TEXT_MUTED,
               margin: '0 0 8px',
@@ -257,10 +251,8 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
+      className="text-badge font-semibold"
       style={{
-        fontSize: 12,
-        fontWeight: 600,
-        letterSpacing: 0.125,
         padding: '8px 10px',
         minHeight: 36,
         borderRadius: 9999,

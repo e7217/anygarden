@@ -31,13 +31,30 @@ async function renderLoaded() {
 const ids = (projects: Array<{ id: string }>) => projects.map(p => p.id)
 
 beforeEach(() => {
+  localStorage.setItem('anygarden_token', 'token')
   apiFetch.mockReset()
   apiFetch.mockImplementation(async (url: string) =>
     url === '/api/v1/projects' ? json(PROJECTS) : json([]),
   )
 })
 
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); localStorage.clear() })
+
+describe('useRooms — boot waits for sign-in', () => {
+  it('does not request the tree until a token exists, then loads it', async () => {
+    localStorage.clear()
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useRooms(), { wrapper })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(apiFetch).not.toHaveBeenCalled()
+
+    localStorage.setItem('anygarden_token', 'token')
+    await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+    vi.useRealTimers()
+    await waitFor(() => expect(result.current.projects).toHaveLength(3))
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/projects')
+  })
+})
 
 describe('useRooms — project order (#995)', () => {
   it('[ROOM-14] reorders projects at once and saves the full order', async () => {

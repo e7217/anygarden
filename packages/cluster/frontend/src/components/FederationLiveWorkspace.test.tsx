@@ -75,11 +75,16 @@ describe('FederationLiveWorkspace', () => {
     expect(screen.queryByText(/Interactive mock/i)).not.toBeInTheDocument()
   })
 
-  it('shows the sharing-disabled banner with the exact codes when wiring is absent', () => {
+  it('says once that sharing is off, why, and how to turn it on', () => {
     render(<FederationLiveWorkspace federation={baseFederation({ nodesCapability: 'disabled' })} />)
-    const banner = screen.getByRole('alert')
-    expect(banner.textContent).toMatch(/sharing disabled on this node/i)
-    expect(banner.textContent).toContain('/api/v1/node')
+    const state = screen.getByRole('status')
+    expect(state).toHaveAccessibleName(/sharing is off on this node/i)
+    expect(state.textContent).toContain('anygarden start --peer-port')
+    // No internal endpoints or file names, and no second copy in a pill or banner.
+    expect(document.body.textContent).not.toContain('/api/v1/')
+    expect(document.body.textContent).not.toContain('peer-cert.pem')
+    expect(screen.queryByText(/Live partner-node workspace/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Sharing is not enabled on this node yet/i)).not.toBeInTheDocument()
   })
 
   it('[FED-13] explains an expired certificate instead of the generic disabled banner', () => {
@@ -91,10 +96,10 @@ describe('FederationLiveWorkspace', () => {
         })}
       />,
     )
-    const banner = screen.getByRole('alert')
+    const banner = screen.getByRole('status')
     expect(banner.textContent).toMatch(/certificate has expired/i)
     expect(banner.textContent).toContain('init-credentials --force')
-    expect(banner.textContent).not.toMatch(/sharing disabled on this node/i)
+    expect(banner.textContent).not.toMatch(/sharing is off on this node/i)
   })
 
   it('shows each peer certificate expiry', () => {

@@ -102,7 +102,7 @@ export default function ThreadReplyAffordance({
           aria-label={t('chat.replyInThread')}
           className={`
             flex min-h-[var(--control-sm-height)] items-center gap-1 rounded-[var(--radius-sm)] px-2
-            text-badge text-[var(--color-foreground-subtle)] md:pointer-fine:bg-[var(--color-surface)]
+            text-badge font-semibold text-[var(--color-foreground-subtle)] md:pointer-fine:bg-[var(--color-surface)]
             transition-opacity hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground-muted)]
             focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
             ${active ? 'opacity-100' : 'opacity-100 md:pointer-fine:opacity-0 md:group-hover/message:opacity-100'}
@@ -132,7 +132,7 @@ export default function ThreadReplyAffordance({
           aria-expanded={active}
           className={`
             flex min-h-[var(--control-sm-height)] max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-2 py-1
-            text-badge transition-colors
+            text-badge font-semibold transition-colors
             focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
             ${active
               ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'

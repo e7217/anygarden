@@ -26,7 +26,7 @@ export default function PeerMessagePath({ placement, children }: { placement: Me
       style={placementIndentStyle(placement)}
       className="min-w-0 border-s-2 border-[var(--color-border)] ps-3"
     >
-      <p className="mb-1 flex min-w-0 items-center gap-1 text-badge text-[var(--color-foreground-muted)]" title={fullPath}>
+      <p className="mb-1 flex min-w-0 items-center gap-1 text-badge font-semibold text-[var(--color-foreground-muted)]" title={fullPath}>
         <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         <span className="sr-only">
           {t(placement.kind === 'question' ? 'peerChains.message.question' : 'peerChains.message.reply', { path: fullPath })}

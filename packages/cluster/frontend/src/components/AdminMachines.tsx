@@ -45,12 +45,12 @@ const ENGINE_LABELS: Record<string, string> = {
 }
 
 const DEPRECATED_BADGE_CSS =
-  'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-xs text-[var(--color-warning)]'
+  'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-badge text-[var(--color-warning)]'
 
 // #553 — small engine status pill, mirroring #546's StatusBadge styling.
 function EngineStatusBadge({ info }: { info: MachineEngineInfo }) {
   const { t } = useLocale()
-  const pill = 'shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold'
+  const pill = 'shrink-0 rounded-full px-2 py-0.5 text-badge font-semibold'
   const muted = `${pill} bg-[var(--color-surface-alt)] text-[var(--color-foreground-muted)]`
   const accent = `${pill} bg-[color:color-mix(in_srgb,var(--color-brand)_15%,transparent)] text-[var(--color-brand-text)]`
   if (info.update_status === 'updating') return <span className={accent}>{t('admin.machines.updating')}</span>
@@ -361,13 +361,13 @@ export default function AdminMachines() {
             <span>{t('admin.machines.registerMachine')}</span>
           </Button>
         </div>
-        <p className="px-4 pt-3 text-xs leading-relaxed text-[var(--color-foreground-muted)]">
+        <p className="px-4 pt-3 text-caption leading-relaxed text-[var(--color-foreground-muted)]">
           {t('admin.machines.purpose')}{' '}
           {t('admin.machines.partnerHintBefore')}
           <Link to="/admin/federation" className="font-medium text-[var(--color-brand-text)] underline underline-offset-2">{t('navigation.federation')}</Link>
           {t('admin.machines.partnerHintAfter')}
         </p>
-        {machinesStatus === 'error' && <div className="px-4 pt-3 text-xs text-[var(--color-destructive)]" role="alert">
+        {machinesStatus === 'error' && <div className="px-4 pt-3 text-caption text-[var(--color-destructive)]" role="alert">
           <p>{t('admin.machines.loadFailed')}</p>
           <Button variant="ghost" size="sm" onClick={() => { void fetchMachines().catch(() => {}) }}><RefreshCw />{t('common.refresh')}</Button>
         </div>}
@@ -382,13 +382,13 @@ export default function AdminMachines() {
                 : 'bg-[var(--color-surface-alt)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-sm font-medium text-[var(--color-foreground)]">
+            <div className="flex items-center gap-1.5 text-caption font-medium text-[var(--color-foreground)]">
               <Package className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
               <span className="truncate">{t('admin.machines.serverEntry')}</span>
             </div>
             <div className="mt-1.5 flex items-center gap-2">
               {serverPackage && (
-                <span className="font-mono text-xs text-[var(--color-foreground-muted)]">v{serverPackage.current}</span>
+                <span className="font-mono text-badge text-[var(--color-foreground-muted)]">v{serverPackage.current}</span>
               )}
               {serverUpdateAvailable && (
                 <span className="rounded-full bg-[var(--color-brand-tint-bg)] px-2 py-0.5 text-badge font-semibold text-[var(--color-brand-tint-text)]">
@@ -400,7 +400,7 @@ export default function AdminMachines() {
           {machines.length === 0 ? (
             <div className="w-full px-3 py-8 text-center">
               <Server className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
-              <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.none')}</p>
+              <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.none')}</p>
               <Button variant="ghost" size="sm" className="mt-2" onClick={() => { setRegisterError(null); setRegisterOpen(true) }}>
                 <Plus className="mr-1 h-3 w-3" /> {t('admin.machines.register')}
               </Button>
@@ -417,16 +417,16 @@ export default function AdminMachines() {
                       : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
-                  <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
+                  <div className="text-caption font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
                   {(m.description || m.hostname) && (
-                    <div className="text-xs text-[var(--color-foreground-muted)] truncate">{m.description || m.hostname}</div>
+                    <div className="text-badge text-[var(--color-foreground-muted)] truncate">{m.description || m.hostname}</div>
                   )}
                   <div className="flex items-center gap-2 mt-1.5">
-                    <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
+                    <span className="flex items-center gap-1 text-badge text-[var(--color-foreground-muted)]">
                       <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(m.status)}`} />
                       {statusLabel(m.status)}
                     </span>
-                    <span className="text-xs text-[var(--color-foreground-subtle)]">
+                    <span className="text-badge text-[var(--color-foreground-subtle)]">
                       {t('admin.machines.agentCount', { count: agentCountByMachine.get(m.id) ?? 0 })}
                     </span>
                   </div>
@@ -441,10 +441,10 @@ export default function AdminMachines() {
                       : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
-                  <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{t('admin.machines.unplaced')}</div>
-                  <div className="text-xs text-[var(--color-foreground-muted)] truncate">{t('admin.machines.unplacedSubtitle')}</div>
+                  <div className="text-caption font-medium text-[var(--color-foreground)] truncate">{t('admin.machines.unplaced')}</div>
+                  <div className="text-badge text-[var(--color-foreground-muted)] truncate">{t('admin.machines.unplacedSubtitle')}</div>
                   <div className="flex items-center gap-2 mt-1.5">
-                    <span className="text-xs text-[var(--color-foreground-subtle)]">
+                    <span className="text-badge text-[var(--color-foreground-subtle)]">
                       {t('admin.machines.agentCount', { count: unplacedAgents.length })}
                     </span>
                   </div>
@@ -464,7 +464,7 @@ export default function AdminMachines() {
           <div className="max-w-2xl space-y-6">
             <div>
               <h2 className="text-lead text-[var(--color-foreground)]">{t('admin.machines.unplacedTitle')}</h2>
-              <p className="text-sm text-[var(--color-foreground-muted)]">
+              <p className="text-caption text-[var(--color-foreground-muted)]">
                 {t('admin.machines.unplacedDescription')}
               </p>
             </div>
@@ -472,7 +472,7 @@ export default function AdminMachines() {
               {unplacedAgents.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <Bot className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
-                  <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machines.noUnplaced')}</p>
+                  <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.noUnplaced')}</p>
                 </div>
               ) : unplacedAgents.map(agent => (
                 <div key={agent.id} className="flex items-center justify-between px-4 py-3 gap-3">
@@ -491,10 +491,10 @@ export default function AdminMachines() {
                     />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
-                        <span className="text-xs text-[var(--color-foreground-muted)]">· {agentStateLabel(agent.actual_state)}</span>
+                        <span className="text-caption font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
+                        <span className="text-badge text-[var(--color-foreground-muted)]">· {agentStateLabel(agent.actual_state)}</span>
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
+                      <div className="flex items-center gap-2 mt-0.5 text-badge text-[var(--color-foreground-subtle)]">
                         <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
                         {/* #516 — the structured unavailability reason is the
                             authoritative "why". Show its first line inline and
@@ -527,6 +527,7 @@ export default function AdminMachines() {
                       size="icon"
                       onClick={async () => { try { await startAgent(agent.id) } catch { /* ignore */ } }}
                       title={t('admin.machines.retryPlacement')}
+                      aria-label={t('admin.machines.retryPlacement')}
                     >
                       <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
                     </Button>
@@ -552,7 +553,7 @@ export default function AdminMachines() {
           </div>
         ) : !selectedMachine ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machines.select')}</p>
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.select')}</p>
           </div>
         ) : (
           <div className="max-w-2xl space-y-6">
@@ -561,7 +562,7 @@ export default function AdminMachines() {
               <div className="min-w-0 flex-1">
                 <h2 className="text-lead break-words text-[var(--color-foreground)]">{selectedMachine.name}</h2>
                 {(selectedMachine.description || selectedMachine.hostname) && (
-                  <p className="text-sm text-[var(--color-foreground-muted)]">{selectedMachine.description || selectedMachine.hostname}</p>
+                  <p className="text-caption text-[var(--color-foreground-muted)]">{selectedMachine.description || selectedMachine.hostname}</p>
                 )}
               </div>
               <Badge variant="outline" className={`${
@@ -574,14 +575,14 @@ export default function AdminMachines() {
             </div>
 
             <div className="flex flex-col items-stretch justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-4 sm:flex-row sm:items-center">
-              <p className="min-w-0 flex-1 text-sm text-[var(--color-foreground-muted)]">
+              <p className="min-w-0 flex-1 text-caption text-[var(--color-foreground-muted)]">
                 {selectedMachine.status === 'offline' ? t('admin.machines.offlineDescription') : t('admin.machines.connectionReady')}
               </p>
               <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => openConnectionGuide(selectedMachine.id)}><Cable />{t('admin.machines.connectionGuide')}</Button>
             </div>
 
-            {detailStatus === 'loading' && <p role="status" className="flex items-center gap-2 text-sm text-[var(--color-foreground-muted)]"><Loader2 className="h-4 w-4 animate-spin" />{t('admin.machines.detailLoading')}</p>}
-            {detailStatus === 'error' && <div role="alert" className="flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-destructive)] p-3 text-sm">
+            {detailStatus === 'loading' && <p role="status" className="flex items-center gap-2 text-caption text-[var(--color-foreground-muted)]"><Loader2 className="h-4 w-4 animate-spin" />{t('admin.machines.detailLoading')}</p>}
+            {detailStatus === 'error' && <div role="alert" className="flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-destructive)] p-3 text-caption">
               <p className="flex-1">{t('admin.machines.detailFailed')}</p>
               <Button variant="outline" size="sm" onClick={() => void fetchDetail(selectedMachine.id)}>{t('common.retry')}</Button>
             </div>}
@@ -589,7 +590,7 @@ export default function AdminMachines() {
             {/* Agents */}
             <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
-                <h3 className="text-sm font-semibold text-[var(--color-foreground-muted)]">
+                <h3 className="text-caption font-semibold text-[var(--color-foreground-muted)]">
                   {detailReady ? t('admin.machines.agentsHeading', { count: machineAgents.length }) : t('chat.agents')}
                 </h3>
                 <Button
@@ -605,7 +606,7 @@ export default function AdminMachines() {
                 {!detailReady ? null : machineAgents.length === 0 ? (
                   <div className="px-4 py-8 text-center">
                     <Bot className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
-                    <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machines.noAgents')}</p>
+                    <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.noAgents')}</p>
                   </div>
                 ) : machineAgents.map(agent => {
                   // When the hosting machine's WS is disconnected we
@@ -643,8 +644,8 @@ export default function AdminMachines() {
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
-                            <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
+                            <span className="text-caption font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
+                            <span className="flex items-center gap-1 text-badge text-[var(--color-foreground-muted)]">
                               <PresenceDot
                                 variant="agent"
                                 online={online}
@@ -653,7 +654,7 @@ export default function AdminMachines() {
                               {displayState}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
+                          <div className="flex items-center gap-2 mt-0.5 text-badge text-[var(--color-foreground-subtle)]">
                             <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
                             {agent.reasoning_effort && <span>· {reasoningLabel(agent.reasoning_effort)}</span>}
                             {agent.rooms.length > 0 && (
@@ -684,6 +685,7 @@ export default function AdminMachines() {
                                 size="icon"
                                 disabled
                                 title={isRunning ? t('admin.machines.stopping') : t('admin.machines.starting')}
+                                aria-label={isRunning ? t('admin.machines.stopping') : t('admin.machines.starting')}
                               >
                                 <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-foreground-muted)]" />
                               </Button>
@@ -696,6 +698,7 @@ export default function AdminMachines() {
                                 size="icon"
                                 onClick={() => { void stopAgent(agent.id) }}
                                 title={isMachineOffline ? t('admin.machines.offlineHint') : t('admin.machines.stop')}
+                                aria-label={t('admin.machines.stop')}
                                 disabled={isMachineOffline}
                               >
                                 <Square className="h-3.5 w-3.5 text-[var(--color-destructive)]" />
@@ -708,6 +711,7 @@ export default function AdminMachines() {
                               size="icon"
                               onClick={() => { void startAgent(agent.id) }}
                               title={isMachineOffline ? t('admin.machines.offlineHint') : t('admin.machines.start')}
+                              aria-label={t('admin.machines.start')}
                               disabled={isMachineOffline}
                             >
                               <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
@@ -737,9 +741,9 @@ export default function AdminMachines() {
             {/* Info */}
             <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
-                <h3 className="text-sm font-semibold text-[var(--color-foreground-muted)]">{t('admin.machines.info')}</h3>
+                <h3 className="text-caption font-semibold text-[var(--color-foreground-muted)]">{t('admin.machines.info')}</h3>
               </div>
-              <div className="grid grid-cols-1 gap-x-8 gap-y-2 px-4 py-3 text-sm sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-x-8 gap-y-2 px-4 py-3 text-caption sm:grid-cols-2">
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">{t('admin.machines.hostname')}</span>
                   <p className="text-[var(--color-foreground)] font-medium break-all">{selectedMachine.hostname || '—'}</p>
@@ -765,14 +769,14 @@ export default function AdminMachines() {
                   <p className="text-[var(--color-foreground)] font-medium">
                     {selectedMachine.daemon_version || '-'}
                     {selectedMachine.update_status === 'updating' && (
-                      <span className="ml-2 text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.updating')}</span>
+                      <span className="ml-2 text-badge text-[var(--color-foreground-muted)]">{t('admin.machines.updating')}</span>
                     )}
                     {selectedMachine.update_status === 'success' && (
-                      <span className="ml-2 text-xs text-[var(--color-brand-text)]">{t('admin.machines.updated')}</span>
+                      <span className="ml-2 text-badge text-[var(--color-brand-text)]">{t('admin.machines.updated')}</span>
                     )}
                     {selectedMachine.update_status === 'failed' && (
                       <span
-                        className="ml-2 text-xs text-[var(--color-destructive)]"
+                        className="ml-2 text-badge text-[var(--color-destructive)]"
                         title={selectedMachine.update_error || undefined}
                       >
                         {t('admin.machines.updateFailed')}
@@ -789,7 +793,7 @@ export default function AdminMachines() {
                       const online = selectedMachine?.status === 'online'
                       return (
                         <div key={e.engine} className="flex items-center gap-1.5 flex-wrap">
-                          <Badge variant="outline" className="text-xs">
+                          <Badge variant="outline" className="text-badge">
                             {ENGINE_LABELS[e.engine] ?? e.engine}
                           </Badge>
                           {engineMeta?.deprecated ? (
@@ -802,12 +806,12 @@ export default function AdminMachines() {
                             </Badge>
                           ) : null}
                           {e.version && (
-                            <span className="font-mono text-xs text-[var(--color-foreground-muted)]">
+                            <span className="font-mono text-badge text-[var(--color-foreground-muted)]">
                               {e.version}
                             </span>
                           )}
                           {e.update_available && e.latest_version && (
-                            <span className="font-mono text-xs text-[var(--color-brand-text)]">
+                            <span className="font-mono text-badge text-[var(--color-brand-text)]">
                               → {e.latest_version}
                             </span>
                           )}
@@ -854,7 +858,7 @@ export default function AdminMachines() {
             {/* Token & Control */}
             <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
-                <h3 className="text-sm font-semibold text-[var(--color-foreground-muted)]">{t('admin.machines.tokenControl')}</h3>
+                <h3 className="text-caption font-semibold text-[var(--color-foreground-muted)]">{t('admin.machines.tokenControl')}</h3>
               </div>
               <div className="px-4 py-3 space-y-3">
                 <div className="flex flex-wrap gap-2">
@@ -922,15 +926,15 @@ export default function AdminMachines() {
             {/* History */}
             <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
-                <h3 className="text-sm font-semibold text-[var(--color-foreground-muted)]">{t('admin.machines.history')}</h3>
+                <h3 className="text-caption font-semibold text-[var(--color-foreground-muted)]">{t('admin.machines.history')}</h3>
               </div>
               <div className="px-4 py-3 max-h-64 overflow-y-auto">
                 {!detailReady ? null : machineActivity.length === 0 ? (
-                  <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.noActivity')}</p>
+                  <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('admin.machines.noActivity')}</p>
                 ) : (
                   <div className="space-y-1.5">
                     {machineActivity.map(evt => (
-                      <div key={evt.id} className="flex items-center gap-2 text-xs">
+                      <div key={evt.id} className="flex items-center gap-2 text-badge">
                         <span className={`inline-block h-1.5 w-1.5 rounded-full ${
                           evt.event_type === 'online' ? 'bg-[var(--color-success)]'
                             : evt.event_type === 'offline' ? 'bg-[var(--color-foreground-subtle)]'
@@ -960,7 +964,7 @@ export default function AdminMachines() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-caption">
               <p className="font-medium">{t('admin.machines.prepare')}</p>
               <p className="mt-1 text-[var(--color-foreground-muted)]">{t('admin.machines.prepareDescription')}</p>
             </div>
@@ -974,7 +978,7 @@ export default function AdminMachines() {
             </div>
           </div>
           <DialogFooter>
-            {registerError && <p role="alert" className="text-sm text-[var(--color-destructive)]">{registerError}</p>}
+            {registerError && <p role="alert" className="text-caption text-[var(--color-destructive)]">{registerError}</p>}
             <Button variant="outline" onClick={() => setRegisterOpen(false)}>{t('common.cancel')}</Button>
             <Button onClick={handleRegister} disabled={regLoading || !regName.trim()}>
               {regLoading ? t('admin.machines.registering') : t('admin.machines.register')}

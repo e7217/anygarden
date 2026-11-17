@@ -81,16 +81,16 @@ export default function RoomSharedFilesDialog({
           </DialogDescription>
         </DialogHeader>
         {error && (
-          <p className="text-xs text-[var(--color-destructive)]" role="alert">
+          <p className="text-caption text-[var(--color-destructive)]" role="alert">
             {error}
           </p>
         )}
         {loading ? (
-          <p className="text-sm text-[var(--color-foreground-subtle)]">
+          <p className="text-caption text-[var(--color-foreground-subtle)]">
             {t('common.loading')}
           </p>
         ) : files.length === 0 ? (
-          <p className="text-sm text-[var(--color-foreground-subtle)]">
+          <p className="text-caption text-[var(--color-foreground-subtle)]">
             {t('guest.noSharedFiles')}
           </p>
         ) : (
@@ -102,7 +102,7 @@ export default function RoomSharedFilesDialog({
               >
                 <FileText className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-[var(--color-foreground)]" title={f.filename}>
+                  <p className="truncate text-caption text-[var(--color-foreground)]" title={f.filename}>
                     {f.filename}
                   </p>
                   <p className="text-badge font-normal text-[var(--color-foreground-subtle)]">

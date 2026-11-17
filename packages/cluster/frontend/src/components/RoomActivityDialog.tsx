@@ -87,12 +87,12 @@ export default function RoomActivityDialog({
 
         <div className="max-h-[60vh] overflow-y-auto space-y-1 py-1">
           {!loaded && (
-            <p className="text-caption text-[var(--color-foreground-muted)]">
+            <p className="text-caption font-medium text-[var(--color-foreground-muted)]">
               {t('common.loading')}
             </p>
           )}
           {loaded && turns.length === 0 && (
-            <p className="text-caption text-[var(--color-foreground-muted)]">
+            <p className="text-caption font-medium text-[var(--color-foreground-muted)]">
               {t('rooms.noActivity')}
             </p>
           )}
@@ -108,7 +108,7 @@ export default function RoomActivityDialog({
             return (
             <div
               key={turn.requestId}
-              className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs"
+              className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-badge"
               data-testid="room-activity-turn"
             >
               <span
@@ -146,7 +146,7 @@ export default function RoomActivityDialog({
               </span>
               {turn.error && (
                 <span
-                  className="ml-auto truncate text-badge font-normal text-[var(--color-destructive,#d74c4c)]"
+                  className="ml-auto truncate text-badge font-normal text-[var(--color-destructive)]"
                   title={turn.error}
                 >
                   {turn.error}

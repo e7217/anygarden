@@ -94,14 +94,14 @@ export default function ManageRoomAgentsDialog({
         </DialogHeader>
 
         {error && (
-          <div className="text-sm text-[var(--color-warning)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] rounded-[var(--radius-md)] px-3 py-2 border border-[color:color-mix(in_srgb,var(--color-warning)_20%,transparent)]">
+          <div className="text-caption text-[var(--color-warning)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] rounded-[var(--radius-md)] px-3 py-2 border border-[color:color-mix(in_srgb,var(--color-warning)_20%,transparent)]">
             {error}
           </div>
         )}
 
         {agents.length === 0 ? (
           <div className="bg-[var(--color-surface-alt)] rounded-[var(--radius-lg)] py-8 text-center">
-            <p className="text-caption text-[var(--color-foreground-muted)]">
+            <p className="text-caption font-medium text-[var(--color-foreground-muted)]">
               {t('rooms.noAgents')}
             </p>
           </div>
@@ -109,11 +109,11 @@ export default function ManageRoomAgentsDialog({
           <div className="space-y-5 py-2">
             {/* Agents currently in room */}
             <div>
-              <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
+              <h3 className="text-badge font-semibold uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
                 {t('rooms.inRoom', { count: inRoom.length })}
               </h3>
               {inRoom.length === 0 ? (
-                <p className="text-caption text-[var(--color-foreground-subtle)] italic px-1">
+                <p className="text-caption font-medium text-[var(--color-foreground-subtle)] italic px-1">
                   {t('rooms.noAgentsInRoom')}
                 </p>
               ) : (
@@ -139,7 +139,7 @@ export default function ManageRoomAgentsDialog({
                             presence={{ variant: 'agent', online, agentState: localizedState(displayState) }}
                           />
                           <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
-                          <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
+                          <span className="text-caption font-medium text-[var(--color-foreground-muted)]">{agent.engine}</span>
                           <Badge variant="outline" className={stateBadgeClass(displayState)}>
                             {localizedState(displayState)}
                           </Badge>
@@ -168,11 +168,11 @@ export default function ManageRoomAgentsDialog({
 
             {/* Available agents */}
             <div>
-              <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
+              <h3 className="text-badge font-semibold uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
                 {t('rooms.available', { count: available.length })}
               </h3>
               {available.length === 0 ? (
-                <p className="text-caption text-[var(--color-foreground-subtle)] italic px-1">
+                <p className="text-caption font-medium text-[var(--color-foreground-subtle)] italic px-1">
                   {t('rooms.allAgentsInRoom')}
                 </p>
               ) : (
@@ -198,7 +198,7 @@ export default function ManageRoomAgentsDialog({
                             presence={{ variant: 'agent', online, agentState: localizedState(displayState) }}
                           />
                           <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
-                          <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
+                          <span className="text-caption font-medium text-[var(--color-foreground-muted)]">{agent.engine}</span>
                           <Badge variant="outline" className={stateBadgeClass(displayState)}>
                             {localizedState(displayState)}
                           </Badge>

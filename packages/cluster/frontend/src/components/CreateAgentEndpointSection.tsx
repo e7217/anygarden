@@ -76,7 +76,7 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
   return (
     <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
       <>
-          <p className="text-xs text-[var(--color-foreground-muted)]">
+          <p className="text-badge text-[var(--color-foreground-muted)]">
             {t('admin.endpoint.description')}
           </p>
           <div className="space-y-2">
@@ -84,7 +84,7 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
             <Input id="endpoint-base-url" value={draft.baseUrl} placeholder="http://localhost:8000/v1"
               onChange={e => update({ baseUrl: e.target.value.trim() })} aria-invalid={!!draft.baseUrl && !urlValid} />
             {draft.baseUrl && !urlValid && (
-              <p className="text-xs text-[var(--color-warning)]">{t('admin.endpoint.invalidUrl')}</p>
+              <p className="text-badge text-[var(--color-warning)]">{t('admin.endpoint.invalidUrl')}</p>
             )}
           </div>
           <div className="space-y-2">
@@ -108,19 +108,19 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
               <Label htmlFor="endpoint-api-key">{t('admin.endpoint.apiKey')}</Label>
               <Input id="endpoint-api-key" type="password" autoComplete="new-password" value={draft.apiKey}
                 onChange={e => update({ apiKey: e.target.value })} />
-              <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.endpoint.keyHint')}</p>
+              <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.endpoint.keyHint')}</p>
             </div>
           )}
           <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm"  disabled={!urlValid || loading || (draft.auth === 'key' && !draft.apiKey)}
+            <Button type="button" variant="outline" size="sm" disabled={!urlValid || loading || (draft.auth === 'key' && !draft.apiKey)}
               onClick={() => void loadModels()}>
               {loading ? t('admin.endpoint.loading') : t('admin.endpoint.loadModels')}
             </Button>
-            {status && <span role="status" className="text-xs text-[var(--color-foreground-muted)]">{status.reachableFrom === 'server'
+            {status && <span role="status" className="text-badge text-[var(--color-foreground-muted)]">{status.reachableFrom === 'server'
               ? t('admin.endpoint.modelsFoundServer', { count: status.count })
               : t('admin.endpoint.modelsFoundHost', { count: status.count, host: status.reachableFrom })}</span>}
           </div>
-          {error && <p role="alert" className="text-xs text-[var(--color-warning)]">{error}</p>}
+          {error && <p role="alert" className="text-caption text-[var(--color-warning)]">{error}</p>}
       </>
     </div>
   )

@@ -187,7 +187,7 @@ export default function RoomSettingsMenu({
           // group and the button children stay naturally Tab-able.
           role="group"
           aria-label={t('chat.roomSettings')}
-          className="absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] max-h-[70dvh] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+          className="absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] max-h-[70dvh] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep"
         >
           <ul className="py-1">
             {safeActions.map((a) => (
@@ -196,7 +196,7 @@ export default function RoomSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(a.onClick)}
                   data-testid={a.testId}
-                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
                 >
                   {a.icon}
                   <span>{a.label}</span>
@@ -219,7 +219,7 @@ export default function RoomSettingsMenu({
                   // obvious. The divider above further separates it
                   // from the safe-action group so a stray click is
                   // less likely.
-                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-caption text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <OctagonX className="h-4 w-4" />
                   <span>{t('chat.stopAllAgents')}</span>
@@ -232,7 +232,7 @@ export default function RoomSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(onLeaveRoom)}
                   data-testid="room-menu-leave"
-                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-caption text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <LogOut className="h-4 w-4" aria-hidden="true" />
                   <span>{t('chat.leaveRoom')}</span>
@@ -250,7 +250,7 @@ export default function RoomSettingsMenu({
                   // this prop on the same admin/owner check the
                   // server enforces, and to prompt for confirmation
                   // before actually firing the DELETE.
-                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-caption text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
                   <span>{t('chat.deleteRoom')}</span>

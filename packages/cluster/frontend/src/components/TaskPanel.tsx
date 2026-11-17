@@ -10,6 +10,8 @@ import {
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { apiFetch } from '@/lib/api'
 import { EntityAvatar } from '@/components/EntityAvatar'
 import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
@@ -140,7 +142,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
           <button
             key={f.key ?? 'all'}
             onClick={() => setFilter(f.key)}
-            className={`min-h-11 shrink-0 whitespace-nowrap rounded-[var(--radius-sm)] px-2.5 text-xs transition-colors ${
+            className={`min-h-[var(--control-height)] shrink-0 whitespace-nowrap rounded-[var(--radius-sm)] px-2.5 text-badge transition-colors ${
               filter === f.key
                 ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] font-medium'
                 : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]'
@@ -163,9 +165,9 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
             <div
               key={task.id}
               data-testid={`task-row-${task.id}`}
-              className="group flex min-h-11 min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+              className="group flex min-h-[var(--control-height)] min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
             >
-              <button disabled={readOnly} onClick={() => cycleStatus(task)} title={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} aria-label={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} className="flex h-11 w-11 shrink-0 items-center justify-center md:h-6 md:w-6">
+              <button disabled={readOnly} onClick={() => cycleStatus(task)} title={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} aria-label={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} className="flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]">
                 <Icon
                   className={`h-4 w-4 ${
                     task.status === 'done'
@@ -181,7 +183,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                 />
               </button>
               <span
-                className={`min-w-0 flex-1 truncate text-sm ${
+                className={`min-w-0 flex-1 truncate text-caption ${
                   task.status === 'done'
                     ? 'line-through text-[var(--color-foreground-muted)]'
                     : task.status === 'failed' ? 'text-[var(--color-danger)]'
@@ -193,11 +195,11 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               {/* Assignee picker — collapsed avatar by default, expanded
                   to a select on hover. Keeping the picker inline avoids
                   a second modal for what is the most common edit. */}
-              <select
+              <Select
                 disabled={readOnly}
                 value={task.assignee_participant_id ?? ''}
                 onChange={e => reassign(task, e.target.value)}
-                className="min-h-11 min-w-0 max-w-[8rem] truncate rounded-[var(--radius-sm)] border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] md:min-h-6"
+                className="w-auto max-w-[8rem] truncate"
                 aria-label={t('chat.reassign')}
               >
                 <option value="">— {t('chat.unassigned')} —</option>
@@ -216,7 +218,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                     ))}
                   </optgroup>
                 )}
-              </select>
+              </Select>
               {assignee ? (
                 <EntityAvatar
                   id={assignee.id}
@@ -227,20 +229,22 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                 />
               ) : null}
               {!readOnly && !task.source_message_id ? (
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => remove(task.id)}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded text-[var(--color-destructive)]/70 opacity-100 transition-all hover:bg-[var(--color-destructive)]/10 hover:text-[var(--color-destructive)] md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
+                  className="text-[var(--color-destructive)] opacity-100 transition-opacity hover:bg-[var(--color-danger-soft)] focus-visible:opacity-100 md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
                   title={t('chat.deleteTask')}
                   aria-label={t('chat.deleteTask')}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                </Button>
               ) : null}
             </div>
           )
         })}
         {tasks.length === 0 && (
-          <div className="py-8 text-center text-sm text-[var(--color-foreground-muted)]">
+          <div className="py-8 text-center text-caption text-[var(--color-foreground-muted)]">
             {t('chat.noTasks')}
           </div>
         )}
@@ -249,18 +253,18 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
       {/* Add task — inline composer with assignee picker */}
       <div className="border-t border-[var(--color-border)] px-4 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <input
+          <Input
             value={newTitle}
             onChange={e => setNewTitle(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && createTask()}
             placeholder={t('chat.addTask')}
             aria-label={t('chat.addTask')}
-            className="min-h-11 min-w-[8rem] flex-1 rounded-[var(--radius-sm)] bg-transparent px-2 text-sm placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+            className="min-w-[8rem] flex-1"
           />
-          <select
+          <Select
             value={newAssignee}
             onChange={e => setNewAssignee(e.target.value)}
-            className="min-h-11 max-w-[8rem] truncate rounded-[var(--radius-sm)] border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] md:min-h-6"
+            className="w-auto max-w-[8rem] truncate"
             aria-label={t('chat.pickAssignee')}
           >
             <option value="">— {t('chat.assignee')} —</option>
@@ -278,17 +282,19 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                 ))}
               </optgroup>
             )}
-          </select>
+          </Select>
           {newAssignee && (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => setNewAssignee('')}
-              className="flex h-11 w-11 items-center justify-center rounded text-[var(--color-foreground-subtle)] hover:bg-[var(--color-surface-hover)] md:h-6 md:w-6"
+              className="text-[var(--color-foreground-subtle)]"
               title={t('chat.clearAssignee')}
               aria-label={t('chat.clearAssignee')}
             >
               <X className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           )}
           <Button
             variant="ghost"
@@ -296,7 +302,6 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
             onClick={createTask}
             disabled={adding || !newTitle.trim()}
             aria-label={t('chat.createTask')}
-            className="min-h-11 min-w-11"
           >
             <Plus className="h-4 w-4" />
           </Button>

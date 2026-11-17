@@ -81,7 +81,7 @@
 
 @keyframes topology-agent-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 var(--color-topology-accent-soft), var(--shadow-card);
+    box-shadow: 0 0 0 0 var(--color-topology-running-soft), var(--shadow-card);
   }
   50% {
     box-shadow: 0 0 0 4px transparent, var(--shadow-card);

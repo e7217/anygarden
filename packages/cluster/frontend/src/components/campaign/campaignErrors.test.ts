@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { campaignErrorMessage, campaignStatusDetail } from './campaignErrors'
 import { CampaignApiError } from '@/lib/campaigns'
-import { en } from '@/i18n/messages'
+import { en } from '@/i18n/locales/en'
 import type { MessageKey } from '@/i18n/messages'
 
 const t = (key: MessageKey, values: Record<string, string | number> = {}) =>

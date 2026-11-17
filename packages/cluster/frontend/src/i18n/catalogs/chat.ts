@@ -369,6 +369,9 @@ export const chatEn = {
   'chat.threadWorking': '{{names}} working',
   'chat.stopThread': 'Stop',
   'chat.stopThreadLabel': 'Stop all work in this thread',
+  'chat.a11y.newMessage': '{{name}}: {{text}}',
+  'chat.a11y.newMessageNoText': '{{name}} sent a message',
+  'chat.a11y.unknownSender': 'Someone',
 } as const
 
 export const chatKo: Record<keyof typeof chatEn, string> = {
@@ -742,4 +745,7 @@ export const chatKo: Record<keyof typeof chatEn, string> = {
   'chat.threadWorking': '{{names}} 작업 중',
   'chat.stopThread': '중지',
   'chat.stopThreadLabel': '이 스레드의 작업 모두 중지',
+  'chat.a11y.newMessage': '{{name}}: {{text}}',
+  'chat.a11y.newMessageNoText': '{{name}}님이 메시지를 보냈습니다',
+  'chat.a11y.unknownSender': '알 수 없는 참여자',
 }

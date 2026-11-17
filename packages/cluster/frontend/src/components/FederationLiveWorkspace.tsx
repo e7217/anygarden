@@ -36,7 +36,7 @@ function ErrorLine({ error }: { error: string | null }) {
   const { t } = useLocale()
   if (!error) return null
   return (
-    <p role="alert" className="text-sm text-[var(--color-danger)]">
+    <p role="alert" className="text-caption text-[var(--color-danger)]">
       {t('federation.errorPrefix')} · {error}
     </p>
   )
@@ -44,7 +44,7 @@ function ErrorLine({ error }: { error: string | null }) {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block space-y-1 text-sm">
+    <label className="block space-y-1 text-caption">
       <span className="text-[var(--color-foreground-muted)]">{label}</span>
       {children}
     </label>
@@ -98,30 +98,32 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
     if (nodesCapability === 'ready') return t('federation.statusReady')
     return t('federation.statusUnknown')
   }, [nodesCapability, t])
+  const sharingOff = nodesCapability === 'disabled'
 
   return (
     <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-      <div
-        role="status"
-        className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-brand)]/20 bg-[var(--color-brand-tint-bg)] px-4 py-3 text-sm text-[var(--color-brand-tint-text)]"
-      >
-        <Radio className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-        <div>
-          <span className="font-semibold">{t('federation.liveNotice')}</span>
-          <span className="ml-2">
-            {t('federation.liveNoticeBody')}
-          </span>
+      {/* A neutral note (teal is for actions). With sharing off it has nothing
+          to say that the state block below does not, so it steps aside. */}
+      {!sharingOff && (
+        <div className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-3 text-caption text-[var(--color-foreground-muted)]">
+          <Radio className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <div>
+            <span className="font-semibold text-[var(--color-foreground)]">{t('federation.liveNotice')}</span>
+            <span className="ml-2">
+              {t('federation.liveNoticeBody')}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.eyebrow')}</p>
+          <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('federation.eyebrow')}</p>
           <h1 className="mt-1 text-heading">{t('federation.title')}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-[var(--color-foreground-muted)]">
+          <p className="mt-2 max-w-2xl text-caption text-[var(--color-foreground-muted)]">
             {t('federation.description')}
           </p>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--color-foreground-muted)]">
+          <p className="mt-1 max-w-2xl text-caption text-[var(--color-foreground-muted)]">
             {t('federation.machinesHintBefore')}
             <Link to="/admin/machines" className="font-medium text-[var(--color-brand-text)] underline underline-offset-2">
               {t('navigation.machines')}
@@ -130,7 +132,8 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2" aria-label={t('federation.nodeCapability')}>
-          <Badge variant={nodesCapability === 'ready' ? 'default' : 'outline'}>{statusLine}</Badge>
+          {/* Off is explained once, in the block below; the pill would repeat it. */}
+          {!sharingOff && <Badge variant={nodesCapability === 'ready' ? 'default' : 'outline'}>{statusLine}</Badge>}
           <Button
             size="sm"
             variant="outline"
@@ -142,23 +145,35 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
         </div>
       </header>
 
-      {nodesCapability === 'disabled' && (
-        <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <div>
-            {federation.nodesError?.code === 'CERTIFICATE_EXPIRED' ? (
-              <>
-                <strong>{t('federation.cert.expiredTitle')}</strong>{' '}
-                <span>{t('federation.cert.expiredBody')}</span>
-              </>
-            ) : (
-              <>
-                <strong>{t('federation.sharingDisabledTitle')}</strong>{' '}
-                <span>{t('federation.sharingDisabledBody')}</span>
-              </>
-            )}
-          </div>
-        </div>
+      {sharingOff && (
+        <section
+          role="status"
+          aria-labelledby="federation-off-title"
+          className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/40 bg-[var(--color-warning-soft)] p-4 text-caption text-[var(--color-foreground)]"
+        >
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
+          {federation.nodesError?.code === 'CERTIFICATE_EXPIRED' ? (
+            <div className="min-w-0 space-y-1">
+              <h2 id="federation-off-title" className="text-body font-semibold">{t('federation.cert.expiredTitle')}</h2>
+              <p>{t('federation.cert.expiredBody')}</p>
+            </div>
+          ) : (
+            // What is off, why in plain terms, and the one step that turns it
+            // on; where the certificate lives stays behind "Details".
+            <div className="min-w-0 space-y-2">
+              <h2 id="federation-off-title" className="text-body font-semibold">{t('federation.sharingDisabledTitle')}</h2>
+              <p>{t('federation.sharingDisabledBody')}</p>
+              <p>{t('federation.sharingDisabledNext')}</p>
+              <code className="block w-fit max-w-full overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--color-surface)] px-2 py-1 font-mono text-caption font-medium">
+                {t('federation.sharingDisabledCommand')}
+              </code>
+              <details className="text-[var(--color-foreground-muted)]">
+                <summary className="w-fit cursor-pointer font-medium text-[var(--color-foreground)]">{t('federation.sharingDisabledDetails')}</summary>
+                <p className="mt-1">{t('federation.sharingDisabledDetailsBody')}</p>
+              </details>
+            </div>
+          )}
+        </section>
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -179,7 +194,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
               </CardHeader>
               <CardContent className="space-y-3">
                 {peers.length === 0 && (
-                  <p className="text-sm text-[var(--color-foreground-muted)]">{t('federation.noPeers')}</p>
+                  <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.noPeers')}</p>
                 )}
                 {peers.map((peer) => (
                   <div key={peer.node_id} className="rounded-[var(--radius-md)] border p-4">
@@ -187,13 +202,13 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 font-medium">
                         <Server className="size-4" aria-hidden="true" />
-                        <span className="truncate font-mono text-sm">{peer.node_id}</span>
+                        <span className="truncate font-mono text-caption">{peer.node_id}</span>
                       </p>
-                      <p className="mt-1 truncate text-xs text-[var(--color-foreground-muted)]">
+                      <p className="mt-1 truncate text-badge text-[var(--color-foreground-muted)]">
                         {t('federation.pin')} {peer.fingerprint.slice(0, 16)}… · {t('federation.epoch')} {peer.certificate_epoch} · {peer.state}
                       </p>
                       {peer.certificate_expires_at && (
-                        <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+                        <p className="mt-1 text-badge text-[var(--color-foreground-muted)]">
                           {t('federation.connect.expires')}{' '}
                           <CertificateExpiry expiresAt={peer.certificate_expires_at} owner="peer" />
                         </p>
@@ -243,13 +258,13 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
               </CardHeader>
               <CardContent className="space-y-3">
                 {invites.length === 0 && (
-                  <p className="text-sm text-[var(--color-foreground-muted)]">{t('federation.noInvitations')}</p>
+                  <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.noInvitations')}</p>
                 )}
                 {invites.map((invite) => (
                   <div key={invite.id} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border p-4">
                     <div className="min-w-0">
-                      <p className="truncate font-mono text-sm">{invite.id}</p>
-                      <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+                      <p className="truncate font-mono text-caption">{invite.id}</p>
+                      <p className="mt-1 text-badge text-[var(--color-foreground-muted)]">
                         {t('federation.invitationFor', {
                           node: invite.intended_node_id,
                           state: invite.state,
@@ -331,7 +346,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                         </div>
                         <div className="min-w-0">
                           <p className="truncate font-medium">{participant.role}</p>
-                          <p className="truncate text-xs text-[var(--color-foreground-muted)]">
+                          <p className="truncate text-badge text-[var(--color-foreground-muted)]">
                             {principalLabel(participant, t(participant.principal.kind === 'human' ? 'federation.human' : 'federation.agent'))}
                           </p>
                         </div>
@@ -363,7 +378,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                     </div>
                   ))}
                 </div>
-                <p className="mt-4 flex items-start gap-2 text-sm text-[var(--color-foreground-muted)]">
+                <p className="mt-4 flex items-start gap-2 text-caption text-[var(--color-foreground-muted)]">
                   <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
                   {t('federation.rosterNote')}
                 </p>
@@ -371,7 +386,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
             </Card>
           )}
           {snapshotError && (
-            <div role="alert" className="mt-4 flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
+            <div role="alert" className="mt-4 flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-caption text-[var(--color-warning)]">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <div>
                 {t('federation.channelReadFailed', { code: snapshotError.code, status: snapshotError.status })}
@@ -489,7 +504,7 @@ function ChannelSelector({ federation }: { federation: Federation }) {
         </div>
         {bindings.length > 0 && (
           <div className="space-y-2">
-            <p className="text-sm font-medium">{t('federation.bindingsOnNode')}</p>
+            <p className="text-caption font-medium">{t('federation.bindingsOnNode')}</p>
             <div className="grid gap-2 sm:grid-cols-2">
               {bindings.map((binding) => {
                 const active =
@@ -500,14 +515,14 @@ function ChannelSelector({ federation }: { federation: Federation }) {
                     key={`${binding.authority_node_id}:${binding.channel_id}`}
                     type="button"
                     onClick={() => selectBinding(binding)}
-                    className={`flex items-center justify-between gap-2 rounded-[var(--radius-md)] border p-3 text-left text-sm transition-colors ${
+                    className={`flex items-center justify-between gap-2 rounded-[var(--radius-md)] border p-3 text-left text-caption transition-colors ${
                       active ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)]' : 'hover:bg-[var(--color-surface-hover)]'
                     }`}
                   >
-                    <span className="min-w-0 truncate font-mono text-xs">
+                    <span className="min-w-0 truncate font-mono text-badge">
                       {binding.authority_node_id.slice(0, 8)}… / {binding.channel_id.slice(0, 8)}…
                     </span>
-                    <span className="shrink-0 text-xs text-[var(--color-foreground-muted)]">
+                    <span className="shrink-0 text-badge text-[var(--color-foreground-muted)]">
                       {t('federation.sequence', { sequence: binding.applied_seq })}
                     </span>
                   </button>
@@ -517,7 +532,7 @@ function ChannelSelector({ federation }: { federation: Federation }) {
           </div>
         )}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs text-[var(--color-foreground-muted)]">
+          <p className="text-badge text-[var(--color-foreground-muted)]">
             {federation.channelRef
               ? t('federation.selectedChannel', {
                 authority: `${federation.channelRef.authority.slice(0, 8)}…`,

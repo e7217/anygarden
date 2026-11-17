@@ -189,12 +189,12 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
             const current = step === item.step
             return (
               <li key={item.step} aria-current={current ? 'step' : undefined} className="flex min-w-0 flex-1 items-center gap-2 last:flex-none">
-                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${current || done
+                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-badge font-semibold ${current || done
                   ? 'bg-[var(--color-brand)] text-[var(--color-on-brand)]'
                   : 'border border-[var(--color-border-strong)] text-[var(--color-foreground-muted)]'}`}>
                   {done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : item.step}
                 </span>
-                <span className={`truncate text-sm ${current ? 'font-medium text-[var(--color-foreground)]' : 'text-[var(--color-foreground-muted)]'}`}>{item.label}</span>
+                <span className={`truncate text-caption ${current ? 'font-medium text-[var(--color-foreground)]' : 'text-[var(--color-foreground-muted)]'}`}>{item.label}</span>
                 {item.step < 3 && <span aria-hidden="true" className={`hidden h-px min-w-4 flex-1 sm:block ${done ? 'bg-[var(--color-brand)]' : 'bg-[var(--color-border)]'}`} />}
               </li>
             )
@@ -202,7 +202,7 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
         </ol>
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-5 sm:px-6">
           <fieldset hidden={step !== 1} disabled={creating || !!createdAgent} className="min-w-0 space-y-4 disabled:opacity-60">
-            <legend className="text-sm font-semibold">{t('agentSetup.identity')}</legend>
+            <legend className="text-caption font-semibold">{t('agentSetup.identity')}</legend>
             <div className="space-y-2">
               <Label htmlFor="create-agent-name">{t('admin.machines.name')}</Label>
               <Input id="create-agent-name" placeholder={t('admin.machines.agentNamePlaceholder')} value={agentName} onChange={e => setAgentName(e.target.value)} autoFocus required />
@@ -210,7 +210,7 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
             <div className="space-y-2">
               <Label htmlFor="create-agent-description">{t('admin.overview.agentDescription')}</Label>
               <Textarea id="create-agent-description" rows={2} maxLength={200} value={description} onChange={e => setDescription(e.target.value)} className="min-h-20" placeholder={t('admin.overview.descriptionPlaceholder')} aria-describedby="create-agent-description-help" />
-              <div className="flex justify-between gap-4 text-xs text-[var(--color-foreground-muted)]">
+              <div className="flex justify-between gap-4 text-caption text-[var(--color-foreground-muted)]">
                 <p id="create-agent-description-help">{t('admin.overview.descriptionVisibility')}</p><span className="shrink-0">{description.length}/200</span>
               </div>
             </div>
@@ -224,11 +224,11 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
             )}
             <div className="flex gap-3 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3">
               <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-foreground-muted)]" />
-              <div className="space-y-1"><p className="text-sm font-medium">{t('agentSetup.runsOn', { machine: machineName })}</p><p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceHint')}</p></div>
+              <div className="space-y-1"><p className="text-caption font-medium">{t('agentSetup.runsOn', { machine: machineName })}</p><p className="text-caption leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceHint')}</p></div>
             </div>
           </fieldset>
           <fieldset hidden={step !== 2} disabled={creating || !!createdAgent} className="min-w-0 space-y-4 disabled:opacity-60">
-            <legend className="flex items-center gap-2 pr-2 text-sm font-semibold"><Server className="h-4 w-4" />{t('agentSetup.runtime')}</legend>
+            <legend className="flex items-center gap-2 pr-2 text-caption font-semibold"><Server className="h-4 w-4" />{t('agentSetup.runtime')}</legend>
             <div className="space-y-2">
               <Label htmlFor="create-agent-engine">{t('admin.machines.engine')}</Label>
               <Select id="create-agent-engine" value={agentEngine} onChange={e => setAgentEngine(e.target.value)} className={selectCSS}>
@@ -244,18 +244,18 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
                 })}
               </Select>
               {engines.length === 0 && (enginesLoading
-                ? <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
+                ? <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
                 : <EngineSetupHint machineId={machineId} machineName={machineName} onDetected={() => onEnginesDetected?.()} />)}
               {selectedAgentEngineMeta?.deprecated ? (
                 <p
-                  className="text-xs text-[var(--color-warning)]"
+                  className="text-caption text-[var(--color-warning)]"
                   title={selectedAgentEngineMeta.deprecation_note ?? undefined}
                 >
                   {t('admin.machines.deprecatedEngine')}
                 </p>
               ) : null}
               {agentEngineVersionWarning && (
-                <p role="status" className="text-xs text-[var(--color-warning)]">
+                <p role="status" className="text-caption text-[var(--color-warning)]">
                   {agentEngineVersionWarning}
                 </p>
               )}
@@ -280,7 +280,7 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
                   <Label htmlFor="pi-provider">{t('admin.modelConnection.providerId')}</Label>
                   <Input id="pi-provider" value={agentProvider} onChange={e => setAgentProvider(e.target.value)}
                     placeholder={t('admin.machines.providerPlaceholder')} maxLength={64} required aria-invalid={!!agentProvider && !validPiProvider} />
-                  <p className="text-xs text-[var(--color-foreground-muted)]">
+                  <p className="text-caption text-[var(--color-foreground-muted)]">
                     {endpointActive
                       ? t('admin.machines.directProviderHint')
                       : t('admin.machines.providerHint')}
@@ -294,7 +294,7 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
                     {discoveredModels.map(m => <option key={`endpoint-${m.id}`} value={m.id}>{m.max_model_len ? `${m.id} (${m.max_model_len.toLocaleString()} tokens)` : m.id}</option>)}
                     {!endpointActive && agentCatalog?.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </datalist>
-                  {!endpointActive && <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.providerKeyHint')}</p>}
+                  {!endpointActive && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.providerKeyHint')}</p>}
                 </div>
               </>
             )}
@@ -341,7 +341,7 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
 
           </fieldset>
           <fieldset hidden={step !== 3} disabled={creating || !!createdAgent} className="min-w-0 space-y-4 disabled:opacity-60">
-            <legend className="flex items-center gap-2 pr-2 text-sm font-semibold"><Shield className="h-4 w-4" />{t('agentSetup.access')}</legend>
+            <legend className="flex items-center gap-2 pr-2 text-caption font-semibold"><Shield className="h-4 w-4" />{t('agentSetup.access')}</legend>
             <div className="space-y-2">
               <Label htmlFor="create-agent-permission">{t('admin.overview.permissionTier')}</Label>
               <Select id="create-agent-permission" value={permission} onChange={e => setPermission(e.target.value as typeof permission)} className={selectCSS}>
@@ -349,22 +349,22 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
                 <option value="standard">{agentEngine === 'pi-cli' ? t('agentSetup.piStandardPermission') : t('admin.overview.permissionStandard')}</option>
                 <option value="trusted">{t('admin.overview.permissionTrusted')}</option>
               </Select>
-              {permission === 'trusted' && <p className="text-xs text-[var(--color-warning)]">{t('admin.overview.trustedWarning')}</p>}
-              <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.permissionHint')}</p>
-              {agentEngine === 'pi-cli' && <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.piPermissionHint')}</p>}
+              {permission === 'trusted' && <p className="text-caption text-[var(--color-warning)]">{t('admin.overview.trustedWarning')}</p>}
+              <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.permissionHint')}</p>
+              {agentEngine === 'pi-cli' && <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.piPermissionHint')}</p>}
             </div>
             <div className="space-y-2">
-              <p id="create-agent-rooms-label" className="text-sm font-medium">{t('agentSetup.channelsRooms')}</p>
-              {roomsStatus === 'error' ? <div className="flex flex-wrap items-center gap-2"><p role="alert" className="text-sm text-[var(--color-destructive)]">{t('agentSetup.roomsLoadFailed')}</p>{onRetryRooms && <Button variant="outline" size="sm" onClick={() => void onRetryRooms()}>{t('common.retry')}</Button>}</div>
-                : roomsStatus === 'idle' || roomsStatus === 'loading' ? <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('admin.rooms.loading')}</p>
+              <p id="create-agent-rooms-label" className="text-caption font-medium">{t('agentSetup.channelsRooms')}</p>
+              {roomsStatus === 'error' ? <div className="flex flex-wrap items-center gap-2"><p role="alert" className="text-caption text-[var(--color-destructive)]">{t('agentSetup.roomsLoadFailed')}</p>{onRetryRooms && <Button variant="outline" size="sm" onClick={() => void onRetryRooms()}>{t('common.retry')}</Button>}</div>
+                : roomsStatus === 'idle' || roomsStatus === 'loading' ? <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('admin.rooms.loading')}</p>
                   : selectableRooms.length > 0 ? (
                 <div role="group" aria-labelledby="create-agent-rooms-label" className="max-h-48 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
                   {projects.map(project => {
                     const rooms = (roomsByProject[project.id] ?? []).filter(room => !room.is_dm)
                     if (!rooms.length) return null
                     return <div key={project.id} className="py-1">
-                      <p className="px-3 py-2 text-xs font-medium text-[var(--color-foreground-muted)]">{project.name}</p>
-                      {rooms.map(room => <label key={room.id} className="flex min-h-11 cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-[var(--color-surface-alt)] sm:min-h-9">
+                      <p className="px-3 py-2 text-badge font-medium text-[var(--color-foreground-muted)]">{project.name}</p>
+                      {rooms.map(room => <label key={room.id} className="flex min-h-[var(--control-height)] cursor-pointer items-center gap-3 px-3 py-2 text-caption hover:bg-[var(--color-surface-alt)]">
                         <input type="checkbox" className="h-4 w-4 accent-[var(--color-brand)]" checked={agentRooms.has(room.id)} onChange={() => setAgentRooms(previous => {
                           const next = new Set(previous)
                           if (next.has(room.id)) next.delete(room.id); else next.add(room.id)
@@ -375,24 +375,24 @@ export default function CreateAgentDialog({ open, onOpenChange, machineId, machi
                     </div>
                   })}
                 </div>
-              ) : <p className="rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.noRooms')}</p>}
-              <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.roomHint')}</p>
+              ) : <p className="rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.noRooms')}</p>}
+              <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.roomHint')}</p>
             </div>
             <details className="group rounded-[var(--radius-md)] border border-[var(--color-border)]">
-              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-medium sm:min-h-9">
+              <summary className="flex min-h-[var(--control-height)] cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-caption font-medium">
                 {t('agentSetup.instructions')}<ChevronRight className="h-4 w-4 transition-transform group-open:rotate-90" />
               </summary>
               <div className="space-y-2 border-t border-[var(--color-border)] p-3">
                 <Label htmlFor="create-agent-instructions">AGENTS.md</Label>
                 <Textarea id="create-agent-instructions" rows={5} value={instructions} onChange={e => setInstructions(e.target.value)} className="font-mono" placeholder={t('agentSetup.instructionsPlaceholder')} />
-                <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.instructionsHint')}</p>
+                <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.instructionsHint')}</p>
               </div>
             </details>
           </fieldset>
-          {step === 3 && <p className="flex gap-2 text-xs leading-relaxed text-[var(--color-foreground-muted)]"><History className="mt-0.5 h-4 w-4 shrink-0" />{t('agentSetup.afterCreate')}</p>}
+          {step === 3 && <p className="flex gap-2 text-caption leading-relaxed text-[var(--color-foreground-muted)]"><History className="mt-0.5 h-4 w-4 shrink-0" />{t('agentSetup.afterCreate')}</p>}
         </div>
         <DialogFooter className="shrink-0 border-t border-[var(--color-border)] px-4 py-3 sm:px-6">
-          {createError && <p role="alert" className="min-w-0 flex-1 text-sm text-[var(--color-destructive)]">{createError}</p>}
+          {createError && <p role="alert" className="min-w-0 flex-1 text-caption text-[var(--color-destructive)]">{createError}</p>}
           {createdAgent ? <Button disabled={creating} onClick={() => finish(createdAgent)}>{t('agentSetup.openSettings')}</Button> : <>
             {step === 1
               ? <Button variant="outline" disabled={creating} onClick={() => onOpenChange(false)}>{t('common.cancel')}</Button>

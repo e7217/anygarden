@@ -52,10 +52,10 @@ export default function PeerChainStopButton({ chain, onCancel, text, label, desc
         className="gap-1.5 text-[var(--color-foreground-muted)] hover:text-[var(--color-danger)]"
       >
         <Square aria-hidden="true" />
-        <span className="text-caption">{text ?? t('peerChains.stopAll')}</span>
+        <span className="text-caption font-medium">{text ?? t('peerChains.stopAll')}</span>
       </Button>
       {failed && (
-        <span role="alert" className="text-caption text-[var(--color-danger)]">
+        <span role="alert" className="text-caption font-medium text-[var(--color-danger)]">
           {t('peerChains.stopFailed')}
         </span>
       )}

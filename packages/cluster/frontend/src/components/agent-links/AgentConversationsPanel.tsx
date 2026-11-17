@@ -34,11 +34,11 @@ export default function AgentConversationsPanel({ agentId, user }: Props) {
   }
   return <section className="space-y-3" aria-label={t('agentLinks.conversations')}>
     {user?.is_admin && <Button onClick={() => void create()} disabled={creating} className="w-full"><MessageSquarePlus />{creating ? t('agentLinks.conversationCreating') : t('agentLinks.newConversation')}</Button>}
-    {failed && <p role="alert" className="text-caption text-[var(--color-danger)]">{t('agentLinks.conversationCreateFailed')}</p>}
+    {failed && <p role="alert" className="text-caption font-medium text-[var(--color-danger)]">{t('agentLinks.conversationCreateFailed')}</p>}
     <h3 className="text-caption font-semibold">{t('agentLinks.conversations')}</h3>
-    {loading ? <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.conversationLoading')}</p>
-      : errorStatus !== null ? <div className="space-y-2"><p role="alert" className="text-caption text-[var(--color-danger)]">{t('agentLinks.conversationLoadFailed')}</p><Button variant="outline" size="sm" onClick={() => void refresh()}>{t('common.retry')}</Button></div>
-        : rooms.length === 0 ? <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.conversationEmpty')}</p>
-          : <ul className="divide-y divide-[var(--color-border)]">{rooms.map(room => <li key={room.id}><Link className="block break-words rounded-[var(--radius-sm)] px-1 py-3 text-caption text-[var(--color-link)] hover:bg-[var(--color-surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)]" to={`/rooms/${room.id}`}>{room.name}</Link></li>)}</ul>}
+    {loading ? <p role="status" className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('agentLinks.conversationLoading')}</p>
+      : errorStatus !== null ? <div className="space-y-2"><p role="alert" className="text-caption font-medium text-[var(--color-danger)]">{t('agentLinks.conversationLoadFailed')}</p><Button variant="outline" size="sm" onClick={() => void refresh()}>{t('common.retry')}</Button></div>
+        : rooms.length === 0 ? <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('agentLinks.conversationEmpty')}</p>
+          : <ul className="divide-y divide-[var(--color-border)]">{rooms.map(room => <li key={room.id}><Link className="block break-words rounded-[var(--radius-sm)] px-1 py-3 text-caption font-medium text-[var(--color-link)] hover:bg-[var(--color-surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)]" to={`/rooms/${room.id}`}>{room.name}</Link></li>)}</ul>}
   </section>
 }

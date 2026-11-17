@@ -281,7 +281,7 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
           aria-label={t('tasks.open', { name: task.title })}
           title={task.title}
           data-testid={`right-rail-task-open-${task.id}`}
-          className={`flex min-h-[var(--control-icon-size)] min-w-0 flex-1 items-center truncate rounded-[var(--radius-sm)] text-left text-sm focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)] ${
+          className={`flex min-h-[var(--control-icon-size)] min-w-0 flex-1 items-center truncate rounded-[var(--radius-sm)] text-left text-caption focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)] ${
             task.status === 'done'
               ? 'line-through text-[var(--color-foreground-muted)]'
               : task.status === 'failed'
@@ -293,14 +293,14 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
         </button>
         {/* Touch rows show the picker on its own line, so the time sits
             beside the title instead of behind the picker. */}
-        {!readOnly && meta && <span className={`shrink-0 pr-1 text-xs md:pointer-fine:hidden ${meta.tone}`}>{meta.text}</span>}
+        {!readOnly && meta && <span className={`shrink-0 pr-1 text-badge md:pointer-fine:hidden ${meta.tone}`}>{meta.text}</span>}
         {/* Keep the native picker usable on touch; desktop hover replaces
             the assignee label, and the delete action covers the label's
             tail only while hovered, so no width is held back for it. */}
-        {readOnly ? <span data-testid={`right-rail-task-owner-${task.id}`} className={`max-w-[8rem] shrink-0 truncate pr-1 text-xs ${meta?.tone ?? 'text-[var(--color-foreground-muted)]'}`} title={meta ? `${meta.text} · ${assigneeName}` : assigneeName}>{meta?.text ?? assigneeName}</span> : <div className={`relative ml-[calc(var(--control-icon-size)+.25rem)] flex h-[var(--control-sm-height)] w-[calc(100%-var(--control-icon-size)-.25rem)] min-w-0 items-center md:pointer-fine:ml-0 md:pointer-fine:w-auto md:pointer-fine:min-w-[5rem] md:pointer-fine:max-w-[8rem] md:pointer-fine:flex-[0_1_auto] md:pointer-fine:pr-0 ${task.source_message_id ? '' : 'pr-[calc(var(--control-icon-size)+.25rem)]'}`}>
+        {readOnly ? <span data-testid={`right-rail-task-owner-${task.id}`} className={`max-w-[8rem] shrink-0 truncate pr-1 text-badge ${meta?.tone ?? 'text-[var(--color-foreground-muted)]'}`} title={meta ? `${meta.text} · ${assigneeName}` : assigneeName}>{meta?.text ?? assigneeName}</span> : <div className={`relative ml-[calc(var(--control-icon-size)+.25rem)] flex h-[var(--control-sm-height)] w-[calc(100%-var(--control-icon-size)-.25rem)] min-w-0 items-center md:pointer-fine:ml-0 md:pointer-fine:w-auto md:pointer-fine:min-w-[5rem] md:pointer-fine:max-w-[8rem] md:pointer-fine:flex-[0_1_auto] md:pointer-fine:pr-0 ${task.source_message_id ? '' : 'pr-[calc(var(--control-icon-size)+.25rem)]'}`}>
           <span
             data-testid={`right-rail-task-meta-${task.id}`}
-            className={`invisible block w-full min-w-0 max-w-full truncate pr-1 text-right text-xs md:pointer-fine:visible md:pointer-fine:group-hover:invisible md:pointer-fine:group-focus-within:invisible ${meta?.tone ?? 'text-[var(--color-foreground-subtle)]'}`}
+            className={`invisible block w-full min-w-0 max-w-full truncate pr-1 text-right text-badge md:pointer-fine:visible md:pointer-fine:group-hover:invisible md:pointer-fine:group-focus-within:invisible ${meta?.tone ?? 'text-[var(--color-foreground-subtle)]'}`}
             title={meta ? `${meta.text} · ${assigneeName}` : assigneeName}
           >
             {meta?.text ?? assignee?.display_name ?? t('tasks.unassigned')}
@@ -309,7 +309,7 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
             value={task.assignee_participant_id ?? ''}
             onChange={(e) => reassign(task, e.target.value)}
             onClick={(e) => e.stopPropagation()}
-            className={`absolute inset-y-0 left-0 h-[var(--control-sm-height)] min-w-0 max-w-full truncate px-1 text-base opacity-100 transition-opacity md:pointer-fine:text-xs md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100 ${task.source_message_id ? 'w-full' : 'w-[calc(100%-var(--control-icon-size)-.25rem)]'}`}
+            className={`absolute inset-y-0 left-0 h-[var(--control-sm-height)] min-w-0 max-w-full truncate px-1 text-body opacity-100 transition-opacity md:pointer-fine:text-badge md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100 ${task.source_message_id ? 'w-full' : 'w-[calc(100%-var(--control-icon-size)-.25rem)]'}`}
             aria-label={t('tasks.reassign', { name: task.title })}
             data-testid={`right-rail-task-assignee-${task.id}`}
           >
@@ -340,11 +340,11 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
   return (
     <section className="flex min-w-0 flex-col">
       <header className="flex items-baseline justify-between px-3 py-2">
-        <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+        <h3 className="text-caption font-semibold text-[var(--color-foreground)]">
           {t('chat.tasks')}
         </h3>
         <div className="flex items-center gap-1.5">
-          <span className="text-xs text-[var(--color-foreground-subtle)]">
+          <span className="text-badge text-[var(--color-foreground-subtle)]">
             {tasks.length}
           </span>
           {/* #313 — Auto-route via room representative. Disabled
@@ -375,7 +375,7 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
       </header>
       {routeMessage && (
         <p
-          className="break-words px-3 pb-1 text-xs text-[var(--color-foreground-muted)]"
+          className="break-words px-3 pb-1 text-badge text-[var(--color-foreground-muted)]"
           role="status"
           data-testid="right-rail-route-toast"
         >
@@ -383,8 +383,8 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
         </p>
       )}
       <div className="min-w-0 px-1 pb-1">
-        {error && <p className="px-3 py-2 text-xs text-[var(--color-danger)]" role="alert">{error.match(/HTTP (\d+)/) ? t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '' }) : error}</p>}
-        {loading && <p className="px-3 py-2 text-xs text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
+        {error && <p className="px-3 py-2 text-caption text-[var(--color-danger)]" role="alert">{error.match(/HTTP (\d+)/) ? t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '' }) : error}</p>}
+        {loading && <p className="px-3 py-2 text-badge text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
         {!loading && !error && tasks.length === 0 && (
           <div className="px-3 py-4 text-center text-caption font-normal text-[var(--color-foreground-subtle)]">
             {t('tasks.empty')}
@@ -395,7 +395,7 @@ export default function TasksSection({ roomId, participants, onNavigate }: Tasks
           {recentResults.map(renderRow)}
         </div>}
         {remainingHistory.length > 0 && <details className="min-w-0" data-testid="right-rail-task-history">
-          <summary className="min-h-11 cursor-pointer content-center px-2 text-sm text-[var(--color-brand-text)] md:pointer-fine:min-h-8">{t('contextRail.history')} ({remainingHistory.length})</summary>
+          <summary className="min-h-[var(--control-sm-height)] cursor-pointer content-center px-2 text-caption text-[var(--color-brand-text)]">{t('contextRail.history')} ({remainingHistory.length})</summary>
           {remainingHistory.map(renderRow)}
         </details>}
       </div>

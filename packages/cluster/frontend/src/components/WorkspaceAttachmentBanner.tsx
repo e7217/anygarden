@@ -20,7 +20,7 @@ export default function WorkspaceAttachmentBanner({
     <div
       role="status"
       aria-label={t('chat.workspaceActive')}
-      className="flex items-start gap-2 border-b border-[color:color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-soft)] px-4 py-2 text-xs text-[var(--color-foreground)]"
+      className="flex items-start gap-2 border-b border-[color:color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-soft)] px-4 py-2 text-badge text-[var(--color-foreground)]"
     >
       <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
       <div className="min-w-0">

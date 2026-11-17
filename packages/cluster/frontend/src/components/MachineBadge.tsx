@@ -32,7 +32,7 @@ export default function MachineBadge({ placement, online, className }: MachineBa
       // Shrinks before the agent name (shrink-[4]) down to the icon, so a long
       // machine name never pushes the agent name out of a narrow sidebar.
       className={cn(
-        'inline-flex min-w-[1.75rem] max-w-[7rem] shrink-[4] items-center gap-1 rounded-[var(--radius-pill)] bg-[var(--color-surface-hover)] px-1.5 text-badge',
+        'inline-flex min-w-[1.75rem] max-w-[7rem] shrink-[4] items-center gap-1 rounded-[var(--radius-pill)] bg-[var(--color-surface-hover)] px-1.5 text-badge font-semibold',
         online
           ? 'text-[var(--color-foreground-muted)]'
           : 'text-[var(--color-foreground-subtle)] opacity-70',

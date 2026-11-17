@@ -47,7 +47,7 @@ function NodeStatus({ name, reachability }: { name: string; reachability: NodeRe
   const { t } = useLocale()
   const online = reachability === 'online'
   return (
-    <span className="inline-flex items-center gap-2 text-sm text-[var(--color-foreground-muted)]">
+    <span className="inline-flex items-center gap-2 text-caption text-[var(--color-foreground-muted)]">
       <StatusDot online={online} />
       {t('federation.mock.nodeStatus', { name, status: t(online ? 'common.online' : 'common.offline') })}
     </span>
@@ -257,20 +257,20 @@ export default function FederationWorkspace({
     <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
       <div
         role="status"
-        className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-brand)]/20 bg-[var(--color-brand-tint-bg)] px-4 py-3 text-sm text-[var(--color-brand-tint-text)]"
+        className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-3 text-caption text-[var(--color-foreground-muted)]"
       >
         <CircleDashed className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <div>
-          <span className="font-semibold">{t('federation.previewNotice')}</span>
+          <span className="font-semibold text-[var(--color-foreground)]">{t('federation.previewNotice')}</span>
           <span className="ml-2">{t('federation.previewNoticeBody')}</span>
         </div>
       </div>
 
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.previewEyebrow')}</p>
+          <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('federation.previewEyebrow')}</p>
           <h1 className="mt-1 text-heading">{t('federation.title')}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-[var(--color-foreground-muted)]">
+          <p className="mt-2 max-w-2xl text-caption text-[var(--color-foreground-muted)]">
             {t('federation.description')}
           </p>
         </div>
@@ -288,7 +288,7 @@ export default function FederationWorkspace({
         <Card className={!ownerOnline ? 'border-[var(--color-warning)]' : ''}>
           <CardContent className="flex items-center justify-between gap-4 p-4">
             <div className="min-w-0">
-              <p className="text-badge text-[var(--color-foreground-subtle)]">{t('federation.mock.owner')}</p>
+              <p className="text-badge font-semibold text-[var(--color-foreground-subtle)]">{t('federation.mock.owner')}</p>
               <NodeStatus name={scenario.localNode.name} reachability={scenario.localNode.reachability} />
             </div>
             <ShieldCheck className="size-5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
@@ -297,7 +297,7 @@ export default function FederationWorkspace({
         <Card className={!executorOnline ? 'border-[var(--color-warning)]' : ''}>
           <CardContent className="flex items-center justify-between gap-4 p-4">
             <div className="min-w-0">
-              <p className="text-badge text-[var(--color-foreground-subtle)]">{t('federation.mock.executor')}</p>
+              <p className="text-badge font-semibold text-[var(--color-foreground-subtle)]">{t('federation.mock.executor')}</p>
               <NodeStatus name={scenario.remoteNode.name} reachability={scenario.remoteNode.reachability} />
             </div>
             <Server className="size-5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
@@ -306,13 +306,13 @@ export default function FederationWorkspace({
       </div>
 
       {!ownerOnline && (
-        <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
+        <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-caption text-[var(--color-warning)]">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <div><strong>{t('federation.mock.ownerOfflineTitle')}</strong> {t('federation.mock.ownerOfflineBody')}</div>
         </div>
       )}
       {ownerOnline && !executorOnline && (
-        <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
+        <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-caption text-[var(--color-warning)]">
           <Unplug className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <div><strong>{t('federation.mock.executorOfflineTitle')}</strong> {t('federation.mock.executorOfflineBody')}</div>
         </div>
@@ -344,10 +344,10 @@ export default function FederationWorkspace({
                   <div className="flex size-10 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-elevated)] shadow-whisper"><Server className="size-5" aria-hidden="true" /></div>
                   <div className="min-w-0">
                     <p className="font-semibold">{scenario.remoteNode.name}</p>
-                    <p className="truncate text-sm text-[var(--color-foreground-muted)]">{t('federation.mock.nodeId', { id: scenario.remoteNode.id })}</p>
+                    <p className="truncate text-caption text-[var(--color-foreground-muted)]">{t('federation.mock.nodeId', { id: scenario.remoteNode.id })}</p>
                   </div>
                 </div>
-                <div className="grid gap-3 text-sm sm:grid-cols-2">
+                <div className="grid gap-3 text-caption sm:grid-cols-2">
                   <div className="rounded-[var(--radius-md)] border p-3"><strong className="block">{t('federation.mock.requestedScope')}</strong><span className="text-[var(--color-foreground-muted)]">{t('federation.mock.requestedScopeBody')}</span></div>
                   <div className="rounded-[var(--radius-md)] border p-3"><strong className="block">{t('federation.mock.notShared')}</strong><span className="text-[var(--color-foreground-muted)]">{t('federation.mock.notSharedBody')}</span></div>
                 </div>
@@ -364,7 +364,7 @@ export default function FederationWorkspace({
                 <CardTitle className="text-lead">{t('federation.mock.acceptanceMeans')}</CardTitle>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-4 text-sm">
+                <ul className="space-y-4 text-caption">
                   {[
                     [t('federation.mock.sharedChannelOnly'), t('federation.mock.sharedChannelOnlyBody')],
                     [t('federation.mock.twoPartPermission'), t('federation.mock.twoPartPermissionBody')],
@@ -394,17 +394,17 @@ export default function FederationWorkspace({
                     <div key={`${agent.nodeId}:${agent.id}`} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border p-4">
                       <div className="flex min-w-0 items-center gap-3">
                         <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)]"><UserRound className="size-4" aria-hidden="true" /></div>
-                        <div className="min-w-0"><p className="truncate font-medium">{agent.name}</p><p className="truncate text-xs text-[var(--color-foreground-muted)]">{agent.nodeId} · {agent.id}</p></div>
+                        <div className="min-w-0"><p className="truncate font-medium">{agent.name}</p><p className="truncate text-badge text-[var(--color-foreground-muted)]">{agent.nodeId} · {agent.id}</p></div>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         <Badge variant={agent.origin === 'local' ? 'secondary' : 'default'}>{agent.origin === 'local' ? t('federation.mock.local') : t('federation.mock.remoteRole', { role: agent.participant.role })}</Badge>
-                        <span className="text-badge text-[var(--color-foreground-subtle)]">{t(agent.executionAllowed ? 'federation.mock.executionAllowed' : 'federation.mock.noExecution')}</span>
+                        <span className="text-badge font-semibold text-[var(--color-foreground-subtle)]">{t(agent.executionAllowed ? 'federation.mock.executionAllowed' : 'federation.mock.noExecution')}</span>
                       </div>
                     </div>
                   ))}
               </div>
               {remoteConnected && remoteBuilder && (
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 text-sm">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 text-caption">
                   <p className="text-[var(--color-foreground-muted)]">
                     {t('federation.mock.participantRevision', {
                       revision: remoteBuilder.participant.revision,
@@ -416,7 +416,7 @@ export default function FederationWorkspace({
                     : <Button size="sm" variant="outline" onClick={replayStaleParticipantAdd}>{t('federation.mock.replayStale')}</Button>}
                 </div>
               )}
-              <p className="mt-4 flex items-start gap-2 text-sm text-[var(--color-foreground-muted)]"><ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />{t('federation.mock.rosterVisibility')}</p>
+              <p className="mt-4 flex items-start gap-2 text-caption text-[var(--color-foreground-muted)]"><ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />{t('federation.mock.rosterVisibility')}</p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -435,31 +435,31 @@ export default function FederationWorkspace({
                     return (
                       <li key={item.state} className="grid grid-cols-[28px_1fr] gap-3">
                         <div className="flex flex-col items-center"><span className={`mt-1 flex size-6 items-center justify-center rounded-full border ${complete ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-[var(--color-on-brand)]' : 'bg-[var(--color-surface-elevated)] text-[var(--color-foreground-subtle)]'}`}>{complete ? <Check className="size-3.5" aria-hidden="true" /> : index + 1}</span>{index < timeline.length - 1 && <span className="min-h-8 w-px flex-1 bg-[var(--color-border)]" />}</div>
-                        <div className="pb-5"><p className={active ? 'font-semibold text-[var(--color-foreground)]' : 'font-medium'}>{t(item.title)}</p><p className="text-sm text-[var(--color-foreground-muted)]">{t(item.detail)}</p></div>
+                        <div className="pb-5"><p className={active ? 'font-semibold text-[var(--color-foreground)]' : 'font-medium'}>{t(item.title)}</p><p className="text-caption text-[var(--color-foreground-muted)]">{t(item.detail)}</p></div>
                       </li>
                     )
                   })}
                 </ol>
                 {(scenario.delegationState === 'cancel_requested' || scenario.delegationState === 'cancelled') && (
-                  <div role="status" className="mt-2 rounded-[var(--radius-md)] border bg-[var(--color-surface-alt)] p-4 text-sm">
+                  <div role="status" className="mt-2 rounded-[var(--radius-md)] border bg-[var(--color-surface-alt)] p-4 text-caption">
                     <strong>{t(scenario.delegationState === 'cancel_requested' ? 'federation.mock.stopNotConfirmed' : 'federation.mock.stopConfirmed')}</strong>
                     <p className="mt-1 text-[var(--color-foreground-muted)]">{t('federation.mock.lateResult')}</p>
                   </div>
                 )}
                 {scenario.delegationState === 'unknown' && (
-                  <div role="alert" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
+                  <div role="alert" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-caption text-[var(--color-warning)]">
                     <strong>{t('federation.mock.sideEffects')}</strong>
                     <p className="mt-1">{t('federation.mock.checkExecutor')}</p>
                   </div>
                 )}
                 {scenario.delegationState === 'unconfirmed' && (
-                  <div role="status" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
+                  <div role="status" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-caption text-[var(--color-warning)]">
                     <strong>{t('federation.mock.localRequestOnly')}</strong>
                     <p className="mt-1">{t('federation.mock.unconfirmedRequest')}</p>
                   </div>
                 )}
                 {scenario.delegationState === 'failed' && (
-                  <div role="alert" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] p-4 text-sm text-[var(--color-danger)]">
+                  <div role="alert" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] p-4 text-caption text-[var(--color-danger)]">
                     <strong>{t('federation.mock.knownFailure')}</strong>
                     <p className="mt-1">{t('federation.mock.knownFailureBody')}</p>
                   </div>
@@ -469,7 +469,7 @@ export default function FederationWorkspace({
             <Card>
               <CardHeader><CardTitle className="text-lead">{t('federation.mock.availableAction')}</CardTitle><CardDescription>{t('federation.mock.actionsDescription')}</CardDescription></CardHeader>
               <CardContent className="space-y-4">
-                <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-4 text-sm">
+                <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-4 text-caption">
                   <p className="font-medium">{t(delegationStateKeys[scenario.delegationState])}</p>
                   <p className="mt-1 text-[var(--color-foreground-muted)]">{t('federation.mock.taskProcess', { task: scenario.taskStatus.replace('_', ' '), process: scenario.processState.replace('_', ' ') })} {t(!remoteConnected ? 'federation.mock.needInvitation' : !remoteBuilder?.participant.active ? 'federation.mock.builderInactive' : !remoteBuilder.executionAllowed ? 'federation.mock.builderNoPermission' : !ownerOnline ? 'federation.mock.waitOwner' : !executorOnline ? 'federation.mock.waitExecutor' : 'federation.mock.bothReachable')}</p>
                 </div>
@@ -481,7 +481,7 @@ export default function FederationWorkspace({
                 {(scenario.delegationState === 'accepted' || scenario.delegationState === 'running') && !executorOnline && <Button className="w-full" variant="outline" onClick={markUnknown}>{t('federation.mock.previewUnknown')}</Button>}
                 {scenario.delegationState === 'cancel_requested' && <Button className="w-full" variant="destructive" disabled={!executorOnline} onClick={confirmStop}>{t('federation.mock.previewStopConfirm')}</Button>}
                 {(scenario.delegationState === 'completed' || scenario.delegationState === 'failed' || scenario.delegationState === 'cancelled' || scenario.delegationState === 'rejected' || scenario.delegationState === 'unknown') && <Button className="w-full" variant="secondary" disabled>{t(scenario.delegationState === 'completed' ? 'federation.mock.taskComplete' : scenario.delegationState === 'failed' ? 'federation.mock.taskFailed' : scenario.delegationState === 'rejected' ? 'federation.mock.requestDeclined' : scenario.delegationState === 'unknown' ? 'federation.mock.retryBlocked' : 'federation.mock.taskCancelled')}</Button>}
-                <div className="flex items-start gap-2 text-xs text-[var(--color-foreground-muted)]"><Radio className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{t('federation.mock.noTransport')}</div>
+                <div className="flex items-start gap-2 text-badge text-[var(--color-foreground-muted)]"><Radio className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{t('federation.mock.noTransport')}</div>
               </CardContent>
             </Card>
           </div>
@@ -489,7 +489,7 @@ export default function FederationWorkspace({
       </Tabs>
 
       <p className="sr-only" aria-live="polite">{announcement}</p>
-      <footer className="flex items-center gap-2 border-t pt-4 text-xs text-[var(--color-foreground-subtle)]"><MapPin className="size-3.5" aria-hidden="true" />{t('federation.mock.footer')}</footer>
+      <footer className="flex items-center gap-2 border-t pt-4 text-badge text-[var(--color-foreground-subtle)]"><MapPin className="size-3.5" aria-hidden="true" />{t('federation.mock.footer')}</footer>
     </div>
   )
 }
