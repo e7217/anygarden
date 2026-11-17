@@ -43,19 +43,19 @@ export default function TaskRecoveryState({ recovery, taskId, inputRevision, cla
     : recovery.state === 'completed' && !(recovery.retry_count ?? 0)
       ? 'taskRecovery.processingCompleted'
       : `taskRecovery.state.${recovery.state}`
-  return <div data-testid={`task-recovery-${taskId}`} data-recovery-state={recovery.state} className={`min-w-0 space-y-2 border-l-2 border-[var(--color-border)] pl-2 text-sm [overflow-wrap:anywhere] ${className}`}>
+  return <div data-testid={`task-recovery-${taskId}`} data-recovery-state={recovery.state} className={`min-w-0 space-y-2 border-l-2 border-[var(--color-border)] pl-2 text-caption [overflow-wrap:anywhere] ${className}`}>
     <p className={`font-medium ${needsAttention ? 'text-[var(--color-warning)]' : 'text-[var(--color-foreground)]'}`}>{t(stateLabel)}</p>
     {recovery.reason_code && <p>{reason(recovery.reason_code)}</p>}
     {recovery.next_action && recovery.next_action !== 'none' && <p className="text-[var(--color-foreground-muted)]">{t(`taskRecovery.action.${recovery.next_action}`)}</p>}
     {recovery.state === 'retry_wait' && nextRetry && <p>{t('taskRecovery.nextRetry')}: <time dateTime={nextRetry}>{formatDate(new Date(nextRetry), { dateStyle: 'medium', timeStyle: 'short' })}</time></p>}
-    {retry.canRetry && <Button type="button" variant="outline" className="min-h-11 h-auto max-w-full whitespace-normal text-left" data-testid={`task-retry-${taskId}`} disabled={retry.sending || retry.accepted} onClick={() => { void retry.submit() }}>{retry.sending ? t('common.loading') : retry.accepted ? t('taskRecovery.retryAccepted') : t('taskRecovery.retrySameTask')}</Button>}
+    {retry.canRetry && <Button type="button" variant="outline" className="min-h-[var(--control-height)] h-auto max-w-full whitespace-normal text-left" data-testid={`task-retry-${taskId}`} disabled={retry.sending || retry.accepted} onClick={() => { void retry.submit() }}>{retry.sending ? t('common.loading') : retry.accepted ? t('taskRecovery.retryAccepted') : t('taskRecovery.retrySameTask')}</Button>}
     {retry.error && <p role="alert" className="whitespace-pre-wrap text-[var(--color-danger)]">{retry.error}</p>}
     {!hideHistory && attempts.length > 0 && <details data-testid={`task-recovery-history-${taskId}`}>
-      <summary className="min-h-11 cursor-pointer content-center text-xs font-medium md:min-h-8">{t('taskRecovery.history')}{recovery.attempt_count != null && recovery.attempt_count > 0 && <> · {t('taskRecovery.attemptCount', { count: recovery.attempt_count })}</>}</summary>
+      <summary className="min-h-[var(--control-sm-height)] cursor-pointer content-center text-badge font-medium">{t('taskRecovery.history')}{recovery.attempt_count != null && recovery.attempt_count > 0 && <> · {t('taskRecovery.attemptCount', { count: recovery.attempt_count })}</>}</summary>
       <div className="space-y-2 pt-1">
-        <p className="text-xs text-[var(--color-foreground-muted)]">{t('taskRecovery.historyMeaning')}</p>
-        {recovery.max_retries != null && <p className="text-xs text-[var(--color-foreground-muted)]">{t('taskRecovery.retryLimit', { count: recovery.max_retries })}</p>}
-        {attempts.map(attempt => <div key={attempt.ordinal} className="space-y-1 border-l-2 border-[var(--color-border)] pl-2 text-xs">
+        <p className="text-badge text-[var(--color-foreground-muted)]">{t('taskRecovery.historyMeaning')}</p>
+        {recovery.max_retries != null && <p className="text-badge text-[var(--color-foreground-muted)]">{t('taskRecovery.retryLimit', { count: recovery.max_retries })}</p>}
+        {attempts.map(attempt => <div key={attempt.ordinal} className="space-y-1 border-l-2 border-[var(--color-border)] pl-2 text-badge">
           <p className="font-medium">{t('taskRecovery.attempt', { count: attempt.ordinal })} · {t(OUTCOMES[attempt.outcome ?? attempt.state] ?? 'taskRecovery.outcome.unknown')}</p>
           {attempt.reason_code && <p>{reason(attempt.reason_code)}</p>}
           {attempt.started_at && !Number.isNaN(Date.parse(attempt.started_at)) && <p>{t('taskRecovery.started')}: <time dateTime={attempt.started_at}>{formatDate(new Date(attempt.started_at), { dateStyle: 'medium', timeStyle: 'short' })}</time></p>}

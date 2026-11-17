@@ -135,17 +135,17 @@ export default function WorkspacePanel({ agentId, onNavigateAway }: { agentId: s
     <ManagedWorkspacePanel agentId={agentId} />
     <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">{t('agentSetup.externalWorkspaces')}</h3>
+        <h3 className="text-caption font-medium">{t('agentSetup.externalWorkspaces')}</h3>
         <Button variant="ghost" size="sm" disabled={loading || Boolean(busy)} onClick={() => setRevision(value => value + 1)}><RefreshCw className={loading ? 'animate-spin' : ''} />{t('common.refresh')}</Button>
       </div>
-      <p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.externalWorkspaceHint')}</p>
-      {loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceLoading')}</p>}
-      {failed && <p role="alert" className="text-sm text-[var(--color-destructive)]">{t('agentSetup.workspaceLoadFailed')}</p>}
-      {partial && <p role="alert" className="text-xs text-[var(--color-warning)]">{t('agentSetup.workspacePartialLoad')}</p>}
-      {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
-      {notice && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{notice}</p>}
+      <p className="text-caption leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.externalWorkspaceHint')}</p>
+      {loading && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceLoading')}</p>}
+      {failed && <p role="alert" className="text-caption text-[var(--color-destructive)]">{t('agentSetup.workspaceLoadFailed')}</p>}
+      {partial && <p role="alert" className="text-caption text-[var(--color-warning)]">{t('agentSetup.workspacePartialLoad')}</p>}
+      {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
+      {notice && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{notice}</p>}
       {!loading && !failed && <>
-        {attachments.length === 0 && <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.noWorkspaces')}</p>}
+        {attachments.length === 0 && <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.noWorkspaces')}</p>}
         {attachments.map(attachment => {
           const room = rooms.find(scope => scope.id === attachment.room_id)
           const base = `/api/v1/rooms/${attachment.room_id}/workspace-attachments/${attachment.id}`
@@ -156,14 +156,14 @@ export default function WorkspacePanel({ agentId, onNavigateAway }: { agentId: s
           const canVerify = support?.machine_id === attachment.machine_id && support?.[attachment.mode].supported === true
           const localCommand = `${workspaceCliPrefix(support?.execution_kind ?? null, support?.node_data_dir)} consent ${shellQuote(attachment.workspace_id)} \\\n  --agent-id ${shellQuote(attachment.agent_id)} \\\n  --room-id ${shellQuote(attachment.room_id)} --mode ${attachment.mode}`
           return <section key={attachment.id} className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2"><span className="break-words text-sm font-medium">{attachment.workspace_label}</span><span className="text-xs text-[var(--color-foreground-muted)]">{expired && liveStates.has(attachment.state) ? t('agentSetup.workspaceStatus.expired') : stateLabels[attachment.state] ?? attachment.state} · {attachment.mode === 'write' ? t('agentSetup.workspaceWrite') : t('agentSetup.workspaceRead')}</span></div>
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--color-foreground-muted)]">
+            <div className="flex flex-wrap items-center justify-between gap-2"><span className="break-words text-caption font-medium">{attachment.workspace_label}</span><span className="text-badge text-[var(--color-foreground-muted)]">{expired && liveStates.has(attachment.state) ? t('agentSetup.workspaceStatus.expired') : stateLabels[attachment.state] ?? attachment.state} · {attachment.mode === 'write' ? t('agentSetup.workspaceWrite') : t('agentSetup.workspaceRead')}</span></div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-badge text-[var(--color-foreground-muted)]">
               <span>{t('agentSetup.workspaceExpires', { date: formatDate(new Date(attachment.expires_at), { dateStyle: 'short', timeStyle: 'short' }) })}</span>
               <Link to={`/rooms/${attachment.room_id}`} onClick={onNavigateAway} className="inline-flex min-h-[var(--control-sm-height)] items-center gap-1 rounded px-1 text-[var(--color-brand-text)] hover:underline" aria-label={`${t('agentSetup.workspaceRoom')}: ${attachment.roomName}`}>{attachment.roomName}<ExternalLink className="h-3 w-3" /></Link>
             </div>
-            {attachment.failure_code && <p className="break-all text-xs text-[var(--color-destructive)]">{workspaceSupportMessage(attachment.failure_code, t)}</p>}
+            {attachment.failure_code && <p className="break-all text-caption text-[var(--color-destructive)]">{workspaceSupportMessage(attachment.failure_code, t)}</p>}
             {requested && !expired && <>
-              <div className="grid gap-2 text-xs sm:grid-cols-2">
+              <div className="grid gap-2 text-badge sm:grid-cols-2">
                 <p>{t('agentSetup.workspaceRoomApproval')}: {attachment.room_approved_by_user_id ? t('agentSetup.workspaceApprovalDone') : t('agentSetup.workspaceApprovalPending')}</p>
                 <p>{t('agentSetup.workspaceGlobalApproval')}: {attachment.global_approved_by_user_id ? t('agentSetup.workspaceApprovalDone') : t('agentSetup.workspaceApprovalPending')}</p>
               </div>
@@ -171,11 +171,11 @@ export default function WorkspacePanel({ agentId, onNavigateAway }: { agentId: s
                 {!attachment.room_approved_by_user_id && room?.canApprove && <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => void action(attachment.id, `${base}/approve-room`)}>{t('agentSetup.workspaceApproveRoom')}</Button>}
                 {!attachment.global_approved_by_user_id && viewer?.is_admin && <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => void action(attachment.id, `${base}/approve-global`)}>{t('agentSetup.workspaceApproveGlobal')}</Button>}
               </div>
-              {approved && viewer?.is_admin && !canVerify && <p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]">{workspaceSupportMessage(support?.[attachment.mode].reason, t)}</p>}
+              {approved && viewer?.is_admin && !canVerify && <p className="text-caption leading-relaxed text-[var(--color-foreground-muted)]">{workspaceSupportMessage(support?.[attachment.mode].reason, t)}</p>}
               {approved && viewer?.is_admin && canVerify && <div className="space-y-2 border-t border-[var(--color-border)] pt-3">
-                <p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceConsentHint')}</p>
-                {support?.execution_kind === 'integrated' && <p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNodeRegistryHint')}</p>}
-                <pre className="overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-3 text-xs"><code>{localCommand}</code></pre>
+                <p className="text-caption leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceConsentHint')}</p>
+                {support?.execution_kind === 'integrated' && <p className="text-caption leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNodeRegistryHint')}</p>}
+                <pre className="overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-3 text-badge"><code>{localCommand}</code></pre>
                 <Label htmlFor={`workspace-proof-${attachment.id}`}>{t('agentSetup.workspaceConsent')}</Label>
                 <Input id={`workspace-proof-${attachment.id}`} type="password" autoComplete="off" placeholder="wcp_…" value={proofs[attachment.id] ?? ''} onChange={event => setProofs(previous => ({ ...previous, [attachment.id]: event.target.value }))} />
                 <Button size="sm" disabled={Boolean(busy) || !/^wcp_[0-9a-f]{64}$/.test(proofs[attachment.id] ?? '')} onClick={async () => {
@@ -191,17 +191,17 @@ export default function WorkspacePanel({ agentId, onNavigateAway }: { agentId: s
             }}>{t('agentSetup.workspaceRevoke')}</Button>}
           </section>
         })}
-        {!placed ? <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNotPlaced')}</p>
-          : hasConnection ? <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceExisting')}</p>
-            : eligibleRooms.length === 0 ? <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNoEligibleRooms')}</p>
-            : !canRead && !canWrite && !formOpen ? <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-foreground-muted)]"><p>{workspaceSupportMessage(currentOptions?.read.reason, t)}</p><p className="text-xs">{t('agentSetup.workspaceWriteUnavailable')}</p></div>
+        {!placed ? <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNotPlaced')}</p>
+          : hasConnection ? <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceExisting')}</p>
+            : eligibleRooms.length === 0 ? <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNoEligibleRooms')}</p>
+            : !canRead && !canWrite && !formOpen ? <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-caption text-[var(--color-foreground-muted)]"><p>{workspaceSupportMessage(currentOptions?.read.reason, t)}</p><p className="text-badge">{t('agentSetup.workspaceWriteUnavailable')}</p></div>
             : <>
               <Button variant="outline" size="sm" disabled={partial} aria-expanded={formOpen} onClick={() => { setFormOpen(!formOpen); setRoomId(eligibleRooms[0]?.id ?? ''); setWorkspaceId(catalog[0]?.workspace_id ?? ''); setMode('read') }}><Plus />{t('agentSetup.workspaceConnect')}</Button>
               {formOpen && <div className="space-y-4 rounded-[var(--radius-md)] border border-[var(--color-border)] p-4">
-                <p className="text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceRequestHint')}</p>
-                {eligibleRooms.length === 0 && <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNoEligibleRooms')}</p>}
+                <p className="text-caption leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceRequestHint')}</p>
+                {eligibleRooms.length === 0 && <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNoEligibleRooms')}</p>}
                 <div className="space-y-2"><Label htmlFor="workspace-room">{t('agentSetup.workspaceSelectRoom')}</Label><Select id="workspace-room" value={roomId} onChange={event => { setRoomId(event.target.value); setWorkspaceId(options[event.target.value]?.workspaces[0]?.workspace_id ?? ''); setMode('read') }}>{eligibleRooms.map(room => <option key={room.id} value={room.id}>{room.name}</option>)}</Select></div>
-                {!canRead && !canWrite ? <p role="alert" className="text-sm text-[var(--color-foreground-muted)]">{workspaceSupportMessage(currentOptions?.read.reason, t)}</p> : catalog.length === 0 ? <div className="space-y-2"><p className="text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNoCatalog')}</p><details className="text-xs"><summary className="cursor-pointer py-2 font-medium">{t('agentSetup.workspaceLocalRegistration')}</summary><p className="mb-2 leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceRegistrationHint')}</p>{currentOptions?.execution_kind === 'integrated' && <p className="mb-2 leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNodeRegistryHint')}</p>}<pre className="overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-3"><code>{`${workspaceCliPrefix(currentOptions?.execution_kind ?? null, currentOptions?.node_data_dir)} register /path/to/project \\\n  --label project --max-mode read --allow src\n${workspaceCliPrefix(currentOptions?.execution_kind ?? null, currentOptions?.node_data_dir)} list`}</code></pre></details></div>
+                {!canRead && !canWrite ? <p role="alert" className="text-caption text-[var(--color-foreground-muted)]">{workspaceSupportMessage(currentOptions?.read.reason, t)}</p> : catalog.length === 0 ? <div className="space-y-2"><p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNoCatalog')}</p><details className="text-badge"><summary className="cursor-pointer py-2 font-medium">{t('agentSetup.workspaceLocalRegistration')}</summary><p className="mb-2 leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceRegistrationHint')}</p>{currentOptions?.execution_kind === 'integrated' && <p className="mb-2 leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceNodeRegistryHint')}</p>}<pre className="overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-3"><code>{`${workspaceCliPrefix(currentOptions?.execution_kind ?? null, currentOptions?.node_data_dir)} register /path/to/project \\\n  --label project --max-mode read --allow src\n${workspaceCliPrefix(currentOptions?.execution_kind ?? null, currentOptions?.node_data_dir)} list`}</code></pre></details></div>
                   : eligibleRooms.length > 0 && <>
                     <div className="space-y-2"><Label htmlFor="workspace-catalog">{t('agentSetup.workspaceSelectFolder')}</Label><Select id="workspace-catalog" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); setMode('read') }}>{catalog.map(workspace => <option key={workspace.workspace_id} value={workspace.workspace_id}>{workspace.label}</option>)}</Select></div>
                     <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="workspace-mode">{t('agentSetup.workspaceAccess')}</Label><Select id="workspace-mode" value={mode} onChange={event => setMode(event.target.value as 'read' | 'write')}>{canRead && <option value="read">{t('agentSetup.workspaceRead')}</option>}{canWrite && selectedWorkspace?.max_mode === 'write' && <option value="write">{t('agentSetup.workspaceWrite')}</option>}</Select></div><div className="space-y-2"><Label htmlFor="workspace-duration">{t('agentSetup.workspaceDuration')}</Label><Select id="workspace-duration" value={duration} onChange={event => setDuration(event.target.value)}><option value="900">{t('agentSetup.workspace15min')}</option><option value="3600">{t('agentSetup.workspace1hour')}</option><option value="86400">{t('agentSetup.workspace24hours')}</option></Select></div></div>

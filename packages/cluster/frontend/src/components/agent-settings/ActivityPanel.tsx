@@ -189,7 +189,7 @@ function outcomeDotClass(outcome: TurnOutcome): string {
   switch (outcome) {
     case 'responded': return 'bg-[var(--color-success)]'
     case 'silent': return 'bg-[var(--color-warning)]'
-    case 'orphaned': return 'bg-[var(--color-destructive,#d74c4c)]'
+    case 'orphaned': return 'bg-[var(--color-destructive)]'
     case 'in_flight': return 'bg-[var(--color-foreground-muted)]'
   }
 }
@@ -209,7 +209,7 @@ export function turnDotClass(turn: Turn): string {
     if (fo === 'ok') return 'bg-[var(--color-success)]'
     // #720 — ``skipped``: the agent's policy declined the turn; not a failure.
     if (fo === 'cancelled' || fo === 'skipped' || isPendingOutcome(fo)) return 'bg-[var(--color-foreground-muted)]'
-    return 'bg-[var(--color-destructive,#d74c4c)]' // failed | timeout | rejected
+    return 'bg-[var(--color-destructive)]' // failed | timeout | rejected
   }
   return outcomeDotClass(turn.outcome)
 }
@@ -289,19 +289,19 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
   return (
     <div className="space-y-3 py-2" data-testid="activity-panel" aria-busy={activity.busy}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-[var(--color-foreground-muted)]">
+        <p className="text-caption text-[var(--color-foreground-muted)]">
           {activity.autoUpdating ? t('admin.activity.autoUpdating') : t('admin.activity.historyHint')}
         </p>
         <Button variant="outline" size="sm" disabled={activity.busy || !agentId} onClick={() => void activity.refresh()}>
           <RefreshCw className={activity.refreshing ? 'animate-spin' : ''} />{t('common.refresh')}
         </Button>
       </div>
-      {activity.loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('admin.activity.loading')}</p>}
-      {activity.error && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-destructive)]">
+      {activity.loading && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('admin.activity.loading')}</p>}
+      {activity.error && <div role="alert" className="flex flex-wrap items-center gap-2 text-caption text-[var(--color-destructive)]">
         <p>{t(logs.length ? 'admin.activity.refreshFailed' : 'admin.activity.loadFailed')}</p>
         <Button variant="outline" size="sm" disabled={activity.busy} onClick={() => void activity.retry()}>{t('common.retry')}</Button>
       </div>}
-      {!activity.loading && !activity.error && logs.length === 0 && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.activity.none')}</p>}
+      {!activity.loading && !activity.error && logs.length === 0 && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.activity.none')}</p>}
       <div className="max-h-[60vh] overflow-y-auto space-y-3">
       {turns.length > 0 && (
         <section className="space-y-1.5">
@@ -324,7 +324,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
                   <button
                     type="button"
                     onClick={() => toggle(turn.requestId)}
-                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs"
+                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-badge"
                   >
                     <ChevronRight
                       className={`h-3 w-3 shrink-0 transition-transform text-[var(--color-foreground-muted)] ${
@@ -387,7 +387,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
                         )
                       })}
                       {turn.error && (
-                        <li className="text-badge font-normal text-[var(--color-destructive,#d74c4c)]">
+                        <li className="text-badge font-normal text-[var(--color-destructive)]">
                           {t('admin.activity.error', { message: localizeError(turn.error) })}
                         </li>
                       )}
@@ -426,7 +426,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
               return (
                 <li
                   key={evt.id}
-                  className="flex items-center gap-2 text-xs"
+                  className="flex items-center gap-2 text-badge"
                   data-testid={
                     isPermChange ? 'activity-permission-row' : undefined
                   }
@@ -459,7 +459,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
       {activity.hasMore && <Button variant="outline" size="sm" disabled={activity.busy} onClick={() => void activity.loadMore()}>
         {activity.loadingMore && <Loader2 className="animate-spin" />}{t('admin.activity.loadOlder')}
       </Button>}
-      {logs.length > 0 && !activity.hasMore && <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.activity.historyEnd')}</p>}
+      {logs.length > 0 && !activity.hasMore && <p className="text-badge text-[var(--color-foreground-muted)]">{t('admin.activity.historyEnd')}</p>}
     </div>
   )
 }

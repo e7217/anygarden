@@ -198,7 +198,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
   const showReasoning = !!catalog && reasoningLevels.length > 0 && mode === (activeDirect ? 'direct' : 'native')
   return <div className="space-y-4">
     <div className="space-y-1">
-      <label htmlFor="model-provider-source" className="block text-sm font-medium">{t('admin.modelConnection.providerSource')}</label>
+      <label htmlFor="model-provider-source" className="block text-caption font-medium">{t('admin.modelConnection.providerSource')}</label>
       <Select id="model-provider-source" value={mode} disabled={busy}
         onChange={event => {
           const next = event.target.value as 'native' | 'direct'
@@ -212,24 +212,24 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
           : t('admin.modelConnection.addServer')}</option>
       </Select>
     </div>
-    {error && <p role="alert" className="text-sm text-[var(--color-warning)]">{error}</p>}
-    {notice && <p role="status" className="text-sm">{notice}</p>}
+    {error && <p role="alert" className="text-caption text-[var(--color-warning)]">{error}</p>}
+    {notice && <p role="status" className="text-caption">{notice}</p>}
     {mode === 'direct' ? (
       <DirectEndpointPanel key={agent.id} agentId={agent.id} engine={agent.engine} nativeCredentialProvider={storedNativeProvider}
         onSaved={async () => { await updateAgent(agent.id, {}); await refresh() }} />
     ) : isPi ? <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block space-y-1 text-sm font-medium">{t('admin.modelConnection.providerId')}
+        <label className="block space-y-1 text-caption font-medium">{t('admin.modelConnection.providerId')}
           <Input aria-label={t('admin.modelConnection.agentProvider')} value={provider} maxLength={64} placeholder="zai" onChange={event => setProvider(event.target.value)} disabled={busy} />
         </label>
-        <label className="block space-y-1 text-sm font-medium">{t('admin.modelConnection.modelId')}
+        <label className="block space-y-1 text-caption font-medium">{t('admin.modelConnection.modelId')}
           <Input aria-label={t('admin.modelConnection.agentModel')} value={model} list="pi-native-models" onChange={event => setModel(event.target.value)} disabled={busy} />
         </label>
       </div>
       <datalist id="pi-native-models">{catalog?.models.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</datalist>
       {activeDirect && <>
-        <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.modelConnection.switchWarning')}</p>
-        <label className="block space-y-1 text-sm font-medium">{t('admin.modelConnection.nativeKey')} {storedNativeProvider === provider ? t('admin.modelConnection.alreadyStored') : t('admin.modelConnection.required')}
+        <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.modelConnection.switchWarning')}</p>
+        <label className="block space-y-1 text-caption font-medium">{t('admin.modelConnection.nativeKey')} {storedNativeProvider === provider ? t('admin.modelConnection.alreadyStored') : t('admin.modelConnection.required')}
           <Input aria-label={t('admin.modelConnection.nativeKey')} type="password" autoComplete="new-password" value={nativeKey} onChange={event => setNativeKey(event.target.value)} disabled={busy} />
         </label>
       </>}
@@ -239,12 +239,12 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
           onClick={() => void saveNative()}>{activeDirect ? t('admin.modelConnection.switchToPi') : t('admin.modelConnection.applyProvider')}</Button>
       </div>
     </div> : activeDirect ? <div className="space-y-3">
-      <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.modelConnection.codexSwitchNote')}</p>
+      <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.modelConnection.codexSwitchNote')}</p>
       <div className="flex justify-end">
         <Button disabled={busy} onClick={() => void switchToCodexLogin()}>{t('admin.modelConnection.useCodexLogin')}</Button>
       </div>
     </div> : <div className="space-y-3">
-      <label className="block space-y-1 text-sm font-medium">{t('admin.modelConnection.model')}
+      <label className="block space-y-1 text-caption font-medium">{t('admin.modelConnection.model')}
         <Select aria-label={t('admin.modelConnection.agentModel')} value={agent.model ?? ''} disabled={busy || !catalog}
           onChange={event => void saveModel(event.target.value)}>
           <option value="">{t('admin.modelConnection.defaultModel', { model: catalog?.default_model ?? t('admin.modelConnection.engineDefault') })}</option>
@@ -254,7 +254,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
       </label>
       {agent.placed_on_machine_id && <CodexLoginStatus machineId={agent.placed_on_machine_id} />}
     </div>}
-    {showReasoning && <label className="block space-y-1 text-sm font-medium">{t('admin.modelConnection.reasoning')}
+    {showReasoning && <label className="block space-y-1 text-caption font-medium">{t('admin.modelConnection.reasoning')}
       <Select aria-label={t('admin.modelConnection.reasoningEffort')} value={agent.reasoning_effort ?? ''} disabled={busy}
         onChange={event => void saveReasoning(event.target.value)}>
         <option value="">{t('admin.modelConnection.default')}</option>

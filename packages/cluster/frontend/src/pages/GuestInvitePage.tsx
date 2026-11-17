@@ -83,7 +83,7 @@ export default function GuestInvitePage() {
         </CardHeader>
         <CardContent>
           {hadPriorSession && (
-            <div className="mb-4 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-xs text-[var(--color-warning)]">
+            <div className="mb-4 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-badge text-[var(--color-warning)]">
               {t('guest.priorSession')}
             </div>
           )}
@@ -100,7 +100,7 @@ export default function GuestInvitePage() {
               />
             </div>
             {error && (
-              <div role="alert" className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+              <div role="alert" className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-caption text-[var(--color-warning)]">
                 {error}
               </div>
             )}

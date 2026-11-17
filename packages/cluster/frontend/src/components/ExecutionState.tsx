@@ -12,10 +12,10 @@ export function executionLimitReasonKey(reason?: string | null): MessageKey {
 
 export function DispositionNotice({ disposition, inputRevision, operationAction }: { disposition?: ExecutionDisposition; inputRevision?: number | null; operationAction?: ExecutionOperationAction | null }) {
   const { t } = useLocale()
-  if (operationAction === 'deadline' && disposition !== 'superseded') return <p data-testid="execution-deadline-notice" className="border-l-2 border-[var(--color-warning)] pl-2 text-sm text-[var(--color-foreground-muted)]">{t('executions.deadline.reason')}</p>
-  if (operationAction === 'limit' && disposition !== 'superseded') return <p data-testid="execution-limit-notice" className="border-l-2 border-[var(--color-warning)] pl-2 text-sm text-[var(--color-foreground-muted)]">{t('executions.limit.reason')}</p>
+  if (operationAction === 'deadline' && disposition !== 'superseded') return <p data-testid="execution-deadline-notice" className="border-l-2 border-[var(--color-warning)] pl-2 text-caption text-[var(--color-foreground-muted)]">{t('executions.deadline.reason')}</p>
+  if (operationAction === 'limit' && disposition !== 'superseded') return <p data-testid="execution-limit-notice" className="border-l-2 border-[var(--color-warning)] pl-2 text-caption text-[var(--color-foreground-muted)]">{t('executions.limit.reason')}</p>
   if (!disposition || disposition === 'current') return null
-  return <div data-testid="execution-disposition" className="space-y-1 border-l-2 border-[var(--color-warning)] pl-2 text-sm text-[var(--color-foreground-muted)]">
+  return <div data-testid="execution-disposition" className="space-y-1 border-l-2 border-[var(--color-warning)] pl-2 text-caption text-[var(--color-foreground-muted)]">
     {disposition === 'superseded' && inputRevision != null && <p className="font-medium">{t('executions.previousInput', { version: inputRevision })}</p>}
     <p>{t(`executions.${disposition}`)}</p>
   </div>
@@ -43,7 +43,7 @@ export function ExecutionUsageState({ summary, limits, executionId }: { summary?
   const { t, formatNumber, formatDate } = useLocale()
   if (!summary) return null
   const asOf = summary.as_of && !Number.isNaN(Date.parse(summary.as_of)) ? summary.as_of : null
-  return <div data-testid={`execution-usage-${executionId}`} className="min-w-0 space-y-1 border-l-2 border-[var(--color-border)] pl-2 text-sm [overflow-wrap:anywhere]">
+  return <div data-testid={`execution-usage-${executionId}`} className="min-w-0 space-y-1 border-l-2 border-[var(--color-border)] pl-2 text-caption [overflow-wrap:anywhere]">
     <p className="font-medium">{t('executions.usage.title')}</p>
     <p>{t(limits?.max_native_invocations != null ? 'executions.usage.runsWithLimit' : 'executions.usage.runs', { count: formatNumber(summary.native_invocations_reserved), limit: limits?.max_native_invocations != null ? formatNumber(limits.max_native_invocations) : '' })}</p>
     {limits?.max_total_tokens != null && <p>{t('executions.usage.tokenThreshold', { count: formatNumber(limits.max_total_tokens) })}</p>}
@@ -60,7 +60,7 @@ export function ExecutionUsageHistory({ summary, executionId }: { summary?: Exec
   const { t, formatNumber } = useLocale()
   if (!summary || summary.revisions.length < 2) return null
   return <div className="space-y-2"><p className="font-semibold">{t('executions.usage.revisionHistory')}</p>{summary.revisions.map(revision => <details key={revision.input_revision} data-testid={`execution-usage-revision-${executionId}-${revision.input_revision}`}>
-    <summary className="min-h-11 cursor-pointer content-center">{t('executions.inputVersion', { version: revision.input_revision })}</summary>
+    <summary className="min-h-[var(--control-height)] cursor-pointer content-center">{t('executions.inputVersion', { version: revision.input_revision })}</summary>
     <div className="space-y-1 pb-2"><p>{t('executions.usage.runs', { count: formatNumber(revision.invocation_count) })}</p><UsageTotals usage={revision} /></div>
   </details>)}</div>
 }
@@ -72,5 +72,5 @@ export function TransmissionNotice({ approval }: { approval: ExecutionApproval }
     ? approval.revoked || approval.permit_revoked || (approval.disposition && approval.disposition !== 'current') ? 'revoked' : 'approved'
     : status === 'executing' ? 'executing' : status === 'succeeded' ? 'succeeded' : status === 'failed' ? 'failed' : status === 'unknown' ? 'unknown' : null
   if (!message) return null
-  return <p data-testid={`execution-effect-${approval.id}`} className="whitespace-pre-wrap text-sm text-[var(--color-foreground-muted)]">{t(`executions.effect.${message}`)}</p>
+  return <p data-testid={`execution-effect-${approval.id}`} className="whitespace-pre-wrap text-caption text-[var(--color-foreground-muted)]">{t(`executions.effect.${message}`)}</p>
 }

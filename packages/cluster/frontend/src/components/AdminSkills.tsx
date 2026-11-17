@@ -399,7 +399,7 @@ export default function AdminSkills() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <h1 className="text-heading text-[var(--color-foreground)]">{t('admin.skills.title')}</h1>
-          <p className="text-sm text-[var(--color-foreground-muted)]">
+          <p className="text-caption text-[var(--color-foreground-muted)]">
             {t('admin.skills.description')}
           </p>
         </div>
@@ -425,7 +425,7 @@ export default function AdminSkills() {
       </div>
 
       {error && (
-        <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-sm text-[var(--color-danger)]">
+        <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-caption text-[var(--color-danger)]">
           {error}
         </div>
       )}
@@ -434,21 +434,21 @@ export default function AdminSkills() {
         <TabsList>
           <TabsTrigger value="pending">
             {t('admin.skills.pending')} {byStatus.pending.length > 0 && (
-              <span className="ml-1 text-xs text-[var(--color-foreground-muted)]">
+              <span className="ml-1 text-badge text-[var(--color-foreground-muted)]">
                 {byStatus.pending.length}
               </span>
             )}
           </TabsTrigger>
           <TabsTrigger value="approved">
             {t('admin.skills.approved')} {byStatus.approved.length > 0 && (
-              <span className="ml-1 text-xs text-[var(--color-foreground-muted)]">
+              <span className="ml-1 text-badge text-[var(--color-foreground-muted)]">
                 {byStatus.approved.length}
               </span>
             )}
           </TabsTrigger>
           <TabsTrigger value="rejected">
             {t('admin.skills.rejected')} {byStatus.rejected.length > 0 && (
-              <span className="ml-1 text-xs text-[var(--color-foreground-muted)]">
+              <span className="ml-1 text-badge text-[var(--color-foreground-muted)]">
                 {byStatus.rejected.length}
               </span>
             )}
@@ -463,7 +463,7 @@ export default function AdminSkills() {
                   className="mx-auto mb-3 h-8 w-8 text-[var(--color-foreground-subtle)]"
                   strokeWidth={1.5}
                 />
-                <p className="text-sm text-[var(--color-foreground-muted)]">
+                <p className="text-caption text-[var(--color-foreground-muted)]">
                   {status === 'pending' && t('admin.skills.noPending')}
                   {status === 'approved' && t('admin.skills.noApproved')}
                   {status === 'rejected' && t('admin.skills.noRejected')}
@@ -479,7 +479,7 @@ export default function AdminSkills() {
                   <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+                        <h3 className="text-caption font-semibold text-[var(--color-foreground)]">
                           {skill.name}
                         </h3>
                         <Badge
@@ -523,10 +523,10 @@ export default function AdminSkills() {
                           </Badge>
                         )}
                       </div>
-                      <p className="mt-0.5 text-xs text-[var(--color-foreground-muted)]">
+                      <p className="mt-0.5 text-badge text-[var(--color-foreground-muted)]">
                         <code>{skill.source}</code>
                       </p>
-                      <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+                      <p className="mt-1 text-badge text-[var(--color-foreground-muted)]">
                         {t('admin.skills.attachedCount', { count: skill.attached_agent_ids.length })}
                       </p>
                     </div>
@@ -662,7 +662,7 @@ export default function AdminSkills() {
               />
             </div>
             {regError && (
-              <p className="text-xs text-[var(--color-danger)]">{regError}</p>
+              <p className="text-caption text-[var(--color-danger)]">{regError}</p>
             )}
           </div>
           <DialogFooter>
@@ -695,13 +695,13 @@ export default function AdminSkills() {
             </DialogDescription>
           </DialogHeader>
           {previewLoading && (
-            <p className="text-sm text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
           )}
           {preview && (
             <div className="space-y-3 min-w-0">
               <div className="min-w-0">
                 <Label>SKILL.md</Label>
-                <pre className="mt-1 max-h-72 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs">
+                <pre className="mt-1 max-h-72 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-badge">
                   {preview.skill_md}
                 </pre>
               </div>
@@ -710,7 +710,7 @@ export default function AdminSkills() {
                   <Label>
                     {t('admin.skills.extraFiles', { count: preview.extra_files.length })}
                   </Label>
-                  <ul className="mt-1 max-h-40 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-xs">
+                  <ul className="mt-1 max-h-40 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-badge">
                     {preview.extra_files.map(path => (
                       <li key={path} className="font-mono">
                         {path}
@@ -739,10 +739,10 @@ export default function AdminSkills() {
             </DialogDescription>
           </DialogHeader>
           {auditLoading && (
-            <p className="text-sm text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
           )}
           {!auditLoading && audits.length === 0 && (
-            <p className="text-sm text-[var(--color-foreground-muted)]">
+            <p className="text-caption text-[var(--color-foreground-muted)]">
               {t('admin.skills.noHistory')}
             </p>
           )}
@@ -751,7 +751,7 @@ export default function AdminSkills() {
               {audits.map(a => (
                 <li
                   key={a.id}
-                  className="rounded-[var(--radius-sm)] border border-[var(--color-border)] p-2 text-xs"
+                  className="rounded-[var(--radius-sm)] border border-[var(--color-border)] p-2 text-badge"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <Badge variant="outline">{a.action}</Badge>
@@ -789,13 +789,13 @@ export default function AdminSkills() {
             </DialogDescription>
           </DialogHeader>
           {attachError && (
-            <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
+            <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-caption text-[var(--color-danger)]">
               {attachError}
             </div>
           )}
           <div className="max-h-80 space-y-1 overflow-auto py-2">
             {agents.length === 0 ? (
-              <p className="text-sm text-[var(--color-foreground-muted)]">
+              <p className="text-caption text-[var(--color-foreground-muted)]">
                 {t('admin.skills.noAgents')}
               </p>
             ) : (
@@ -812,8 +812,8 @@ export default function AdminSkills() {
                       onChange={() => attachTarget && void toggleAttach(attachTarget, agent.id)}
                       data-testid={`admin-skill-agent-${agent.id}`}
                     />
-                    <span className="text-sm text-[var(--color-foreground)]">{agent.name}</span>
-                    <span className="text-xs text-[var(--color-foreground-muted)]">
+                    <span className="text-caption text-[var(--color-foreground)]">{agent.name}</span>
+                    <span className="text-badge text-[var(--color-foreground-muted)]">
                       {agent.engine}
                     </span>
                   </label>
@@ -863,13 +863,13 @@ export default function AdminSkills() {
             </Button>
           </div>
           {searchError && (
-            <div role="alert" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
+            <div role="alert" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-caption text-[var(--color-danger)]">
               {searchError}
             </div>
           )}
           <div className="max-h-[26rem] overflow-auto">
             {searchResults.length === 0 && !searchLoading ? (
-              <p className="py-6 text-center text-sm text-[var(--color-foreground-muted)]">
+              <p className="py-6 text-center text-caption text-[var(--color-foreground-muted)]">
                 {searched ? t('admin.skills.noSearchResults') : t('admin.skills.searchHint')}
               </p>
             ) : (
@@ -881,14 +881,14 @@ export default function AdminSkills() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">
-                        <span className="truncate text-sm font-medium text-[var(--color-foreground)]">
+                        <span className="truncate text-caption font-medium text-[var(--color-foreground)]">
                           {hit.name}
                         </span>
-                        <span className="text-xs text-[var(--color-foreground-muted)]">
+                        <span className="text-badge text-[var(--color-foreground-muted)]">
                           {t('admin.skills.installs', { count: hit.installs })}
                         </span>
                       </div>
-                      <p className="truncate text-xs text-[var(--color-foreground-muted)]">
+                      <p className="truncate text-badge text-[var(--color-foreground-muted)]">
                         <code>{hit.source}</code> · <code>{hit.skillId}</code>
                       </p>
                     </div>

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -63,8 +63,10 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     timers.current.push(timer)
   }, [])
 
+  const value = useMemo(() => ({ confirm, notify }), [confirm, notify])
+
   return (
-    <FeedbackContext.Provider value={{ confirm, notify }}>
+    <FeedbackContext.Provider value={value}>
       {children}
       <Dialog open={pending !== null} onOpenChange={(open) => { if (!open) settle(false) }}>
         <DialogContent className="max-w-md">
@@ -86,14 +88,14 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
             <div
               key={notice.id}
               role={notice.tone === 'error' ? 'alert' : 'status'}
-              className={`pointer-events-auto flex w-full items-start gap-3 rounded-[var(--radius-lg)] border bg-[var(--color-surface-elevated)] p-3 text-sm text-[var(--color-foreground)] shadow-deep ${
+              className={`pointer-events-auto flex w-full items-start gap-3 rounded-[var(--radius-lg)] border bg-[var(--color-surface-elevated)] p-3 text-caption text-[var(--color-foreground)] shadow-deep ${
                 notice.tone === 'error' ? 'border-[var(--color-danger)]' : 'border-[var(--color-border)]'
               }`}
             >
               <span className="min-w-0 flex-1">{notice.message}</span>
               <button
                 type="button"
-                className="flex min-h-9 min-w-9 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
+                className="flex min-h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
                 onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}
                 aria-label={t('common.dismiss')}
               >

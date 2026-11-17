@@ -61,8 +61,8 @@ export function describeSchedule(t: Translate, triggerType: string, config: Reco
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[minmax(6rem,auto)_1fr] gap-x-3 gap-y-0.5">
-      <dt className="text-caption text-[var(--color-foreground-muted)]">{label}</dt>
-      <dd className="min-w-0 break-words text-caption text-[var(--color-foreground)]">{children}</dd>
+      <dt className="text-caption font-medium text-[var(--color-foreground-muted)]">{label}</dt>
+      <dd className="min-w-0 break-words text-caption font-medium text-[var(--color-foreground)]">{children}</dd>
     </div>
   )
 }
@@ -231,7 +231,7 @@ export function DraftFailedNote({ meta, participants }: { meta: DraftFailedMeta;
         <FileWarning className="h-4 w-4 text-[var(--color-warning)]" aria-hidden />
         {t(meta.kind === 'goal' ? 'chat.draft.goalFailed' : 'chat.draft.routineFailed')}
       </span>
-      <p className="whitespace-pre-wrap break-words text-caption text-[var(--color-foreground-muted)]">{meta.description}</p>
+      <p className="whitespace-pre-wrap break-words text-caption font-medium text-[var(--color-foreground-muted)]">{meta.description}</p>
       <div>
         <Button type="button" size="sm" variant="outline" onClick={openForm}>
           {t('chat.draft.openEmptyForm')}

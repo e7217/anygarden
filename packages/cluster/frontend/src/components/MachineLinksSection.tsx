@@ -79,38 +79,38 @@ export default function MachineLinksSection() {
   return (
     <section aria-labelledby="machine-links-title" className="border-t border-[var(--color-border)] px-4 py-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 id="machine-links-title" className="text-sm font-semibold text-[var(--color-foreground)]">{t('admin.machineLinks.title')}</h2>
+        <h2 id="machine-links-title" className="text-caption font-semibold text-[var(--color-foreground)]">{t('admin.machineLinks.title')}</h2>
         <Button variant="ghost" size="sm" onClick={() => { setError(null); setOpen(true) }}>
           <Plus />
           {t('admin.machineLinks.add')}
         </Button>
       </div>
-      <p className="mt-1 text-xs leading-relaxed text-[var(--color-foreground-muted)]">{t('admin.machineLinks.purpose')}</p>
+      <p className="mt-1 text-badge leading-relaxed text-[var(--color-foreground-muted)]">{t('admin.machineLinks.purpose')}</p>
       {links.length === 0 ? (
-        <p className="mt-2 text-xs text-[var(--color-foreground-subtle)]">{t('admin.machineLinks.none')}</p>
+        <p className="mt-2 text-caption text-[var(--color-foreground-subtle)]">{t('admin.machineLinks.none')}</p>
       ) : (
         <ul className="mt-2 space-y-2">
           {links.map(link => (
             <li key={link.machine_id} className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-[var(--color-foreground)]">{link.name}</div>
-                  <div className="truncate text-xs text-[var(--color-foreground-muted)]" title={link.server}>{link.server}</div>
+                  <div className="truncate text-caption font-medium text-[var(--color-foreground)]">{link.name}</div>
+                  <div className="truncate text-badge text-[var(--color-foreground-muted)]" title={link.server}>{link.server}</div>
                 </div>
                 <Button variant="ghost" size="icon" onClick={() => void remove(link)} aria-label={t('admin.machineLinks.removeLabel', { name: link.name })}>
                   <Unplug />
                 </Button>
               </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-badge">
                 <span className="flex items-center gap-1 text-[var(--color-foreground-muted)]">
                   <span aria-hidden="true" className={`inline-block h-1.5 w-1.5 rounded-full ${dot(link.status)}`} />
                   {statusLabel(link.status)}
                 </span>
                 <span className="text-[var(--color-foreground-subtle)]">{t('admin.machines.agentCount', { count: link.running_agents })}</span>
               </div>
-              {hint(link) && <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">{hint(link)}</p>}
+              {hint(link) && <p className="mt-1 text-badge text-[var(--color-foreground-muted)]">{hint(link)}</p>}
               {link.error && link.status !== 'connected' && (
-                <p className="mt-1 break-words text-xs text-[var(--color-foreground-subtle)]">{link.error}</p>
+                <p className="mt-1 break-words text-badge text-[var(--color-foreground-subtle)]">{link.error}</p>
               )}
             </li>
           ))}
@@ -135,10 +135,10 @@ export default function MachineLinksSection() {
               placeholder="agmachine1.…"
               aria-describedby="machine-link-code-hint"
               aria-invalid={Boolean(error)}
-              className="font-mono text-xs"
+              className="font-mono text-badge"
             />
-            <p id="machine-link-code-hint" className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machineLinks.codeHint')}</p>
-            {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
+            <p id="machine-link-code-hint" className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machineLinks.codeHint')}</p>
+            {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
             <DialogFooter>
               <Button type="button" variant="outline" disabled={saving} onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
               <Button type="submit" disabled={saving || !code.trim()}>

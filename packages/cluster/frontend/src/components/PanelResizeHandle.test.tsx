@@ -115,4 +115,14 @@ describe('PanelResizeHandle', () => {
     fireEvent.keyDown(handle, { key: 'ArrowLeft' })
     expect(commits).toEqual([284])
   })
+
+  it('restores the page cursor and text selection when unmounted mid-drag', () => {
+    const { handle } = setup('right')
+    fireEvent.pointerDown(handle, { button: 0, clientX: 300, pointerId: 1 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    expect(document.body.style.userSelect).toBe('none')
+    cleanup()
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+  })
 })

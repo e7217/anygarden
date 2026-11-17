@@ -33,7 +33,7 @@ export default function ServerVersionPanel({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h2 id="server-version-heading" className="text-lead text-[var(--color-foreground)]">{t('admin.machines.serverEntry')}</h2>
-          <p className="mt-1 text-sm text-[var(--color-foreground-muted)]">
+          <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">
             {t('admin.system.description')}
           </p>
         </div>
@@ -44,7 +44,7 @@ export default function ServerVersionPanel({
       </div>
 
       {error && (
-        <p className="text-sm text-[var(--color-danger)]">{displayError}</p>
+        <p className="text-caption text-[var(--color-danger)]">{displayError}</p>
       )}
 
       <div className="flex flex-col gap-3">
@@ -56,7 +56,7 @@ export default function ServerVersionPanel({
           />
         ))}
         {updates.length === 0 && (
-          <p className="text-sm text-[var(--color-foreground-subtle)]">
+          <p className="text-caption text-[var(--color-foreground-subtle)]">
             {t('admin.system.noPackages')}
           </p>
         )}
@@ -76,7 +76,7 @@ function PackageRow({ update, nodeUpdate }: { update: PackageUpdate; nodeUpdate?
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="font-medium text-[var(--color-foreground)]">{pkg}</p>
-          <p className="text-sm text-[var(--color-foreground-muted)]">
+          <p className="text-caption text-[var(--color-foreground-muted)]">
             {t('admin.system.current')} <span className="font-mono">{current}</span>
             {latest && (
               <>
@@ -101,12 +101,12 @@ function PackageRow({ update, nodeUpdate }: { update: PackageUpdate; nodeUpdate?
 
       {update_available && !canUpdateInPlace && (
         <div className="mt-3 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-2">
-          <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.system.updateCommand')}</p>
-          <code className="mt-0.5 block font-mono text-xs text-[var(--color-foreground)]">
+          <p className="text-badge text-[var(--color-foreground-muted)]">{t('admin.system.updateCommand')}</p>
+          <code className="mt-0.5 block font-mono text-badge text-[var(--color-foreground)]">
             {`pip install -U ${pkg}`}
           </code>
           {unsupportedReason && (
-            <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+            <p className="mt-1 text-badge text-[var(--color-foreground-muted)]">
               {t(UNSUPPORTED_REASON_KEYS[unsupportedReason] ?? 'admin.system.nodeUpdate.unsupported.unsupported_install')}
             </p>
           )}
@@ -194,7 +194,7 @@ function NodeUpdateAction({ control, latest }: { control: NodeUpdateControl; lat
     <div className="mt-3 flex flex-col gap-2">
       {!done && (
         <>
-          <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.system.nodeUpdate.hint')}</p>
+          <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.system.nodeUpdate.hint')}</p>
           <div>
             <Button size="sm" onClick={onUpdate} disabled={busy}>
               <ArrowUpCircle />
@@ -247,7 +247,7 @@ function NodeUpdateOutcome({ control }: { control: NodeUpdateControl }) {
   }
   return (
     <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-2">
-      {message && <p className={`text-sm ${tone}`}>{message}</p>}
+      {message && <p className={`text-caption ${tone}`}>{message}</p>}
       {progress.phase === 'updated' && !startError && (
         // The page still runs the previous build's scripts.
         <Button size="sm" variant="outline" onClick={() => window.location.reload()}>

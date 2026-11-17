@@ -50,15 +50,15 @@ export default function PiNativeAuthPanel({ agentId, provider, onSaved }: {
   const active = status?.configured && status.provider === provider
   // Rendered inside the model connection form, so no card or heading of its own.
   return <section className="space-y-2" aria-label={t('admin.piAuth.title')}>
-    <p className="text-sm text-[var(--color-foreground-muted)]">
+    <p className="text-caption text-[var(--color-foreground-muted)]">
       {active ? t('admin.piAuth.stored', { provider: provider ?? '', revision: status.revision ?? '' }) : status?.provider
         ? t('admin.piAuth.otherStored', { stored: status.provider, selected: provider ?? t('admin.piAuth.selectedProvider') })
         : t('admin.piAuth.noneStored')}
     </p>
-    {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
-    {notice && <p role="status" className="text-sm">{notice}</p>}
+    {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
+    {notice && <p role="status" className="text-caption">{notice}</p>}
     <fieldset disabled={busy || !provider} className="space-y-2">
-      <label className="block space-y-1 text-sm font-medium">{t('admin.piAuth.providerKey')}
+      <label className="block space-y-1 text-caption font-medium">{t('admin.piAuth.providerKey')}
         <Input aria-label={t('admin.piAuth.keyLabel')} type="password" autoComplete="off" value={value} onChange={event => setValue(event.target.value)} />
       </label>
       <div className="flex flex-wrap gap-2">

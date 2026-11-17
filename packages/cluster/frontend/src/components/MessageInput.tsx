@@ -690,7 +690,7 @@ export default function MessageInput({
         {dragActive && (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[var(--radius-lg)] border-2 border-dashed border-[var(--color-brand-focus)] bg-[var(--color-surface)] text-caption text-[var(--color-brand-text)]"
+            className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[var(--radius-lg)] border-2 border-dashed border-[var(--color-brand-focus)] bg-[var(--color-surface)] text-caption font-medium text-[var(--color-brand-text)]"
           >
             <Paperclip className="mr-2 h-4 w-4" />
             {t('chat.dropFilesHere')}
@@ -699,7 +699,7 @@ export default function MessageInput({
         {slashError && (
           <div
             data-testid="slash-error"
-            className="text-xs text-[var(--color-destructive)]"
+            className="text-badge text-[var(--color-destructive)]"
           >
             {slashError}
           </div>
@@ -709,7 +709,7 @@ export default function MessageInput({
             {attachments.map(a => (
               <span
                 key={`${a.kind}-${a.id}`}
-                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-0.5 text-xs text-[var(--color-foreground)]"
+                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-0.5 text-badge text-[var(--color-foreground)]"
               >
                 {a.kind === 'artifact' && a.previewUrl ? (
                   <img
@@ -738,7 +738,7 @@ export default function MessageInput({
               <span
                 key={`${failure.name}-${index}`}
                 role="alert"
-                className="text-caption text-[var(--color-destructive)]"
+                className="text-caption font-medium text-[var(--color-destructive)]"
               >
                 {`${failure.name} — ${t(failure.reason)}`}
               </span>
@@ -791,7 +791,7 @@ export default function MessageInput({
                       setAddMenuOpen(false)
                       fileInputRef.current?.click()
                     }}
-                    className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
+                    className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
                   >
                     <Paperclip className="h-4 w-4 text-[var(--color-foreground-muted)]" />
                     {t('chat.attachFile')}
@@ -821,7 +821,7 @@ export default function MessageInput({
             // both the empty box (:placeholder-shown) and ::placeholder are
             // nowrap/hidden/ellipsis, and drops it while focused (the text
             // is then clipped, still on one line). Typed text still wraps.
-            className="min-h-[var(--control-icon-size)] flex-1 resize-none bg-transparent px-2 py-[calc((var(--control-icon-size)-1.5rem)/2)] text-base leading-6 md:text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] placeholder-shown:overflow-hidden placeholder-shown:text-ellipsis placeholder-shown:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-[var(--control-icon-size)] flex-1 resize-none bg-transparent px-2 py-[calc((var(--control-icon-size)-1.5rem)/2)] text-body leading-6 md:text-caption text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] placeholder-shown:overflow-hidden placeholder-shown:text-ellipsis placeholder-shown:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           />
           <button
             type="button"
@@ -839,7 +839,7 @@ export default function MessageInput({
         {draftCallsNoOne && (
           <p
             data-testid="mention-hint"
-            className="text-xs text-[var(--color-foreground-muted)]"
+            className="text-badge text-[var(--color-foreground-muted)]"
           >
             {t('chat.mentionHint')}
           </p>

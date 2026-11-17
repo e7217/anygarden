@@ -130,18 +130,18 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved, nativeCr
   const authValue = keyEntry === 'new' ? NEW_KEY : config?.credential_ref ?? ''
   const protocolLabel = PROTOCOL_LABELS[config?.api_protocol ?? ''] ?? config?.api_protocol ?? ''
   return <section className="space-y-4" aria-label={t('admin.directEndpoint.title')}>
-    <p className="text-sm text-[var(--color-foreground-muted)]">{connectionSummary(saved, t)}</p>
-    {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
-    {status && <p role="status" className="text-sm">{status}</p>}
-    {!config ? (!error && <p className="text-sm">{t('admin.directEndpoint.loading')}</p>) : <fieldset disabled={busy} className="space-y-4">
-      <label className="block space-y-1 text-sm font-medium">{t('admin.endpoint.baseUrl')}
+    <p className="text-caption text-[var(--color-foreground-muted)]">{connectionSummary(saved, t)}</p>
+    {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
+    {status && <p role="status" className="text-caption">{status}</p>}
+    {!config ? (!error && <p className="text-caption">{t('admin.directEndpoint.loading')}</p>) : <fieldset disabled={busy} className="space-y-4">
+      <label className="block space-y-1 text-caption font-medium">{t('admin.endpoint.baseUrl')}
         <Input aria-label={t('admin.directEndpoint.baseUrlLabel')} placeholder="http://localhost:8000/v1" value={config.base_url ?? ''}
           onChange={e => { setConfig({ ...config, base_url: e.target.value }); setModels(null); setModelsStatus(null); setManualModel(false) }} />
       </label>
 
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-2">
-          <label htmlFor="direct-endpoint-model" className="text-sm font-medium">{t('admin.directEndpoint.modelId')}</label>
+          <label htmlFor="direct-endpoint-model" className="text-caption font-medium">{t('admin.directEndpoint.modelId')}</label>
           <Button variant="ghost" size="sm" disabled={!isValidEndpointUrl(config.base_url ?? '')} onClick={() => void loadModels()}>{t('admin.endpoint.loadModels')}</Button>
         </div>
         {showModelSelect ? (
@@ -163,14 +163,14 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved, nativeCr
             )}
           </div>
         )}
-        {modelsStatus && <p className="text-xs text-[var(--color-foreground-muted)]">{modelsStatus.reachableFrom === 'server'
+        {modelsStatus && <p className="text-caption text-[var(--color-foreground-muted)]">{modelsStatus.reachableFrom === 'server'
           ? t('admin.endpoint.modelsFoundServer', { count: modelsStatus.count })
           : t('admin.endpoint.modelsFoundHost', { count: modelsStatus.count, host: modelsStatus.reachableFrom })}</p>}
-        {modelNotServed && <p className="text-xs text-[var(--color-warning)]">{t('admin.directEndpoint.modelNotServed', { model: config.model ?? '' })}</p>}
+        {modelNotServed && <p className="text-caption text-[var(--color-warning)]">{t('admin.directEndpoint.modelNotServed', { model: config.model ?? '' })}</p>}
       </div>
 
       <div className="space-y-2">
-        <label className="block space-y-1 text-sm font-medium">{t('admin.endpoint.authentication')}
+        <label className="block space-y-1 text-caption font-medium">{t('admin.endpoint.authentication')}
           <Select aria-label={t('admin.directEndpoint.credentialLabel')} value={authValue}
             onChange={e => {
               setValue('')
@@ -184,7 +184,7 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved, nativeCr
           </Select>
         </label>
         {selected && keyEntry === 'none' && (
-          <div className="flex flex-wrap items-center gap-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3 text-caption">
             <button type="button" className="text-[var(--color-brand-text)] underline-offset-4 hover:underline cursor-pointer" onClick={() => setKeyEntry('replace')}>{t('admin.directEndpoint.replaceKey')}</button>
             <button type="button" className="text-[var(--color-destructive)] underline-offset-4 hover:underline cursor-pointer" onClick={() => void action(async () => {
               await request(`${path}/credentials/${selected.id}`, 'DELETE'); setCredentials(await request(`${path}/credentials`))
@@ -196,14 +196,14 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved, nativeCr
         {keyEntry !== 'none' && (
           <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
             {keyEntry === 'new' && (
-              <label className="block space-y-1 text-sm font-medium">{t('admin.directEndpoint.credentialName')}
+              <label className="block space-y-1 text-caption font-medium">{t('admin.directEndpoint.credentialName')}
                 <Input aria-label={t('admin.directEndpoint.credentialName')} value={label} onChange={e => setLabel(e.target.value)} />
               </label>
             )}
-            <label className="block space-y-1 text-sm font-medium">{t('admin.directEndpoint.newApiKey')}
+            <label className="block space-y-1 text-caption font-medium">{t('admin.directEndpoint.newApiKey')}
               <Input aria-label={t('admin.directEndpoint.newApiKeyLabel')} type="password" autoComplete="new-password" value={value} onChange={e => setValue(e.target.value)} />
             </label>
-            <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.directEndpoint.credentialsHelp')}</p>
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.directEndpoint.credentialsHelp')}</p>
             <div className="flex flex-wrap gap-2">
               {keyEntry === 'new'
                 ? <Button variant="outline" disabled={!value} onClick={() => void store(false)}>{t('admin.directEndpoint.storeNew')}</Button>
@@ -215,20 +215,20 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved, nativeCr
       </div>
 
       {engine === 'pi-cli' && nativeCredentialProvider && provider === nativeCredentialProvider && (
-        <p role="alert" className="text-sm text-[var(--color-warning)]">{t('admin.directEndpoint.nativeConflict')}</p>
+        <p role="alert" className="text-caption text-[var(--color-warning)]">{t('admin.directEndpoint.nativeConflict')}</p>
       )}
       <details className="group border-t border-[var(--color-border)] pt-3">
-        <summary className="flex min-h-[var(--control-sm-height)] cursor-pointer list-none items-center gap-2 text-sm font-medium">
+        <summary className="flex min-h-[var(--control-sm-height)] cursor-pointer list-none items-center gap-2 text-caption font-medium">
           <ChevronRight className="h-4 w-4 transition-transform group-open:rotate-90" aria-hidden="true" />
           {t('admin.directEndpoint.advanced')}
           <span className="font-normal text-[var(--color-foreground-muted)]">· {protocolLabel}{provider ? ` · ${provider}` : ''}</span>
         </summary>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label className="block space-y-1 text-sm font-medium">{t('admin.directEndpoint.providerId')}
+          <label className="block space-y-1 text-caption font-medium">{t('admin.directEndpoint.providerId')}
             <Input aria-label={t('admin.directEndpoint.providerLabel')} value={config.provider ?? ''} placeholder={providerFromUrl(config.base_url)} onChange={e => setConfig({ ...config, provider: e.target.value })} />
-            <span className="block text-xs font-normal text-[var(--color-foreground-muted)]">{t('admin.directEndpoint.providerHint')}</span>
+            <span className="block text-caption font-normal text-[var(--color-foreground-muted)]">{t('admin.directEndpoint.providerHint')}</span>
           </label>
-          <label className="block space-y-1 text-sm font-medium">{t('admin.endpoint.apiProtocol')}
+          <label className="block space-y-1 text-caption font-medium">{t('admin.endpoint.apiProtocol')}
             {engine === 'pi-cli' ? (
               <Select aria-label={t('admin.directEndpoint.protocolLabel')} value={config.api_protocol ?? ''} onChange={e => setConfig({ ...config, api_protocol: e.target.value })}>
                 <option value="" disabled>{t('admin.directEndpoint.selectProtocol')}</option>
@@ -236,7 +236,7 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved, nativeCr
                 <option value="chat-completions">Chat Completions</option>
               </Select>
             ) : (
-              <span className="flex min-h-[var(--control-height)] items-center text-sm font-normal text-[var(--color-foreground-muted)]">{t('admin.directEndpoint.fixedProtocol')}</span>
+              <span className="flex min-h-[var(--control-height)] items-center text-caption font-normal text-[var(--color-foreground-muted)]">{t('admin.directEndpoint.fixedProtocol')}</span>
             )}
           </label>
         </div>

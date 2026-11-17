@@ -9,6 +9,8 @@ import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import { useNavigate } from 'react-router-dom'
 import AgentConversationsPanel from '@/components/agent-links/AgentConversationsPanel'
 import AgentOverviewSummary from '@/components/agent-links/AgentOverviewSummary'
+import SidebarCreateAgentDialog from '@/components/SidebarCreateAgentDialog'
+import { useAgents } from '@/hooks/useAgents'
 import { useAuth } from '@/hooks/useAuth'
 import { useAgentLinks } from '@/hooks/useAgentLinks'
 import { useActiveTurns } from '@/hooks/useActiveTurns'
@@ -37,10 +39,38 @@ function Notice({ title, body, action, tone = 'neutral' }: { title: string; body
       <div className="flex max-w-md flex-col items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-6 text-center shadow-card">
         {tone === 'warning' && <AlertTriangle className="h-6 w-6 text-[var(--color-warning)]" aria-hidden="true" />}
         <h2 className="text-body font-semibold text-[var(--color-foreground)]">{title}</h2>
-        {body && <p className="text-caption text-[var(--color-foreground-muted)]">{body}</p>}
+        {body && <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{body}</p>}
         {action}
       </div>
     </div>
+  )
+}
+
+/**
+ * The empty overview's way forward for an admin: the same create-agent flow
+ * as the sidebar's "+" (machine picked inside the dialog). Mounted only in
+ * that state, so the page does not load the agent list otherwise.
+ */
+function AddAgentAction({ onCreated }: { onCreated: () => void }) {
+  const { t } = useLocale()
+  const [open, setOpen] = useState(false)
+  const { createAgent, fetchEngineCatalog, availableEngines } = useAgents()
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}><Plus /> {t('agentLinks.addAgent')}</Button>
+      <SidebarCreateAgentDialog
+        open={open}
+        onOpenChange={setOpen}
+        createAgent={createAgent}
+        fetchEngineCatalog={fetchEngineCatalog}
+        availableEngines={availableEngines}
+        onCreated={() => {
+          // The new agent's DM room belongs in the sidebar too.
+          window.dispatchEvent(new CustomEvent('anygarden:rooms:invalidate'))
+          onCreated()
+        }}
+      />
+    </>
   )
 }
 
@@ -153,7 +183,7 @@ export default function AgentLinksPage() {
 
   let body: ReactNode
   if (loading && !graph) {
-    body = <div role="status" className="flex flex-1 items-center justify-center bg-[var(--color-surface-alt)] text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.loading')}</div>
+    body = <div role="status" className="flex flex-1 items-center justify-center bg-[var(--color-surface-alt)] text-caption font-medium text-[var(--color-foreground-muted)]">{t('agentLinks.loading')}</div>
   } else if (errorStatus !== null && !graph) {
     body = (
       <Notice
@@ -163,7 +193,11 @@ export default function AgentLinksPage() {
       />
     )
   } else if (agents.length === 0) {
-    body = <Notice title={t('agentLinks.noAgentsTitle')} body={t('agentLinks.noAgentsBody')} />
+    // Only an admin can add agents, so only an admin gets the action; everyone
+    // else is told who can.
+    body = user?.is_admin
+      ? <Notice title={t('agentLinks.noAgentsTitle')} body={t('agentLinks.noAgentsAdminBody')} action={<AddAgentAction onCreated={() => void refresh()} />} />
+      : <Notice title={t('agentLinks.noAgentsTitle')} body={t('agentLinks.noAgentsBody')} />
   } else {
     body = (
       <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -217,11 +251,11 @@ export default function AgentLinksPage() {
           {(links.length === 0 || cycles.length > 0 || saving > 0) && (
             // Non-blocking: the agents stay draggable underneath. Starts below the toolbar.
             <div className="pointer-events-none absolute inset-x-3 top-14 z-10 flex flex-col items-center gap-2">
-              {saving > 0 && <p role="status" className="rounded-[var(--radius-pill)] bg-[var(--color-surface-elevated)] px-3 py-1 text-caption text-[var(--color-foreground-muted)] shadow-whisper">{t('agentLinks.saving')}</p>}
+              {saving > 0 && <p role="status" className="rounded-[var(--radius-pill)] bg-[var(--color-surface-elevated)] px-3 py-1 text-caption font-medium text-[var(--color-foreground-muted)] shadow-whisper">{t('agentLinks.saving')}</p>}
               {cycles.length > 0 && (
                 <div role="status" data-testid="agent-links-cycles" className="pointer-events-auto flex max-w-md gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] px-3 py-2 shadow-card">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
-                  <div className="min-w-0 text-caption text-[var(--color-foreground)]">
+                  <div className="min-w-0 text-caption font-medium text-[var(--color-foreground)]">
                     <p className="font-semibold">{t('agentLinks.cycleTitle')}</p>
                     <ul className="mt-1 space-y-0.5">
                       {cycles.map(cycle => (
@@ -237,7 +271,7 @@ export default function AgentLinksPage() {
               {links.length === 0 && (
                 <div className="pointer-events-auto max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-4 shadow-card" data-testid="agent-links-empty">
                   <h2 className="text-body font-semibold text-[var(--color-foreground)]">{t('agentLinks.emptyTitle')}</h2>
-                  <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.emptyBody')}</p>
+                  <p className="mt-1 text-caption font-medium text-[var(--color-foreground-muted)]">{t('agentLinks.emptyBody')}</p>
                 </div>
               )}
             </div>
@@ -353,7 +387,7 @@ function LinkDetails({ link, nameOf, onReverse, onDelete }: {
   const { t } = useLocale()
   return <div className="space-y-4" data-testid="agent-link-details">
     <h2 className="break-words text-body font-semibold">{t('agentLinks.linkDetailsTitle', { from: nameOf(link.from_agent_id), to: nameOf(link.to_agent_id) })}</h2>
-    <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.description')}</p>
+    <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('agentLinks.description')}</p>
     <div className="flex flex-wrap gap-2">
       {onReverse && <Button variant="outline" size="sm" onClick={onReverse}><ArrowLeftRight />{t('agentLinks.reverseLink')}</Button>}
       <Button variant="ghost" size="sm" onClick={onDelete} className="text-[var(--color-danger)]"><Trash2 />{t('agentLinks.delete')}</Button>
@@ -394,26 +428,26 @@ function AgentDetails({ agent, user, onAdd, links, nameOf, onOpenAgent, onDelete
     <div className="space-y-4" data-testid="agent-reach-details">
       <div>
         <h2 className="break-words text-body font-semibold text-[var(--color-foreground)]">{agent.name}</h2>
-        {agent.description && <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">{agent.description}</p>}
+        {agent.description && <p className="mt-1 text-caption font-medium text-[var(--color-foreground-muted)]">{agent.description}</p>}
       </div>
       <AgentConversationsPanel key={`${user?.id ?? ''}:${agent.id}`} agentId={agent.id} user={user} />
       {onAdd && <Button variant="outline" size="sm" onClick={onAdd}><Plus />{t('agentLinks.addLink')}</Button>}
-      <p className="flex items-start gap-2 text-caption text-[var(--color-foreground-muted)]">
+      <p className="flex items-start gap-2 text-caption font-medium text-[var(--color-foreground-muted)]">
         <Network className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <span>{reachable.length === 0
           ? t('agentLinks.reachNone', { name: agent.name })
           : t('agentLinks.reachSummary', { count: formatNumber(reachable.length) })}</span>
       </p>
       <div>
-        <h3 className="text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('agentLinks.outgoing')}</h3>
+        <h3 className="text-badge font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('agentLinks.outgoing')}</h3>
         {outgoing.length === 0
-          ? <p className="mt-1 text-caption text-[var(--color-foreground-subtle)]">{t('agentLinks.none')}</p>
+          ? <p className="mt-1 text-caption font-medium text-[var(--color-foreground-subtle)]">{t('agentLinks.none')}</p>
           : <ul className="mt-1 space-y-0.5">{outgoing.map(link => linkRow(link, link.to_agent_id, t('agentLinks.deleteNamed', { to: nameOf(link.to_agent_id) })))}</ul>}
       </div>
       <div>
-        <h3 className="text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('agentLinks.incoming')}</h3>
+        <h3 className="text-badge font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('agentLinks.incoming')}</h3>
         {incoming.length === 0
-          ? <p className="mt-1 text-caption text-[var(--color-foreground-subtle)]">{t('agentLinks.none')}</p>
+          ? <p className="mt-1 text-caption font-medium text-[var(--color-foreground-subtle)]">{t('agentLinks.none')}</p>
           : <ul className="mt-1 space-y-0.5">{incoming.map(link => linkRow(link, link.from_agent_id, t('agentLinks.deleteIncoming', { from: nameOf(link.from_agent_id) })))}</ul>}
       </div>
     </div>

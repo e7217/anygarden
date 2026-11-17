@@ -64,7 +64,7 @@ export default function SharedRoomConversation({ currentRoom, channel }: {
 
   function renderSubmission(submission: SharedSubmission) {
     return (
-      <section key={submission.request_id} className="mt-3 space-y-2 rounded-[var(--radius-md)] border border-dashed p-3 text-sm">
+      <section key={submission.request_id} className="mt-3 space-y-2 rounded-[var(--radius-md)] border border-dashed p-3 text-caption">
         <p className="font-medium">{t(submission.kind === 'message.send' ? 'federation.room.pendingMessage' : submission.kind === 'task.cancel' ? 'federation.room.pendingCancel' : 'federation.room.pendingDelegation')}</p>
         {submission.text && <p className="whitespace-pre-wrap break-words">{submission.text}</p>}
         {submission.executor && <p>{targetFor(submission.executor)?.name || t('federation.room.unknownAgent')}</p>}
@@ -73,7 +73,7 @@ export default function SharedRoomConversation({ currentRoom, channel }: {
         {submission.can_retry && (
           <div className="space-y-1">
             <Button variant="outline" size="sm" disabled={room.busy || !writable} onClick={() => void room.retry(submission.request_id)}>{t('federation.room.resend')}</Button>
-            <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.room.resendNote')}</p>
+            <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('federation.room.resendNote')}</p>
           </div>
         )}
       </section>
@@ -93,7 +93,7 @@ export default function SharedRoomConversation({ currentRoom, channel }: {
           <Button variant="ghost" size="icon" aria-label={t('common.refresh')} disabled={room.loading} onClick={() => void room.refresh()}><RefreshCw className="size-4" /></Button>
         </header>
         {room.error && (
-          <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-[var(--color-surface-alt)] px-4 py-3 text-sm">
+          <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-[var(--color-surface-alt)] px-4 py-3 text-caption">
             <span>{t(sharedErrorCopy(room.error, true))}</span>
             <Button size="sm" variant="outline" disabled={room.loading} onClick={() => void room.refresh()}>{t('federation.room.retry')}</Button>
           </div>
@@ -101,9 +101,9 @@ export default function SharedRoomConversation({ currentRoom, channel }: {
         <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto" aria-label={t('federation.sharedChannel')}
           onScroll={event => { const element = event.currentTarget; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
           <div className="mx-auto max-w-3xl space-y-4 px-3 py-4 sm:px-6">
-            {!data && room.loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('federation.room.loading')}</p>}
+            {!data && room.loading && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('federation.room.loading')}</p>}
             {data?.cursor.has_more_before && <Button variant="ghost" size="sm" disabled={room.loading} onClick={() => void room.loadOlder()}>{t('federation.room.older')}</Button>}
-            {data && data.messages.length === 0 && <p className="py-8 text-center text-sm text-[var(--color-foreground-muted)]">{t('federation.room.empty')}</p>}
+            {data && data.messages.length === 0 && <p className="py-8 text-center text-caption text-[var(--color-foreground-muted)]">{t('federation.room.empty')}</p>}
             {data?.messages.map(message => {
               const delegations = data.delegations.filter(item => item.source_message_id === message.message_id)
               const requestPending = pending.some(item => item.kind === 'task.request' && item.source_message_id === message.message_id && item.state !== 'failed')
@@ -111,13 +111,13 @@ export default function SharedRoomConversation({ currentRoom, channel }: {
               const date = message.created_at ? new Date(message.created_at) : null
               return (
                 <article key={message.message_id} id={`shared-message-${message.message_id}`} tabIndex={-1} data-shared-message={message.message_id} className={`min-w-0 break-words outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] ${message.thread_root_id ? 'ml-3 border-l-2 pl-3 sm:ml-6' : ''}`}>
-                  <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+                  <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-caption">
                     <span className="font-medium">{message.actor_name || t('federation.room.unknownParticipant')}</span>
-                    {date && !Number.isNaN(date.getTime()) && <time dateTime={message.created_at!} className="text-caption text-[var(--color-foreground-muted)]">{formatDate(date, { dateStyle: 'short', timeStyle: 'short' })}</time>}
+                    {date && !Number.isNaN(date.getTime()) && <time dateTime={message.created_at!} className="text-caption font-medium text-[var(--color-foreground-muted)]">{formatDate(date, { dateStyle: 'short', timeStyle: 'short' })}</time>}
                     {!message.confirmed && <Badge variant="outline">{t('federation.room.pending')}</Badge>}
                   </div>
-                  {root && <blockquote className="mb-2 line-clamp-2 border-l-2 pl-2 text-caption text-[var(--color-foreground-muted)]">{root.text}</blockquote>}
-                  <div className="min-w-0 overflow-hidden text-sm"><MarkdownContent content={message.text} /></div>
+                  {root && <blockquote className="mb-2 line-clamp-2 border-l-2 pl-2 text-caption font-medium text-[var(--color-foreground-muted)]">{root.text}</blockquote>}
+                  <div className="min-w-0 overflow-hidden text-caption"><MarkdownContent content={message.text} /></div>
                   {message.confirmed && message.thread_root_id === null && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {data.permissions.can_delegate && <DelegateMessageDialog message={message} room={room} disabled={!writable || room.busy || requestPending || delegations.length > 0} />}
@@ -137,17 +137,17 @@ export default function SharedRoomConversation({ currentRoom, channel }: {
         </div>
         <div className="shrink-0 border-t bg-[var(--color-surface)] px-3 py-3 sm:px-6">
           <div className="mx-auto max-w-3xl space-y-2">
-            {room.actionError && <p role="alert" className="text-sm text-[var(--color-danger)]">{t(sharedErrorCopy(room.actionError))}</p>}
+            {room.actionError && <p role="alert" className="text-caption text-[var(--color-danger)]">{t(sharedErrorCopy(room.actionError))}</p>}
             {data?.permissions.can_send ? (
               <form onSubmit={event => { event.preventDefault(); void send() }} className="space-y-2">
-                {reply && <div className="flex items-center justify-between gap-2 text-sm"><span className="truncate">{t('federation.room.replying', { name: reply.actor_name || t('federation.room.unknownParticipant') })}</span><Button type="button" size="icon" variant="ghost" aria-label={t('federation.room.cancel')} onClick={() => setReplyTarget(null)}><X className="size-4" /></Button></div>}
+                {reply && <div className="flex items-center justify-between gap-2 text-caption"><span className="truncate">{t('federation.room.replying', { name: reply.actor_name || t('federation.room.unknownParticipant') })}</span><Button type="button" size="icon" variant="ghost" aria-label={t('federation.room.cancel')} onClick={() => setReplyTarget(null)}><X className="size-4" /></Button></div>}
                 <label className="sr-only" htmlFor="shared-message-input">{t('federation.room.message')}</label>
                 <Textarea ref={textarea} id="shared-message-input" value={text} maxLength={16384} disabled={!writable || room.busy} placeholder={t('federation.room.placeholder')}
                   className="min-h-20 max-h-40" onChange={event => { setText(event.target.value); setRequestId(uuid()) }}
                   onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
                 <div className="flex justify-end"><Button type="submit" disabled={!text.trim() || !writable || room.busy}>{t('federation.room.send')}</Button></div>
               </form>
-            ) : data && <p className="text-sm text-[var(--color-foreground-muted)]">{t('federation.room.readOnly')}</p>}
+            ) : data && <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.room.readOnly')}</p>}
           </div>
         </div>
       </main>

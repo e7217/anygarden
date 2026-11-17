@@ -56,18 +56,18 @@ export default function AgentLinksPanel({ agentId, agentName, onNavigateAway }: 
 
   return (
     <div className="space-y-3" data-testid="agent-links-panel">
-      <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.settingsHint', { name: agentName })}</p>
+      <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('agentLinks.settingsHint', { name: agentName })}</p>
 
-      {loading && !graph && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('agentLinks.loading')}</p>}
+      {loading && !graph && <p role="status" className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('agentLinks.loading')}</p>}
       {errorStatus !== null && (
         <div className="flex flex-wrap items-center gap-3">
-          <p role="alert" className="text-caption text-[var(--color-danger)]">{t('agentLinks.loadFailed', { status: errorStatus })}</p>
+          <p role="alert" className="text-caption font-medium text-[var(--color-danger)]">{t('agentLinks.loadFailed', { status: errorStatus })}</p>
           <Button variant="outline" size="sm" onClick={() => void refresh()}>{t('common.retry')}</Button>
         </div>
       )}
 
       {graph && (outgoing.length === 0 ? (
-        <p className="text-caption text-[var(--color-foreground-subtle)]">{t('agentLinks.settingsEmpty', { name: agentName })}</p>
+        <p className="text-caption font-medium text-[var(--color-foreground-subtle)]">{t('agentLinks.settingsEmpty', { name: agentName })}</p>
       ) : (
         <ul className="space-y-2">
           {outgoing.map(link => {
@@ -94,7 +94,7 @@ export default function AgentLinksPanel({ agentId, agentName, onNavigateAway }: 
           <Button variant="link" size="sm" onClick={() => { onNavigateAway?.(); navigate('/agents/links') }}>
             {t('agentLinks.openMap')}
           </Button>
-          {!canAdd && <p className="w-full text-caption text-[var(--color-foreground-subtle)]">{t('agentLinks.noOtherAgents')}</p>}
+          {!canAdd && <p className="w-full text-caption font-medium text-[var(--color-foreground-subtle)]">{t('agentLinks.noOtherAgents')}</p>}
         </div>
       )}
 

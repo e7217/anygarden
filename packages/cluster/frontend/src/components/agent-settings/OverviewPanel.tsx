@@ -198,7 +198,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
   if (!agent) {
     return (
       <div
-        className="flex h-full items-center justify-center text-caption text-[var(--color-foreground-subtle)]"
+        className="flex h-full items-center justify-center text-caption font-medium text-[var(--color-foreground-subtle)]"
         data-testid="overview-panel-empty"
       >
         {t('admin.overview.noAgent')}
@@ -386,11 +386,11 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             disabled={nameSaving}
             aria-label={t('admin.overview.agentName')}
             data-testid="overview-name-input"
-            className="text-base font-medium"
+            className="text-body font-medium"
           />
           {nameError ? (
             <div
-              className="flex items-center gap-1 text-xs text-[var(--color-warning)]"
+              className="flex items-center gap-1 text-caption text-[var(--color-warning)]"
               data-testid="overview-name-error"
             >
               <AlertCircle className="h-3 w-3" aria-hidden="true" />
@@ -422,7 +422,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             data-testid="overview-description-input"
             className="min-h-20"
           />
-          <div className="flex items-start justify-between gap-3 text-xs text-[var(--color-foreground-subtle)]">
+          <div className="flex items-start justify-between gap-3 text-badge text-[var(--color-foreground-subtle)]">
             <span>{t('admin.overview.descriptionVisibility')}</span>
             <span className="shrink-0" data-testid="overview-description-counter">{descriptionDraft.length}/200</span>
           </div>
@@ -435,7 +435,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               error row below. */}
           {descriptionDraft.trim() === '' ? (
             <div
-              className="text-xs text-[var(--color-warning)]"
+              className="text-caption text-[var(--color-warning)]"
               data-testid="overview-description-empty-hint"
             >
               {t('admin.overview.descriptionEmpty')}
@@ -443,7 +443,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           ) : null}
           {descriptionError ? (
             <div
-              className="flex items-center gap-1 text-xs text-[var(--color-warning)]"
+              className="flex items-center gap-1 text-caption text-[var(--color-warning)]"
               data-testid="overview-description-error"
             >
               <AlertCircle className="h-3 w-3" aria-hidden="true" />
@@ -465,12 +465,12 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
       ) : null}
 
       {/* Metadata grid */}
-      <dl className="grid grid-cols-[minmax(0,5rem)_minmax(0,1fr)] items-start gap-x-3 gap-y-4 sm:grid-cols-[6rem_minmax(0,1fr)] sm:gap-x-4 text-sm">
+      <dl className="grid grid-cols-[minmax(0,5rem)_minmax(0,1fr)] items-start gap-x-3 gap-y-4 sm:grid-cols-[6rem_minmax(0,1fr)] sm:gap-x-4 text-caption">
         <dt className="text-[var(--color-foreground-muted)]">ID</dt>
         <dd className="flex items-center gap-2 min-w-0">
           <span
             ref={idRef}
-            className="font-mono text-xs text-[var(--color-foreground)] bg-[var(--color-surface-alt)] rounded-[var(--radius-xs)] border border-[var(--color-border)] px-2 py-1 truncate"
+            className="font-mono text-badge text-[var(--color-foreground)] bg-[var(--color-surface-alt)] rounded-[var(--radius-xs)] border border-[var(--color-border)] px-2 py-1 truncate"
             data-testid="overview-id-text"
           >
             {agent.id}
@@ -480,6 +480,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             size="icon"
             onClick={() => void handleCopyId()}
             title={t('admin.overview.copyId')}
+            aria-label={t('admin.overview.copyId')}
             data-testid="overview-copy-id"
           >
             {copyState === 'ok' ? (
@@ -490,14 +491,14 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           </Button>
           {copyState === 'ok' ? (
             <span
-              className="text-xs text-[var(--color-success)]"
+              className="text-badge text-[var(--color-success)]"
               data-testid="overview-copy-feedback"
             >
               {t('admin.overview.copied')}
             </span>
           ) : copyState === 'fallback' ? (
             <span
-              className="text-xs text-[var(--color-foreground-muted)]"
+              className="text-badge text-[var(--color-foreground-muted)]"
               data-testid="overview-copy-feedback"
             >
               {t('admin.overview.clipboardUnavailable')}
@@ -534,7 +535,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           {agent.placed_on_machine_id ? (
             <>
               <span className="min-w-0 break-words">{agent.placement?.machine_name ?? agent.placed_on_machine_id}</span>
-              <span className="text-caption text-[var(--color-foreground-muted)]">
+              <span className="text-caption font-medium text-[var(--color-foreground-muted)]">
                 · {machineOffline ? t('admin.overview.machineOffline') : t('admin.overview.machineOnline')}
               </span>
             </>
@@ -581,14 +582,14 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           />
           {turnTimeoutError ? (
             <div
-              className="mt-1 flex items-center gap-1 text-xs text-[var(--color-warning)]"
+              className="mt-1 flex items-center gap-1 text-caption text-[var(--color-warning)]"
               data-testid="overview-turn-timeout-error"
             >
               <AlertCircle className="h-3 w-3" aria-hidden="true" />
               {turnTimeoutError}
             </div>
           ) : (
-            <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+            <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">
               {t('admin.overview.timeoutHelp')}
             </p>
           )}
@@ -615,11 +616,11 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             <option value="standard">{agent.engine === 'pi-cli' ? t('agentSetup.piStandardPermission') : t('admin.overview.permissionStandard')}</option>
             <option value="trusted">{t('admin.overview.permissionTrusted')}</option>
           </Select>
-          {agent.engine === 'pi-cli' && <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.piPermissionHint')}</p>}
+          {agent.engine === 'pi-cli' && <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.piPermissionHint')}</p>}
           {configError && <p role="alert" data-testid="overview-config-error">{configError}</p>}
           {agent.permission_level === 'trusted' ? (
             <p
-              className="mt-1 text-xs text-[var(--color-foreground-muted)]"
+              className="mt-1 text-badge text-[var(--color-foreground-muted)]"
               data-testid="overview-permission-trusted-warning"
             >
               {t('admin.overview.trustedWarning')}
@@ -646,7 +647,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               <label htmlFor={`${agent.id}-workspace-tools`} className="text-[var(--color-foreground)]">
                 {t('admin.overview.workspaceToolsLabel')}
               </label>
-              <p id={`${agent.id}-workspace-tools-hint`} className="text-xs text-[var(--color-foreground-muted)]">
+              <p id={`${agent.id}-workspace-tools-hint`} className="text-caption text-[var(--color-foreground-muted)]">
                 {t('admin.overview.workspaceToolsHint')}
               </p>
             </div>
@@ -666,7 +667,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               <label htmlFor={`${agent.id}-can-create-agents`} className="text-[var(--color-foreground)]">
                 {t('admin.overview.canCreateAgentsLabel')}
               </label>
-              <p id={`${agent.id}-can-create-agents-hint`} className="text-xs text-[var(--color-foreground-muted)]">
+              <p id={`${agent.id}-can-create-agents-hint`} className="text-caption text-[var(--color-foreground-muted)]">
                 {t('admin.overview.canCreateAgentsHint')}
               </p>
             </div>
@@ -688,7 +689,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           <dd className="col-span-full" data-testid="overview-unavailable-reason">
             <div
               role="status"
-              className={`flex gap-2 rounded-[var(--radius-md)] border p-3 text-sm text-[var(--color-foreground)] ${
+              className={`flex gap-2 rounded-[var(--radius-md)] border p-3 text-caption text-[var(--color-foreground)] ${
                 agent.unavailable_reason.code === 'crash_loop'
                   ? 'border-[var(--color-danger)] bg-[var(--color-danger-soft)]'
                   : 'border-[var(--color-warning)] bg-[var(--color-warning-soft)]'

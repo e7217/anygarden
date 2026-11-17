@@ -165,46 +165,46 @@ export default function MemoryPanel({ agentId, active }: { agentId: string; acti
   }
 
   return <div className="space-y-3 min-w-0" data-testid="agent-memory-panel">
-    <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentMemory.hint')}</p>
-    <label className="block space-y-1 text-sm">
+    <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentMemory.hint')}</p>
+    <label className="block space-y-1 text-caption">
       <span>{t('agentMemory.room')}</span>
-      <Select value={roomId} disabled={busy || loading || dirty} className="min-h-11" onChange={event => setRoomId(event.target.value)}>
+      <Select value={roomId} disabled={busy || loading || dirty} onChange={event => setRoomId(event.target.value)}>
         <option value="">{t('agentMemory.selectRoom')}</option>
         {rooms.map(room => <option key={room.id} value={room.id}>{room.project} · {room.name}</option>)}
       </Select>
     </label>
-    {loading && <p role="status" className="text-sm">{t('agentMemory.loading')}</p>}
-    {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
-    {notice && <p role="status" className="text-sm text-[var(--color-brand-text)]">{notice}</p>}
+    {loading && <p role="status" className="text-caption">{t('agentMemory.loading')}</p>}
+    {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
+    {notice && <p role="status" className="text-caption text-[var(--color-success)]">{notice}</p>}
     {roomId && snapshot?.room_id === roomId && <>
-      {snapshot.ephemeral && <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentMemory.ephemeral')}</p>}
-      <label className="block space-y-1 text-sm">
+      {snapshot.ephemeral && <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentMemory.ephemeral')}</p>}
+      <label className="block space-y-1 text-caption">
         <span>{t('agentMemory.notes', { room: snapshot.room_name })}</span>
         <Textarea value={draft} onChange={event => { setDraft(event.target.value); setNotice(null) }} disabled={busy || loading} rows={7} maxLength={262144} />
       </label>
-      {dirty && <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentMemory.unsaved')}</p>}
+      {dirty && <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentMemory.unsaved')}</p>}
       <div className="flex flex-wrap gap-2">
-        <Button className="min-h-11" disabled={busy || loading || !dirty} onClick={() => void saveMemory('save')}>{t('common.save')}</Button>
-        <Button variant="outline" className="min-h-11" disabled={busy || loading} onClick={() => void loadMemory()}>{dirty ? t('agentMemory.reload') : t('common.refresh')}</Button>
-        <Button variant="ghost" className="min-h-11" disabled={busy || loading || !snapshot.memory_md || dirty} onClick={() => void saveMemory('clear')}>{t('agentMemory.clear')}</Button>
+        <Button disabled={busy || loading || !dirty} onClick={() => void saveMemory('save')}>{t('common.save')}</Button>
+        <Button variant="outline" disabled={busy || loading} onClick={() => void loadMemory()}>{dirty ? t('agentMemory.reload') : t('common.refresh')}</Button>
+        <Button variant="ghost" disabled={busy || loading || !snapshot.memory_md || dirty} onClick={() => void saveMemory('clear')}>{t('agentMemory.clear')}</Button>
       </div>
     </>}
-    {!roomId && !loading && <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentMemory.chooseHint')}</p>}
+    {!roomId && !loading && <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentMemory.chooseHint')}</p>}
     {legacy && <details className="rounded-[var(--radius-sm)] border border-[var(--color-border)] p-3 space-y-3">
-      <summary className="cursor-pointer text-sm min-h-11 flex items-center">{t('agentMemory.archive')}</summary>
-      <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentMemory.archiveHint')}</p>
-      {editingLegacy ? <Textarea aria-label={t('agentMemory.archive')} value={legacyDraft} onChange={event => setLegacyDraft(event.target.value)} disabled={busy || loading} rows={7} maxLength={262144} /> : <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-sm">{legacy}</pre>}
+      <summary className="cursor-pointer text-caption min-h-[var(--control-height)] flex items-center">{t('agentMemory.archive')}</summary>
+      <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentMemory.archiveHint')}</p>
+      {editingLegacy ? <Textarea aria-label={t('agentMemory.archive')} value={legacyDraft} onChange={event => setLegacyDraft(event.target.value)} disabled={busy || loading} rows={7} maxLength={262144} /> : <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-caption">{legacy}</pre>}
       <div className="flex flex-wrap gap-2">
         {editingLegacy ? <>
-          <Button className="min-h-11" disabled={busy || loading || legacyDraft === legacy} onClick={() => void saveLegacy()}>{t('common.save')}</Button>
-          <Button variant="outline" className="min-h-11" disabled={busy} onClick={() => { setLegacyDraft(legacy); setEditingLegacy(false) }}>{t('common.cancel')}</Button>
+          <Button disabled={busy || loading || legacyDraft === legacy} onClick={() => void saveLegacy()}>{t('common.save')}</Button>
+          <Button variant="outline" disabled={busy} onClick={() => { setLegacyDraft(legacy); setEditingLegacy(false) }}>{t('common.cancel')}</Button>
         </> : <>
-          <Button variant="outline" className="min-h-11" disabled={busy || loading} onClick={() => setEditingLegacy(true)}>{t('agentMemory.editArchive')}</Button>
-          <Button variant="outline" className="min-h-11" onClick={exportLegacy}>{t('agentMemory.export')}</Button>
+          <Button variant="outline" disabled={busy || loading} onClick={() => setEditingLegacy(true)}>{t('agentMemory.editArchive')}</Button>
+          <Button variant="outline" onClick={exportLegacy}>{t('agentMemory.export')}</Button>
         </>}
-        {snapshot?.room_id === roomId && roomId && <Button variant="outline" className="min-h-11" disabled={busy || loading || dirty || editingLegacy} onClick={() => void saveMemory('import-legacy')}>{t('agentMemory.import')}</Button>}
+        {snapshot?.room_id === roomId && roomId && <Button variant="outline" disabled={busy || loading || dirty || editingLegacy} onClick={() => void saveMemory('import-legacy')}>{t('agentMemory.import')}</Button>}
       </div>
     </details>}
-    {error && !roomId && <Button variant="outline" className="min-h-11" disabled={busy || loading || editingLegacy} onClick={() => setCatalogReload(value => value + 1)}>{t('common.retry')}</Button>}
+    {error && !roomId && <Button variant="outline" disabled={busy || loading || editingLegacy} onClick={() => setCatalogReload(value => value + 1)}>{t('common.retry')}</Button>}
   </div>
 }

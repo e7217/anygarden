@@ -100,24 +100,24 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
   return (
     <div className="space-y-5 py-2" data-testid="rooms-panel">
       <div className="flex items-center justify-between gap-3">
-        {current.loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('admin.rooms.loading')}</p>}
+        {current.loading && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('admin.rooms.loading')}</p>}
         <Button variant="outline" size="sm" className="ml-auto" disabled={disabled} onClick={() => void fetchRooms()}>{current.error ? t('common.retry') : t('common.refresh')}</Button>
       </div>
-      {current.error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{current.error}</p>}
+      {current.error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{current.error}</p>}
       {current.loaded && <>
       <div>
-        <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
+        <h3 className="text-badge font-semibold uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
           {t('admin.rooms.assigned')}
         </h3>
         {assignedRooms.length === 0 ? (
-          <p className="text-caption text-[var(--color-foreground-subtle)]">{t('admin.rooms.noneAssigned')}</p>
+          <p className="text-caption font-medium text-[var(--color-foreground-subtle)]">{t('admin.rooms.noneAssigned')}</p>
         ) : (
           <div className="space-y-2">
             {assignedRooms.map(room => (
               <div key={room.id} className="flex items-center justify-between rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 py-1.5">
                 <span className="flex items-center gap-2 min-w-0">
                   <EntityAvatar id={room.id} name={room.name} kind="room" size="sm" />
-                  <span className="truncate text-sm font-medium text-[var(--color-foreground)]">{room.name}</span>
+                  <span className="truncate text-caption font-medium text-[var(--color-foreground)]">{room.name}</span>
                 </span>
                 <Button
                   variant="ghost"
@@ -135,18 +135,18 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
         )}
       </div>
       <div>
-        <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
+        <h3 className="text-badge font-semibold uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
           {t('admin.rooms.available')}
         </h3>
         {availableRooms.length === 0 ? (
-          <p className="text-caption text-[var(--color-foreground-subtle)]">{t('admin.rooms.noneAvailable')}</p>
+          <p className="text-caption font-medium text-[var(--color-foreground-subtle)]">{t('admin.rooms.noneAvailable')}</p>
         ) : (
           <div className="space-y-2">
             {availableRooms.map(room => (
               <div key={room.id} className="flex items-center justify-between rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 py-1.5">
                 <span className="flex items-center gap-2 min-w-0">
                   <EntityAvatar id={room.id} name={room.name} kind="room" size="sm" />
-                  <span className="truncate text-sm font-medium text-[var(--color-foreground)]">{room.name}</span>
+                  <span className="truncate text-caption font-medium text-[var(--color-foreground)]">{room.name}</span>
                 </span>
                 <Button
                   variant="ghost"

@@ -40,7 +40,8 @@ export const ENGINE_TINT: Record<string, string> = {
 /** Agent actual_state → border color (status dot / focus ring). */
 export function agentStateColor(state: string | undefined | null): string {
   if (!state) return STATUS_OFFLINE
-  if (state === 'running') return ACCENT
+  // Run state is a status, not an action, so it uses the health green (DESIGN §1).
+  if (state === 'running') return STATUS_ONLINE
   if (state === 'starting' || state === 'stopping') return TEXT_SUBTLE
   if (state === 'crashed') return 'var(--color-danger)'
   if (state === 'idle' || state === 'stopped') return 'var(--color-border-strong)'

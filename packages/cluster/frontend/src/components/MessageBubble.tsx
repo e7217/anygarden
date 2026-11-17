@@ -73,7 +73,7 @@ function MessageReferences({
       {refs.map(r => (
         <span
           key={r.id}
-          className="inline-flex max-w-[180px] items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-foreground-muted)] sm:max-w-[240px] md:max-w-[320px]"
+          className="inline-flex max-w-[180px] items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-badge text-[var(--color-foreground-muted)] sm:max-w-[240px] md:max-w-[320px]"
           title={r.name}
         >
           {r.origin === 'inline' ? (
@@ -114,7 +114,7 @@ function UndeliveredCalls({
             key={g.reason}
             data-testid="undelivered-call"
             title={t('chat.undeliveredCallTitle')}
-            className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-2 py-0.5 text-xs text-[var(--color-foreground-muted)]"
+            className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-2 py-0.5 text-badge text-[var(--color-foreground-muted)]"
           >
             <BellOff className="h-3 w-3 shrink-0 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
             <span className="min-w-0 break-words">{label}</span>
@@ -346,7 +346,7 @@ export default memo(function MessageBubble({
         className="min-h-20"
       />
       <div className="flex items-center justify-end gap-2">
-        <span className="mr-auto hidden text-caption text-[var(--color-foreground-subtle)] md:inline">
+        <span className="mr-auto hidden text-caption font-medium text-[var(--color-foreground-subtle)] md:inline">
           {t('chat.editMessageHint')}
         </span>
         <Button type="button" size="sm" variant="outline" onClick={cancelEdit} disabled={changeBusy}>
@@ -360,7 +360,7 @@ export default memo(function MessageBubble({
   )
 
   const deletedPlaceholder = (
-    <p className="text-caption italic text-[var(--color-foreground-muted)]">
+    <p className="text-caption font-medium italic text-[var(--color-foreground-muted)]">
       {t('chat.messageDeleted')}
     </p>
   )
@@ -411,7 +411,7 @@ export default memo(function MessageBubble({
   )
 
   const senderName = (
-    <span className="text-badge text-[var(--color-foreground-muted)]">
+    <span className="text-badge font-semibold text-[var(--color-foreground-muted)]">
       {displayName}
     </span>
   )
@@ -452,14 +452,14 @@ export default memo(function MessageBubble({
 
   if (sessionResetMeta) {
     return (
-      <div role="note" className="flex items-center gap-3 py-1 text-caption text-[var(--color-foreground-muted)]">
+      <div role="note" className="flex items-center gap-3 py-1 text-caption font-medium text-[var(--color-foreground-muted)]">
         <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-border)]" />
         <span className="text-center">
           {t('chat.sessionResetNotice', {
             actor: sessionResetMeta.actorName,
             agents: sessionResetMeta.agentNames.join(', '),
           })}
-          <span className="ml-2 text-badge text-[var(--color-foreground-subtle)]">{formatTime(message.created_at)}</span>
+          <span className="ml-2 text-badge font-semibold text-[var(--color-foreground-subtle)]">{formatTime(message.created_at)}</span>
         </span>
         <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-border)]" />
       </div>
@@ -582,7 +582,7 @@ export default memo(function MessageBubble({
             className="absolute left-0 top-0 h-full w-[3px] rounded-l-[var(--radius-lg)] bg-[var(--color-brand)]"
           />
           <div
-            className="mb-1 flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]"
+            className="mb-1 flex items-center gap-1 text-badge text-[var(--color-foreground-muted)]"
             data-testid="room-query-forward-badge"
           >
             <CornerDownRight className="h-3 w-3" aria-hidden="true" />
@@ -619,7 +619,7 @@ export default memo(function MessageBubble({
         <div className="flex items-center gap-1.5 mb-1 pr-1">
           {changeActions}
           {bookmarkBtn}
-          <span className="text-badge text-[var(--color-foreground-muted)]">{t('chat.me')}</span>
+          <span className="text-badge font-semibold text-[var(--color-foreground-muted)]">{t('chat.me')}</span>
           {avatar}
         </div>
         <div

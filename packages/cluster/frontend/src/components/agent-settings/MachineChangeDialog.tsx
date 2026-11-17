@@ -145,30 +145,30 @@ export default function MachineChangeDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1">
-            <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machineChange.current')}</p>
-            <p className="text-sm text-[var(--color-foreground)]">{currentMachineName ?? t('admin.machineChange.none')}</p>
+            <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('admin.machineChange.current')}</p>
+            <p className="text-caption text-[var(--color-foreground)]">{currentMachineName ?? t('admin.machineChange.none')}</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="machine-change-target">{t('admin.machineChange.target')}</Label>
-            {list.kind === 'loading' && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machineChange.loading')}</p>}
-            {list.kind === 'error' && <p role="alert" className="text-sm text-[var(--color-danger)]">{t('admin.machineChange.loadFailed')}</p>}
+            {list.kind === 'loading' && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machineChange.loading')}</p>}
+            {list.kind === 'error' && <p role="alert" className="text-caption text-[var(--color-danger)]">{t('admin.machineChange.loadFailed')}</p>}
             {list.kind === 'ready' && machines.length === 0 && (
-              <p className="text-sm text-[var(--color-foreground-muted)]" data-testid="machine-change-empty">{t('admin.machineChange.empty')}</p>
+              <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="machine-change-empty">{t('admin.machineChange.empty')}</p>
             )}
             {machines.length > 0 && (
               <Select id="machine-change-target" data-testid="machine-change-target" value={machineId} onChange={e => setMachineId(e.target.value)} disabled={busy}>
                 {machines.map(machine => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
               </Select>
             )}
-            {target && supported === null && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machineChange.checking')}</p>}
+            {target && supported === null && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machineChange.checking')}</p>}
             {target && supported === false && (
-              <p role="alert" className="text-sm text-[var(--color-danger)]" data-testid="machine-change-engine-missing">
+              <p role="alert" className="text-caption text-[var(--color-danger)]" data-testid="machine-change-engine-missing">
                 {t('admin.machineChange.engineMissing', { machine: target.name, engine })}
               </p>
             )}
           </div>
           {target && (
-            <div className="flex gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3 text-sm text-[var(--color-foreground)]" data-testid="machine-change-warning">
+            <div className="flex gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3 text-caption text-[var(--color-foreground)]" data-testid="machine-change-warning">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
               <div className="min-w-0 space-y-1">
                 <p className="font-medium">{t('admin.machineChange.warningTitle')}</p>
@@ -181,9 +181,9 @@ export default function MachineChangeDialog({
             </div>
           )}
           {target && <div className="space-y-1" data-testid="machine-change-move-files">
-            {preview === null && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machineChange.moveFilesChecking')}</p>}
+            {preview === null && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machineChange.moveFilesChecking')}</p>}
             {preview?.can_move && <>
-              <label className="flex min-h-[var(--control-height)] items-start gap-2 text-sm text-[var(--color-foreground)]">
+              <label className="flex min-h-[var(--control-height)] items-start gap-2 text-caption text-[var(--color-foreground)]">
                 <input
                   type="checkbox"
                   className="mt-0.5 h-4 w-4 accent-[var(--color-brand)]"
@@ -194,18 +194,18 @@ export default function MachineChangeDialog({
                 />
                 <span>{t('admin.machineChange.moveFiles', { files: preview.files, size: formatBytes(preview.bytes) })}</span>
               </label>
-              <p className="pl-6 text-caption text-[var(--color-foreground-muted)]">{t('admin.machineChange.moveFilesHint')}</p>
+              <p className="pl-6 text-caption font-medium text-[var(--color-foreground-muted)]">{t('admin.machineChange.moveFilesHint')}</p>
             </>}
-            {preview && !preview.can_move && <p className="text-sm text-[var(--color-foreground-muted)]" data-testid="machine-change-move-files-reason">
+            {preview && !preview.can_move && <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="machine-change-move-files-reason">
               {t(KNOWN_REASONS.has(preview.reason ?? '')
                 ? `admin.machineChange.moveFilesUnavailable.${preview.reason}` as Parameters<typeof t>[0]
                 : 'admin.machineChange.moveFilesUnavailable.other',
               { files: preview.files, size: formatBytes(preview.bytes), limit: formatBytes(preview.limit_bytes) })}
             </p>}
           </div>}
-          <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machineChange.instructionsKept')}</p>
-          {busy && moveFiles && <p role="status" className="text-sm text-[var(--color-foreground)]" data-testid="machine-change-moving">{t('admin.machineChange.movingFiles')}</p>}
-          {error && <p role="alert" className="text-sm text-[var(--color-danger)]">{error}</p>}
+          <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machineChange.instructionsKept')}</p>
+          {busy && moveFiles && <p role="status" className="text-caption text-[var(--color-foreground)]" data-testid="machine-change-moving">{t('admin.machineChange.movingFiles')}</p>}
+          {error && <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>{t('common.cancel')}</Button>

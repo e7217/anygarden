@@ -111,7 +111,7 @@ interface Props {
 // reused for the collapsible `<summary>` so both section types look
 // identical.
 const SECTION_HEADING_CLASS =
-  'text-sm font-semibold text-[var(--color-foreground)]'
+  'text-caption font-semibold text-[var(--color-foreground)]'
 
 // Elevated cards sit on the alternate surface in both themes.
 const SECTION_CARD_CLASS =
@@ -254,7 +254,7 @@ export default function AgentSettingsDialog({
           <DialogTitle className="flex min-w-0 flex-col items-start gap-1.5 pr-8 text-left sm:flex-row sm:items-center sm:gap-2">
             <span className="shrink-0">{t('admin.agentSettings.title')}</span>
             {agent ? (
-              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-sm font-normal text-[var(--color-foreground-muted)]">
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-caption font-normal text-[var(--color-foreground-muted)]">
                 <span className="hidden text-[var(--color-foreground-subtle)] sm:inline">—</span>
                 <PresenceDot
                   variant="agent"
@@ -300,7 +300,7 @@ export default function AgentSettingsDialog({
             <TabsContent value="settings" forceMount className={TAB_PANEL_CLASS}>
               {/* In-page links: they scroll within Settings, unlike the tabs above. */}
               <nav aria-label={t('agentSetup.settingsSections')} className="flex items-center gap-2">
-                <span className="shrink-0 text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.jumpTo')}</span>
+                <span className="shrink-0 text-badge text-[var(--color-foreground-muted)]">{t('agentSetup.jumpTo')}</span>
                 <Select className="sm:hidden" aria-label={t('agentSetup.settingsSections')} value="" onChange={event => jumpToSection(event.target.value)}>
                   <option value="" disabled>{t('agentSetup.chooseSection')}</option>
                   {settingsSections.map(section => <option key={section.id} value={section.id}>{section.label}</option>)}
@@ -312,7 +312,7 @@ export default function AgentSettingsDialog({
                       type="button"
                       aria-controls={`agent-settings-${section.id}`}
                       onClick={() => jumpToSection(section.id)}
-                      className="min-h-[var(--control-sm-height)] text-sm text-[var(--color-brand-text)] underline-offset-4 hover:underline cursor-pointer"
+                      className="min-h-[var(--control-sm-height)] text-caption text-[var(--color-brand-text)] underline-offset-4 hover:underline cursor-pointer"
                     >
                       {section.label}
                     </button>
@@ -433,7 +433,7 @@ export default function AgentSettingsDialog({
                 aria-checked={contextWindowOptOut}
                 onClick={() => void onToggleContextWindowOptOut!()}
                 data-testid="agent-settings-context-window-opt-out"
-                className="inline-flex min-h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer sm:w-auto"
+                className="inline-flex min-h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer sm:w-auto"
               >
                 <EyeOff className="h-4 w-4" />
                 <span>{t('admin.agentSettings.contextOptOut')}</span>

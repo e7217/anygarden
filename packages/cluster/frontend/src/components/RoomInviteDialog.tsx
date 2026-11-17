@@ -10,6 +10,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
@@ -171,14 +173,13 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
               <Label htmlFor="invite-expiry">{t('guest.expiry')}</Label>
-              <select
+              <Select
                 id="invite-expiry"
                 value={expirySeconds === null ? 'never' : String(expirySeconds)}
                 onChange={(e) => {
                   const v = e.target.value
                   setExpirySeconds(v === 'never' ? null : Number(v))
                 }}
-                className="min-h-11 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-sm"
               >
                 {EXPIRY_OPTIONS.map((opt) => (
                   <option
@@ -188,7 +189,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
                     {t(opt.label)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label htmlFor="invite-max-uses">{t('guest.maxUses')}</Label>
@@ -211,15 +212,15 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
         {/* Fresh token display (one-time) */}
         {freshToken && (
           <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-brand)] bg-[color:color-mix(in_srgb,var(--color-brand)_8%,transparent)] p-3">
-            <div className="text-sm font-medium">{t('guest.copyNow')}</div>
-            <div className="text-xs text-[var(--color-foreground-muted)]">
+            <div className="text-caption font-medium">{t('guest.copyNow')}</div>
+            <div className="text-badge text-[var(--color-foreground-muted)]">
               {t('guest.copyWarning')}
             </div>
-            <textarea
+            <Textarea
               readOnly
               rows={2}
               value={inviteUrl(freshToken)}
-              className="w-full resize-none rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-sm"
+              className="min-h-0 resize-none font-mono"
               aria-label={t('guest.copyLink')}
               onFocus={(e) => e.target.select()}
             />
@@ -231,9 +232,9 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
 
         {/* Existing invites */}
         <div className="space-y-2">
-          <div className="text-sm font-medium">{t('guest.activeInvites')}</div>
+          <div className="text-caption font-medium">{t('guest.activeInvites')}</div>
           {invites.length === 0 && !loading && (
-            <div className="text-xs text-[var(--color-foreground-muted)]">
+            <div className="text-badge text-[var(--color-foreground-muted)]">
               {t('guest.noInvites')}
             </div>
           )}
@@ -241,7 +242,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
             {invites.map((inv) => (
               <li
                 key={inv.id}
-                className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 py-2 text-xs"
+                className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 py-2 text-badge"
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono">{inv.id}</div>
@@ -265,7 +266,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
         </div>
 
         {error && (
-          <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+          <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-caption text-[var(--color-warning)]">
             {error}
           </div>
         )}

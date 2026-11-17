@@ -81,19 +81,19 @@ export default function RoomWorkspaceDialog({ open, onOpenChange, roomId, roomNa
       <DialogHeader><DialogTitle>{t('agentSetup.workspaceRoomDialogTitle', { room: roomName })}</DialogTitle><DialogDescription>{t('agentSetup.workspaceRoomDialogDescription')}</DialogDescription></DialogHeader>
       <div className="space-y-3">
         <Button variant="outline" size="sm" disabled={loading || Boolean(busy)} onClick={() => setRevision(value => value + 1)}><RefreshCw className={loading ? 'animate-spin' : ''} />{t('common.refresh')}</Button>
-        {loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceLoading')}</p>}
-        {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
-        {!loading && !error && rows.length === 0 && <p className="text-sm text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceRoomEmpty')}</p>}
+        {loading && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceLoading')}</p>}
+        {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
+        {!loading && !error && rows.length === 0 && <p className="text-caption text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceRoomEmpty')}</p>}
         {rows.map(row => {
           const expired = new Date(row.expires_at).getTime() <= Date.now()
           const pending = row.state === 'requested' && !expired
           const agentName = participants.find(participant => participant.agent_id === row.agent_id)?.display_name ?? row.agent_id
           return <section key={row.id} className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-medium">{row.workspace_label}</span><span className="text-xs text-[var(--color-foreground-muted)]">{expired && liveStates.has(row.state) ? labels.expired : labels[row.state] ?? row.state}</span></div>
-            <p className="text-xs text-[var(--color-foreground-muted)]">{agentName} · {row.mode === 'read' ? t('agentSetup.workspaceRead') : t('agentSetup.workspaceWrite')}</p>
-            <p className="text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceExpires', { date: formatDate(new Date(row.expires_at), { dateStyle: 'short', timeStyle: 'short' }) })}</p>
+            <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-caption font-medium">{row.workspace_label}</span><span className="text-badge text-[var(--color-foreground-muted)]">{expired && liveStates.has(row.state) ? labels.expired : labels[row.state] ?? row.state}</span></div>
+            <p className="text-badge text-[var(--color-foreground-muted)]">{agentName} · {row.mode === 'read' ? t('agentSetup.workspaceRead') : t('agentSetup.workspaceWrite')}</p>
+            <p className="text-badge text-[var(--color-foreground-muted)]">{t('agentSetup.workspaceExpires', { date: formatDate(new Date(row.expires_at), { dateStyle: 'short', timeStyle: 'short' }) })}</p>
             {pending && <>
-              <div className="grid gap-2 text-xs sm:grid-cols-2"><p>{t('agentSetup.workspaceRoomApproval')}: {row.room_approved_by_user_id ? t('agentSetup.workspaceApprovalDone') : t('agentSetup.workspaceApprovalPending')}</p><p>{t('agentSetup.workspaceGlobalApproval')}: {row.global_approved_by_user_id ? t('agentSetup.workspaceApprovalDone') : t('agentSetup.workspaceApprovalPending')}</p></div>
+              <div className="grid gap-2 text-badge sm:grid-cols-2"><p>{t('agentSetup.workspaceRoomApproval')}: {row.room_approved_by_user_id ? t('agentSetup.workspaceApprovalDone') : t('agentSetup.workspaceApprovalPending')}</p><p>{t('agentSetup.workspaceGlobalApproval')}: {row.global_approved_by_user_id ? t('agentSetup.workspaceApprovalDone') : t('agentSetup.workspaceApprovalPending')}</p></div>
               <div className="flex flex-wrap gap-2">
                 {permissions.room && !row.room_approved_by_user_id && <Button variant="outline" size="sm" disabled={Boolean(busy) || loading} onClick={() => void act(row, '/approve-room')}>{t('agentSetup.workspaceApproveRoom')}</Button>}
                 {permissions.global && !row.global_approved_by_user_id && <Button variant="outline" size="sm" disabled={Boolean(busy) || loading} onClick={() => void act(row, '/approve-global')}>{t('agentSetup.workspaceApproveGlobal')}</Button>}

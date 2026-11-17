@@ -76,7 +76,7 @@ function AttemptRow({ attempt }: { attempt: CampaignAttempt }) {
       : t('campaigns.attempts.inProgress')
   const value = attempt.trusted_score ?? attempt.dev_score
   return (
-    <li className="flex min-w-0 items-baseline justify-between gap-2 py-1 text-caption" data-testid={`campaign-attempt-${attempt.id}`}>
+    <li className="flex min-w-0 items-baseline justify-between gap-2 py-1 text-caption font-medium" data-testid={`campaign-attempt-${attempt.id}`}>
       <span className="min-w-0 truncate text-[var(--color-foreground)]">{label} · {state}</span>
       {attempt.kind !== 'retrospective' && (
         <span className="shrink-0 tabular-nums text-[var(--color-foreground-muted)]">{score(value)}</span>
@@ -168,7 +168,7 @@ function ExtendForm({ campaign, onExtend, onCancel }: {
       onSubmit={event => { event.preventDefault(); void submit() }}
       noValidate
     >
-      <p className="text-caption text-[var(--color-foreground-muted)]">{t(hasBudget ? 'campaigns.extend.hint' : 'campaigns.extend.hintNoBudget')}</p>
+      <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t(hasBudget ? 'campaigns.extend.hint' : 'campaigns.extend.hintNoBudget')}</p>
       <div className="flex flex-col gap-1">
         <label htmlFor={`${base}-deadline`} className="text-caption font-medium">{t('campaigns.extend.deadline')}</label>
         <Input id={`${base}-deadline`} type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} />
@@ -179,7 +179,7 @@ function ExtendForm({ campaign, onExtend, onCancel }: {
           <Input id={`${base}-budget`} inputMode="numeric" value={budget} onChange={e => setBudget(e.target.value)} />
         </div>
       )}
-      {error && <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>}
+      {error && <p role="alert" className="text-caption font-medium text-[var(--color-danger)]">{error}</p>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" size="sm" variant="outline" onClick={onCancel} disabled={busy}>{t('common.cancel')}</Button>
         <Button type="submit" size="sm" disabled={busy}>{t('campaigns.extend.submit')}</Button>
@@ -203,7 +203,7 @@ function ConfirmAdvice({ advice }: { advice: CampaignConfirmAdvice }) {
         className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${hold ? 'text-[var(--color-warning)]' : 'text-[var(--color-success)]'}`}
         aria-hidden
       />
-      <div className="min-w-0 text-caption">
+      <div className="min-w-0 text-caption font-medium">
         <p className="font-medium text-[var(--color-foreground)]">
           {t(hold ? 'campaigns.advice.hold' : 'campaigns.advice.confirm')}
         </p>
@@ -266,31 +266,31 @@ function CampaignCard({ campaign, attempts, canManage, now, onAction, onExtend }
         <p className="min-w-0 text-caption font-semibold text-[var(--color-foreground)] [overflow-wrap:anywhere]">{campaign.title}</p>
         <CampaignStatusBadge status={campaign.status} />
       </div>
-      <p className="text-caption text-[var(--color-foreground)]" data-testid="campaign-score">
+      <p className="text-caption font-medium text-[var(--color-foreground)]" data-testid="campaign-score">
         <span className="font-medium">{campaign.metric.name}</span>{' · '}
         {best && bestValue != null
           ? <>{t('campaigns.score.best', { score: score(bestValue) })}{campaign.trusted_eval === 'external' && !best.verified && <> {t('campaigns.score.unverified')}</>}</>
           : t('campaigns.score.none')}
         {criterion && <> · {criterion}</>}
       </p>
-      <p className="text-caption text-[var(--color-foreground-muted)]" data-testid="campaign-budget">
+      <p className="text-caption font-medium text-[var(--color-foreground-muted)]" data-testid="campaign-budget">
         {percent == null
           ? t('campaigns.budget.tokensUsed', { count: formatNumber(campaign.tokens_used) })
           : t('campaigns.budget.used', { percent })}
         {campaign.deadline_at && !ended && <> · {timeLeft(campaign.deadline_at, now)}</>}
       </p>
       {campaign.status_detail && (
-        <p className="text-caption text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">{campaignStatusDetail(t, campaign.status_detail)}</p>
+        <p className="text-caption font-medium text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">{campaignStatusDetail(t, campaign.status_detail)}</p>
       )}
-      {allowed.decide && <p className="text-caption text-[var(--color-foreground)]">{t('campaigns.confirmPrompt')}</p>}
+      {allowed.decide && <p className="text-caption font-medium text-[var(--color-foreground)]">{t('campaigns.confirmPrompt')}</p>}
       {allowed.decide && campaign.confirm_advice && <ConfirmAdvice advice={campaign.confirm_advice} />}
 
       <details className="min-w-0">
-        <summary className="min-h-11 cursor-pointer content-center text-caption font-medium text-[var(--color-foreground-muted)]">
+        <summary className="min-h-[var(--control-height)] cursor-pointer content-center text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('campaigns.attempts.summary')}
         </summary>
         {attempts.length === 0
-          ? <p className="py-1 text-caption text-[var(--color-foreground-subtle)]">{t('campaigns.attempts.empty')}</p>
+          ? <p className="py-1 text-caption font-medium text-[var(--color-foreground-subtle)]">{t('campaigns.attempts.empty')}</p>
           : <ul className="divide-y divide-[var(--color-border)]">{attempts.map(a => <AttemptRow key={a.id} attempt={a} />)}</ul>}
       </details>
 
@@ -368,10 +368,10 @@ export default function CampaignSection({ roomId, room, participants = {} }: Cam
         )}
       </header>
       <div className="flex min-w-0 flex-col gap-1 px-1 pb-2">
-        {error && <p role="alert" className="px-2 text-caption text-[var(--color-danger)]">{t('campaigns.loadFailed')} {error}</p>}
-        {loading && campaigns.length === 0 && <p className="px-2 text-caption text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
+        {error && <p role="alert" className="px-2 text-caption font-medium text-[var(--color-danger)]">{t('campaigns.loadFailed')} {error}</p>}
+        {loading && campaigns.length === 0 && <p className="px-2 text-caption font-medium text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
         {!loading && !error && campaigns.length === 0 && (
-          <p className="px-2 py-2 text-caption text-[var(--color-foreground-subtle)]">{t('campaigns.empty')}</p>
+          <p className="px-2 py-2 text-caption font-medium text-[var(--color-foreground-subtle)]">{t('campaigns.empty')}</p>
         )}
         {campaigns.map(campaign => (
           <CampaignCard

@@ -62,7 +62,7 @@ function CreateForm({ target, onClose, agents, links, onCreate }: Props & { targ
         </Select>
       </div>
     </div>
-    {error && <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>}
+    {error && <p role="alert" className="text-caption font-medium text-[var(--color-danger)]">{error}</p>}
     <DialogFooter><Button type="button" variant="outline" onClick={onClose} disabled={saving}>{t('common.cancel')}</Button><Button type="submit" disabled={saving || unavailable.has(toId)}>{saving ? t('agentLinks.saving') : t('agentLinks.create')}</Button></DialogFooter>
   </form>
 }

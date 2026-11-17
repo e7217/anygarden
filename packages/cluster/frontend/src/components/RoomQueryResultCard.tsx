@@ -64,7 +64,7 @@ export default function RoomQueryResultCard({
   let header: React.ReactNode
   if (result.status === 'solo') {
     header = (
-      <div className="flex items-center gap-2 text-xs text-[var(--color-foreground-muted)]">
+      <div className="flex items-center gap-2 text-badge text-[var(--color-foreground-muted)]">
         <UserX className="h-3.5 w-3.5" aria-hidden="true" />
         <span>
           ↪ #{displayRoom} · {t('chat.noTargetAgents')}
@@ -73,7 +73,7 @@ export default function RoomQueryResultCard({
     )
   } else {
     header = (
-      <div className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
+      <div className="flex items-center gap-1 text-badge text-[var(--color-foreground-muted)]">
         <span>↪</span>
         <span className="font-medium text-[var(--color-foreground)]">
           #{displayRoom}
@@ -108,7 +108,7 @@ export default function RoomQueryResultCard({
       />
       <div className="mb-2">{header}</div>
       {result.responses.length === 0 ? (
-        <p className="text-sm text-[var(--color-foreground-muted)]">
+        <p className="text-caption text-[var(--color-foreground-muted)]">
           {result.status === 'solo'
             ? t('chat.noAgentResponse')
             : t('chat.noResponsesYet')}
@@ -158,7 +158,7 @@ function ResponseCard({ participantId, displayName, content }: ResponseCardProps
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex min-h-11 w-full items-center justify-between px-3 py-2 text-left text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+        className="flex min-h-[var(--control-height)] w-full items-center justify-between px-3 py-2 text-left text-badge text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
         aria-expanded={expanded}
         aria-controls={panelId}
       >

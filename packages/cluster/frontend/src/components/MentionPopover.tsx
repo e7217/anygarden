@@ -38,7 +38,7 @@ export default function MentionPopover({
   return (
     <div
       ref={listRef}
-      className="absolute z-50 max-h-48 w-56 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-sm"
+      className="absolute z-50 max-h-48 w-56 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep"
       style={{ bottom: position.top, left: position.left }}
     >
       {options.map((option, i) => {
@@ -51,14 +51,14 @@ export default function MentionPopover({
         return (
           <button
             key={option.id}
-            className={`flex min-h-11 w-full items-start gap-2 px-3 py-1.5 text-sm text-left transition-colors ${
+            className={`flex min-h-[var(--control-height)] w-full items-start gap-2 px-3 py-1.5 text-caption text-left transition-colors ${
               i === selectedIndex
                 ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-text)]'
                 : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'
             }`}
             onMouseDown={(e) => { e.preventDefault(); onSelect(option) }}
           >
-            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)] text-badge">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)] text-badge font-semibold">
               {option.kind === 'room'
                 ? '#'
                 : option.kind === 'everyone'

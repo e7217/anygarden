@@ -100,7 +100,7 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
               ${selected ? 'bg-[var(--color-surface-selected)]' : 'hover:bg-[var(--color-surface-hover)]'}
             `}
           >
-            <span data-testid="peer-chain-row-label" className="min-w-0 truncate text-caption text-[var(--color-foreground)]">
+            <span data-testid="peer-chain-row-label" className="min-w-0 truncate text-caption font-medium text-[var(--color-foreground)]">
               {shortRowLabel(entry, parentName)}
             </span>
             <PeerStateBadge state={node.state} title={node.reason} />
@@ -135,7 +135,7 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
         <div className="flex min-w-0 items-center gap-2">
           <GitFork aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-foreground-muted)]" />
           <h3 className="text-caption font-semibold text-[var(--color-foreground)]">{t('peerChains.tree.title')}</h3>
-          <span className="text-badge text-[var(--color-foreground-muted)]">
+          <span className="text-badge font-semibold text-[var(--color-foreground-muted)]">
             {t('peerChains.tree.summary', { agents: chain.agent_count, calls: chain.call_count, depth: chain.max_depth })}
           </span>
         </div>
@@ -173,7 +173,7 @@ export default function PeerChainTree({ chain, selectedNodeId, onSelect, onCance
       </div>
 
       {view === 'graph' ? (
-        <Suspense fallback={<p className="text-caption text-[var(--color-foreground-muted)]">{t('peerChains.tree.graphLoading')}</p>}>
+        <Suspense fallback={<p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('peerChains.tree.graphLoading')}</p>}>
           <PeerChainGraph chain={chain} tree={tree} selectedNodeId={selectedNodeId} onSelect={onSelect} />
         </Suspense>
       ) : (

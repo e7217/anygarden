@@ -34,7 +34,7 @@ export interface SidebarProjectMenuProps {
   onMoveDown?: (() => void) | null
 }
 
-const itemClass = 'flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer disabled:cursor-not-allowed disabled:text-[var(--color-foreground-subtle)] disabled:hover:bg-transparent'
+const itemClass = 'flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-caption text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer disabled:cursor-not-allowed disabled:text-[var(--color-foreground-subtle)] disabled:hover:bg-transparent'
 
 export default function SidebarProjectMenu({ projectId, onDelete, onMoveUp, onMoveDown }: SidebarProjectMenuProps) {
   const { t } = useLocale()
@@ -118,7 +118,7 @@ export default function SidebarProjectMenu({ projectId, onDelete, onMoveUp, onMo
                   type="button"
                   onClick={pick(onDelete)}
                   data-testid={`sidebar-project-menu-delete-${projectId}`}
-                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-caption text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
                   <span>{t('chat.deleteProject')}</span>

@@ -200,7 +200,7 @@ export default function ApiKeysDialog({ open, onOpenChange, isAdmin }: Props) {
               </Select>
             </div>
           </div>
-          <p className="text-sm text-[var(--color-foreground-muted)]">{t(SCOPE_HINTS[scope])}</p>
+          <p className="text-caption text-[var(--color-foreground-muted)]">{t(SCOPE_HINTS[scope])}</p>
           <Button type="submit" disabled={loading}>
             {t('apiKeys.create')}
           </Button>
@@ -208,8 +208,8 @@ export default function ApiKeysDialog({ open, onOpenChange, isAdmin }: Props) {
 
         {freshKey && (
           <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] p-3">
-            <p className="text-sm font-medium text-[var(--color-foreground)]">{t('apiKeys.copyNow')}</p>
-            <p className="text-sm text-[var(--color-foreground-muted)]">{t('apiKeys.copyWarning')}</p>
+            <p className="text-caption font-medium text-[var(--color-foreground)]">{t('apiKeys.copyNow')}</p>
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('apiKeys.copyWarning')}</p>
             <Input
               readOnly
               value={freshKey}
@@ -224,13 +224,13 @@ export default function ApiKeysDialog({ open, onOpenChange, isAdmin }: Props) {
         )}
 
         {error && (
-          <p role="alert" className="text-sm text-[var(--color-danger)]">{error}</p>
+          <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>
         )}
 
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-[var(--color-foreground)]">{t('apiKeys.activeKeys')}</h3>
+          <h3 className="text-caption font-medium text-[var(--color-foreground)]">{t('apiKeys.activeKeys')}</h3>
           {keys.length === 0 && !loading && (
-            <p className="text-sm text-[var(--color-foreground-muted)]">{t('apiKeys.empty')}</p>
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('apiKeys.empty')}</p>
           )}
           <ul className="space-y-1">
             {keys.map((key) => (
@@ -239,10 +239,10 @@ export default function ApiKeysDialog({ open, onOpenChange, isAdmin }: Props) {
                 className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm text-[var(--color-foreground)]">
+                  <div className="truncate text-caption text-[var(--color-foreground)]">
                     {key.name} · {t(SCOPE_LABELS[key.scope])}
                   </div>
-                  <div className="truncate text-xs text-[var(--color-foreground-muted)]">
+                  <div className="truncate text-badge text-[var(--color-foreground-muted)]">
                     <span className="font-mono">{key.prefix}…</span>
                     {' · '}
                     {key.last_used_at

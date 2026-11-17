@@ -1,20 +1,32 @@
-import { agentSetupEn, agentSetupKo } from './catalogs/agentSetup'
-import { coreEn, coreKo } from './catalogs/core'
-import { chatEn, chatKo } from './catalogs/chat'
-import { adminEn, adminKo } from './catalogs/admin'
-import { guestEn, guestKo } from './catalogs/guest'
-import { federationEn, federationKo } from './catalogs/federation'
-import { roomsEn, roomsKo } from './catalogs/rooms'
-import { workflowsEn, workflowsKo } from './catalogs/workflows'
-import { inboxEn, inboxKo } from './catalogs/inbox'
-import { projectExecutionsEn, projectExecutionsKo } from './catalogs/projectExecutions'
-import { taskRecoveryEn, taskRecoveryKo } from './catalogs/taskRecovery'
-import { budgetsEn, budgetsKo } from './catalogs/budgets'
-import { campaignsEn, campaignsKo } from './catalogs/campaigns'
-import { apiKeysEn, apiKeysKo } from './catalogs/apiKeys'
-import { agentLinksEn, agentLinksKo } from './catalogs/agentLinks'
-import { peerChainsEn, peerChainsKo } from './catalogs/peerChains'
+import type { Locale } from './LocaleProvider'
+import type { en } from './locales/en'
 
-export const en = { ...agentSetupEn, ...coreEn, ...chatEn, ...adminEn, ...guestEn, ...federationEn, ...roomsEn, ...workflowsEn, ...inboxEn, ...projectExecutionsEn, ...taskRecoveryEn, ...budgetsEn, ...campaignsEn, ...apiKeysEn, ...agentLinksEn, ...peerChainsEn } as const
+// Each locale is its own chunk (./locales/*), so startup downloads only the
+// active language. App code imports `MessageKey` as a type and reads strings
+// through useLocale(); importing a locale module statically would put that
+// language back into the entry chunk.
 export type MessageKey = keyof typeof en
-export const ko: Record<MessageKey, string> = { ...agentSetupKo, ...coreKo, ...chatKo, ...adminKo, ...guestKo, ...federationKo, ...roomsKo, ...workflowsKo, ...inboxKo, ...projectExecutionsKo, ...taskRecoveryKo, ...budgetsKo, ...campaignsKo, ...apiKeysKo, ...agentLinksKo, ...peerChainsKo }
+export type Messages = Record<MessageKey, string>
+
+const catalogs: Partial<Record<Locale, Messages>> = {}
+
+/** Strings for a locale that has already been loaded, else undefined. */
+export function messagesFor(locale: Locale): Messages | undefined {
+  return catalogs[locale]
+}
+
+/** Makes a locale available synchronously (test setup registers both). */
+export function registerMessages(locale: Locale, messages: Messages): void {
+  catalogs[locale] = messages
+}
+
+/** Loads a locale's chunk once; later calls resolve from the cache. */
+export async function loadMessages(locale: Locale): Promise<Messages> {
+  const cached = catalogs[locale]
+  if (cached) return cached
+  const messages = locale === 'ko'
+    ? (await import('./locales/ko')).ko
+    : (await import('./locales/en')).en
+  registerMessages(locale, messages)
+  return messages
+}

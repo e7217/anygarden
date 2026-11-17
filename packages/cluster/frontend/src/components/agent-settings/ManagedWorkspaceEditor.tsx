@@ -113,9 +113,9 @@ export default function ManagedWorkspaceEditor({ agentId, folder, filePath, fold
   return <div className="space-y-3" data-testid="managed-workspace-editor">
     {filePath === null && <>
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" className="min-h-11 sm:min-h-8" disabled={busy} onClick={() => { setMode('folder'); setName(''); setError(null) }}><FolderPlus />{t('workspace.managed.newFolder')}</Button>
-        <Button variant="outline" size="sm" className="min-h-11 sm:min-h-8" disabled={busy} onClick={() => { setMode('file'); setName(''); setDraft(''); setError(null) }}><FilePlus2 />{t('workspace.managed.newFile')}</Button>
-        <Button variant="outline" size="sm" className="min-h-11 sm:min-h-8" disabled={busy} onClick={() => uploadRef.current?.click()}><Upload />{t('workspace.managed.upload')}</Button>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => { setMode('folder'); setName(''); setError(null) }}><FolderPlus />{t('workspace.managed.newFolder')}</Button>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => { setMode('file'); setName(''); setDraft(''); setError(null) }}><FilePlus2 />{t('workspace.managed.newFile')}</Button>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => uploadRef.current?.click()}><Upload />{t('workspace.managed.upload')}</Button>
         <input ref={uploadRef} className="sr-only" type="file" multiple={Boolean(onUploadFiles)} aria-label={t('workspace.managed.upload')} onChange={(event) => {
           const files = Array.from(event.target.files ?? [])
           event.target.value = ''
@@ -124,23 +124,23 @@ export default function ManagedWorkspaceEditor({ agentId, folder, filePath, fold
         }} />
       </div>
       {mode && <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
-        <label className="block space-y-1 text-sm"><span>{mode === 'folder' ? t('workspace.managed.folderName') : t('workspace.managed.fileName')}</span><Input value={name} maxLength={255} onChange={event => setName(event.target.value)} disabled={busy} /></label>
-        {mode === 'file' && <label className="block space-y-1 text-sm"><span>{t('workspace.managed.editContent')}</span><Textarea value={draft} rows={9} onChange={event => setDraft(event.target.value)} disabled={busy} className="min-h-44 font-mono" /></label>}
+        <label className="block space-y-1 text-caption"><span>{mode === 'folder' ? t('workspace.managed.folderName') : t('workspace.managed.fileName')}</span><Input value={name} maxLength={255} onChange={event => setName(event.target.value)} disabled={busy} /></label>
+        {mode === 'file' && <label className="block space-y-1 text-caption"><span>{t('workspace.managed.editContent')}</span><Textarea value={draft} rows={9} onChange={event => setDraft(event.target.value)} disabled={busy} className="min-h-44 font-mono" /></label>}
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" className="min-h-11 sm:min-h-8" disabled={busy || !validName(name) || (mode === 'file' && new TextEncoder().encode(draft).length > MAX_TEXT_BYTES)} onClick={() => void change(mode, mode === 'file' ? 'PUT' : 'POST', mode === 'file' ? { path: pathFor(name), text: draft, expected_sha256: 'absent' } : { path: pathFor(name) })}>{t('workspace.managed.create')}</Button>
-          <Button variant="outline" size="sm" className="min-h-11 sm:min-h-8" disabled={busy} onClick={() => { setMode(null); setError(null) }}>{t('common.cancel')}</Button>
+          <Button size="sm" disabled={busy || !validName(name) || (mode === 'file' && new TextEncoder().encode(draft).length > MAX_TEXT_BYTES)} onClick={() => void change(mode, mode === 'file' ? 'PUT' : 'POST', mode === 'file' ? { path: pathFor(name), text: draft, expected_sha256: 'absent' } : { path: pathFor(name) })}>{t('workspace.managed.create')}</Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => { setMode(null); setError(null) }}>{t('common.cancel')}</Button>
         </div>
       </div>}
     </>}
     {editable && <div className="space-y-2">
-      <label className="block space-y-1 text-sm"><span>{t('workspace.managed.editContent')}</span><Textarea aria-label={t('workspace.managed.editContent')} className="min-h-56 font-mono" value={draft} onChange={event => setDraft(event.target.value)} disabled={busy} /></label>
+      <label className="block space-y-1 text-caption"><span>{t('workspace.managed.editContent')}</span><Textarea aria-label={t('workspace.managed.editContent')} className="min-h-56 font-mono" value={draft} onChange={event => setDraft(event.target.value)} disabled={busy} /></label>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" className="min-h-11 sm:min-h-8" disabled={busy || !changed || new TextEncoder().encode(draft).length > MAX_TEXT_BYTES} onClick={() => void change('file', 'PUT', { path: filePath!, text: draft, expected_sha256: fileData!.snapshot!.sha256! }, true)}><Save />{t('common.save')}</Button>
-        {changed && <span className="text-xs text-[var(--color-foreground-muted)]">{t('workspace.managed.unsaved')}</span>}
-        {new TextEncoder().encode(draft).length > MAX_TEXT_BYTES && <span className="text-xs text-[var(--color-destructive)]">{t('workspace.managed.textTooLarge')}</span>}
+        <Button size="sm" disabled={busy || !changed || new TextEncoder().encode(draft).length > MAX_TEXT_BYTES} onClick={() => void change('file', 'PUT', { path: filePath!, text: draft, expected_sha256: fileData!.snapshot!.sha256! }, true)}><Save />{t('common.save')}</Button>
+        {changed && <span className="text-badge text-[var(--color-foreground-muted)]">{t('workspace.managed.unsaved')}</span>}
+        {new TextEncoder().encode(draft).length > MAX_TEXT_BYTES && <span className="text-caption text-[var(--color-destructive)]">{t('workspace.managed.textTooLarge')}</span>}
       </div>
     </div>}
-    {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
-    {notice && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{notice}</p>}
+    {error && <p role="alert" className="text-caption text-[var(--color-destructive)]">{error}</p>}
+    {notice && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{notice}</p>}
   </div>
 }

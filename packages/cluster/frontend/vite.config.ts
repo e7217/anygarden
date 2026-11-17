@@ -28,5 +28,7 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     globals: false,
+    // Registers both language catalogs so t() works without the async load.
+    setupFiles: ['src/vitest.setup.ts'],
   },
 })

@@ -19,17 +19,17 @@ function TaskRecord({ item }: { item: InboxItem }) {
   const { t, formatDate } = useLocale()
   const task = item.task!
   return <div data-testid={`inbox-task-details-${task.id}`} className="min-w-0 [overflow-wrap:anywhere]">
-    <div className="space-y-3 pt-2 text-sm">
+    <div className="space-y-3 pt-2 text-caption">
       <DispositionNotice disposition={task.disposition ?? item.disposition} inputRevision={task.input_revision ?? item.input_revision} operationAction={item.execution_operation_action} />
       {task.input_revision != null && <p>{t('executions.inputVersion', { version: task.input_revision })}</p>}
       <p className="text-[var(--color-foreground-muted)]">{[item.task_room_name, task.assignee_display_name].filter(Boolean).join(' · ')}</p>
       {task.error && !(hasTaskRecovery(task.recovery) && task.recovery?.reason_code) && <p className="whitespace-pre-wrap text-[var(--color-warning)]">{t('tasks.reason')}: {task.error}</p>}
       {task.result_markdown && <div><p className="mb-2 font-semibold">{t('tasks.resultVersion', { version: task.result_version })}</p><MarkdownContent content={task.result_markdown} /></div>}
-      {task.artifacts.length > 0 && <div className="space-y-2"><p className="font-semibold">{t('inbox.artifacts')}</p>{task.artifacts.map(file => <div key={file.id}><AuthenticatedArtifactLink href={file.url} className="inline-flex min-h-11 items-center text-[var(--color-brand-text)] underline">{file.filename}</AuthenticatedArtifactLink><p className="break-all text-xs text-[var(--color-foreground-muted)]">SHA-256: {file.sha256}</p></div>)}</div>}
-      {item.source_href && <Link to={item.source_href} className="inline-flex min-h-11 items-center text-[var(--color-brand-text)] underline">{t('tasks.openOriginalRequest')}</Link>}
-      <Link to={`/rooms/${item.operating_room_id}`} className="ml-3 inline-flex min-h-11 items-center text-[var(--color-brand-text)] underline">{t('inbox.openOperatingRoom')}</Link>
-      <p className="break-all text-xs text-[var(--color-foreground-muted)]">{t('tasks.sourceTask')}: {task.id}</p>
-      <time dateTime={item.updated_at} className="block text-xs text-[var(--color-foreground-muted)]">{formatDate(new Date(item.updated_at), { dateStyle: 'medium', timeStyle: 'short' })}</time>
+      {task.artifacts.length > 0 && <div className="space-y-2"><p className="font-semibold">{t('inbox.artifacts')}</p>{task.artifacts.map(file => <div key={file.id}><AuthenticatedArtifactLink href={file.url} className="inline-flex min-h-[var(--control-height)] items-center text-[var(--color-brand-text)] underline">{file.filename}</AuthenticatedArtifactLink><p className="break-all text-badge text-[var(--color-foreground-muted)]">SHA-256: {file.sha256}</p></div>)}</div>}
+      {item.source_href && <Link to={item.source_href} className="inline-flex min-h-[var(--control-height)] items-center text-[var(--color-brand-text)] underline">{t('tasks.openOriginalRequest')}</Link>}
+      <Link to={`/rooms/${item.operating_room_id}`} className="ml-3 inline-flex min-h-[var(--control-height)] items-center text-[var(--color-brand-text)] underline">{t('inbox.openOperatingRoom')}</Link>
+      <p className="break-all text-badge text-[var(--color-foreground-muted)]">{t('tasks.sourceTask')}: {task.id}</p>
+      <time dateTime={item.updated_at} className="block text-badge text-[var(--color-foreground-muted)]">{formatDate(new Date(item.updated_at), { dateStyle: 'medium', timeStyle: 'short' })}</time>
     </div>
   </div>
 }
@@ -71,19 +71,19 @@ function InboxRecord({ item, focused, inbox }: { item: InboxItem; focused: boole
     onToggle={event => setExpanded(event.currentTarget.open)}
     className={`group/item min-w-0 border-b border-[var(--color-border)] [overflow-wrap:anywhere] ${focused ? 'rounded-[var(--radius-sm)] ring-2 ring-[var(--color-brand-text)]' : ''}`}
   >
-    <summary className="flex min-h-11 cursor-pointer list-none items-start gap-3 rounded-[var(--radius-sm)] px-3 py-4 hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-text)] [&::-webkit-details-marker]:hidden">
+    <summary className="flex min-h-[var(--control-height)] cursor-pointer list-none items-start gap-3 rounded-[var(--radius-sm)] px-3 py-4 hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-text)] [&::-webkit-details-marker]:hidden">
       <ChevronRight aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-[var(--color-foreground-muted)] group-open/item:rotate-90" />
       <span className="min-w-0 flex-1 space-y-1">
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[var(--color-foreground-muted)]"><span className="font-medium text-[var(--color-foreground)]">{item.project_name}</span><span>{item.task_room_name}</span><span>· {t(`inbox.type.${item.type}`)}</span></span>
-        <span className="line-clamp-2 text-base font-medium">{title}</span>
-        <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-[var(--color-foreground-muted)]"><span className="font-medium text-[var(--color-foreground)]">{item.project_name}</span><span>{item.task_room_name}</span><span>· {t(`inbox.type.${item.type}`)}</span></span>
+        <span className="line-clamp-2 text-body font-medium">{title}</span>
+        <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-caption">
           <span className={needsAttention ? 'font-medium text-[var(--color-warning)]' : 'text-[var(--color-foreground-muted)]'}>{status}</span>
           <time dateTime={item.updated_at} className="text-[var(--color-foreground-muted)]">{formatDate(new Date(item.updated_at), { dateStyle: 'short', timeStyle: 'short' })}</time>
         </span>
       </span>
     </summary>
     <div className="min-w-0 space-y-3 px-3 pb-4 sm:pl-10" data-testid={`inbox-content-${item.id}`}>
-      <h3 className="break-words text-base font-semibold">{title}</h3>
+      <h3 className="break-words text-body font-semibold">{title}</h3>
       {item.type === 'task' && item.task && <><TaskRecoveryState recovery={item.task.recovery} taskId={item.task_id} inputRevision={item.task.input_revision ?? item.input_revision} /><TaskRecord item={item} /></>}
       {item.type === 'question' && item.question && <RequestCard expanded request={item.question} answer={inbox.answer} taskHref={item.task_href} />}
       {item.type === 'approval' && item.approval && <ApprovalCard expanded approval={item.approval} decide={inbox.decide} taskHref={item.task_href} sourceTaskHref={`/inbox?item=${encodeURIComponent(`task:${item.approval.source_task_id}`)}`} />}
@@ -113,16 +113,16 @@ export default function InboxPage() {
   function renderGroup(items: InboxItem[], label: 'inbox.attention' | 'inbox.current' | 'inbox.history') {
     if (items.length === 0) return null
     return <section className="min-w-0 space-y-2" aria-label={t(label)}>
-      <h2 className="flex items-center gap-2 text-lg font-semibold">{t(label)}<span className="text-sm font-normal tabular-nums text-[var(--color-foreground-muted)]">{items.length}</span></h2>
+      <h2 className="flex items-center gap-2 text-lead font-semibold">{t(label)}<span className="text-caption font-normal tabular-nums text-[var(--color-foreground-muted)]">{items.length}</span></h2>
       <div className="min-w-0 border-t border-[var(--color-border)]">{items.map(item => <InboxRecord key={item.id} item={item} focused={item.id === focused} inbox={inbox} />)}</div>
     </section>
   }
   return <PageShell title={t('inbox.title')}><div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-6 md:px-8 md:py-8" data-testid="project-inbox">
-    <header className="space-y-2"><div className="flex items-center justify-between gap-3"><h1 className="text-2xl font-semibold">{t('inbox.title')}</h1><Button type="button" variant="outline" className="min-h-11" onClick={() => { void inbox.refresh() }} aria-label={t('inbox.refresh')}><RefreshCw className="mr-2 h-4 w-4" />{t('inbox.refresh')}</Button></div><p className="text-sm text-[var(--color-foreground-muted)]">{t('inbox.description')}</p></header>
-    <div className="flex flex-col gap-3 sm:flex-row"><div className="flex min-w-0 flex-1 flex-col gap-1 text-sm"><label htmlFor="inbox-project">{t('inbox.project')}</label><Select id="inbox-project" className="min-h-11 w-full min-w-0" value={project} onChange={event => setProject(event.target.value)}><option value="">{t('inbox.allProjects')}</option>{inbox.projects.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></div><div className="flex min-w-0 flex-1 flex-col gap-1 text-sm"><label htmlFor="inbox-type">{t('inbox.type')}</label><Select id="inbox-type" className="min-h-11 w-full min-w-0" value={type} onChange={event => setType(event.target.value)}><option value="">{t('inbox.allTypes')}</option>{(['question', 'approval', 'task'] as const).map(value => <option key={value} value={value}>{t(`inbox.type.${value}`)}</option>)}</Select></div></div>
-    {inbox.error && <p role="alert" className="break-words text-sm text-[var(--color-danger)]">{inbox.error}</p>}
+    <header className="space-y-2"><div className="flex items-center justify-between gap-3"><h1 className="text-heading font-semibold">{t('inbox.title')}</h1><Button type="button" variant="outline" onClick={() => { void inbox.refresh() }} aria-label={t('inbox.refresh')}><RefreshCw className="mr-2 h-4 w-4" />{t('inbox.refresh')}</Button></div><p className="text-caption text-[var(--color-foreground-muted)]">{t('inbox.description')}</p></header>
+    <div className="flex flex-col gap-3 sm:flex-row"><div className="flex min-w-0 flex-1 flex-col gap-1 text-caption"><label htmlFor="inbox-project">{t('inbox.project')}</label><Select id="inbox-project" className="w-full min-w-0" value={project} onChange={event => setProject(event.target.value)}><option value="">{t('inbox.allProjects')}</option>{inbox.projects.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></div><div className="flex min-w-0 flex-1 flex-col gap-1 text-caption"><label htmlFor="inbox-type">{t('inbox.type')}</label><Select id="inbox-type" className="w-full min-w-0" value={type} onChange={event => setType(event.target.value)}><option value="">{t('inbox.allTypes')}</option>{(['question', 'approval', 'task'] as const).map(value => <option key={value} value={value}>{t(`inbox.type.${value}`)}</option>)}</Select></div></div>
+    {inbox.error && <p role="alert" className="break-words text-caption text-[var(--color-danger)]">{inbox.error}</p>}
     {inbox.loading && <p role="status">{t('common.loading')}</p>}
-    {!inbox.loading && focused && !selected && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('inbox.unavailable')}</p>}
+    {!inbox.loading && focused && !selected && <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('inbox.unavailable')}</p>}
     {!inbox.loading && !inbox.error && visible.length === 0 && <p className="py-8 text-center text-[var(--color-foreground-muted)]">{t('inbox.empty')}</p>}
     {renderGroup(attention, 'inbox.attention')}
     {renderGroup(current, 'inbox.current')}

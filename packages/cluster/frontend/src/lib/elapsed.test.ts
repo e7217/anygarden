@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { calibrateSince, elapsedMsFrom, formatElapsed, SINCE_HYSTERESIS_MS } from './elapsed'
-import { en as enCatalog, ko as koCatalog } from '@/i18n/messages'
+import { en as enCatalog } from '@/i18n/locales/en'
+import { ko as koCatalog } from '@/i18n/locales/ko'
 
 const translator = (locale: 'en' | 'ko') => (key: string, vars?: Record<string, string | number>) =>
   Object.entries(vars ?? {}).reduce(

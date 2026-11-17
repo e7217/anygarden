@@ -3,6 +3,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog'
@@ -146,7 +148,7 @@ export default function AdminMCPTemplates() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <h1 className="text-heading text-[var(--color-foreground)]">{t('admin.mcp.title')}</h1>
-          <p className="text-sm text-[var(--color-foreground-muted)]">
+          <p className="text-caption text-[var(--color-foreground-muted)]">
             {t('admin.mcp.description')}
           </p>
         </div>
@@ -176,7 +178,7 @@ export default function AdminMCPTemplates() {
       </div>
 
       {error && (
-        <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-sm text-[var(--color-danger)]">
+        <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-caption text-[var(--color-danger)]">
           {error}
         </div>
       )}
@@ -188,7 +190,7 @@ export default function AdminMCPTemplates() {
             key={tab}
             onClick={() => setActiveTab(tab)}
             aria-pressed={activeTab === tab}
-            className={`h-[var(--control-sm-height)] rounded-[var(--radius-sm)] px-3 text-sm font-medium transition-colors ${
+            className={`h-[var(--control-sm-height)] rounded-[var(--radius-sm)] px-3 text-caption font-medium transition-colors ${
               activeTab === tab
                 ? 'bg-[var(--color-background)] text-[var(--color-foreground)]'
                 : 'text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)]'
@@ -205,7 +207,7 @@ export default function AdminMCPTemplates() {
             className="mx-auto mb-3 h-8 w-8 text-[var(--color-foreground-subtle)]"
             strokeWidth={1.5}
           />
-          <p className="text-sm text-[var(--color-foreground-muted)]">
+          <p className="text-caption text-[var(--color-foreground-muted)]">
             {activeTab === 'builtin'
               ? t('admin.mcp.noBuiltin')
               : t('admin.mcp.noCustom')}
@@ -222,7 +224,7 @@ export default function AdminMCPTemplates() {
               <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+                    <h3 className="text-caption font-semibold text-[var(--color-foreground)]">
                       {template.display_name}
                     </h3>
                     <Badge variant="outline">
@@ -235,7 +237,7 @@ export default function AdminMCPTemplates() {
                     )}
                   </div>
                   {template.description && (
-                    <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
+                    <p className="mt-1 text-caption text-[var(--color-foreground-muted)]">
                       {template.description}
                     </p>
                   )}
@@ -255,7 +257,7 @@ export default function AdminMCPTemplates() {
                       </Badge>
                     )}
                   </div>
-                  <p className="mt-2 text-xs text-[var(--color-foreground-muted)]">
+                  <p className="mt-2 text-badge text-[var(--color-foreground-muted)]">
                     {t('admin.mcp.instanceCount', { count: template.instance_count })}
                   </p>
                 </div>
@@ -400,32 +402,31 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
         </DialogHeader>
         <div className="space-y-3 py-2">
           {eligibleAgents.length === 0 ? (
-            <p className="text-sm text-[var(--color-foreground-muted)]">
+            <p className="text-caption text-[var(--color-foreground-muted)]">
               {t('admin.mcp.noEligibleAgents', { engines: template.supported_engines.join(', ') })}
             </p>
           ) : (
             <>
               <div>
                 <Label htmlFor="mcp-attach-agent">{t('admin.mcp.agent')}</Label>
-                <select
+                <Select
                   id="mcp-attach-agent"
                   value={selectedAgentId ?? ''}
                   onChange={(e) => {
                     setSelectedAgentId(e.target.value)
                     setEnvValues({})
                   }}
-                  className="w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-1.5 text-sm"
                 >
                   {eligibleAgents.map(a => (
                     <option key={a.id} value={a.id}>
                       {a.name} ({a.engine})
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               {existing && (
-                <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-xs text-[var(--color-foreground-muted)]">
+                <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-caption text-[var(--color-foreground-muted)]">
                   {t('admin.mcp.alreadyAttached')}
                 </div>
               )}
@@ -461,7 +462,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
               })}
 
               {error && (
-                <p className="text-xs text-[var(--color-danger)]">{error}</p>
+                <p className="text-caption text-[var(--color-danger)]">{error}</p>
               )}
             </>
           )}
@@ -816,7 +817,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
               </div>
               <div>
                 <Label>{t('admin.mcp.transport')}</Label>
-                <div className="mt-1 inline-flex rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-background)] px-2 py-1 text-xs text-[var(--color-foreground-muted)]">
+                <div className="mt-1 inline-flex rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-background)] px-2 py-1 text-badge text-[var(--color-foreground-muted)]">
                   stdio
                 </div>
               </div>
@@ -866,7 +867,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                         onChange={e => updateEnv(i, { key: e.target.value })}
                         placeholder="GITHUB_TOKEN"
                         aria-label={t('admin.mcp.envKeyLabel', { count: i + 1 })}
-                        className="flex-1 font-mono text-sm"
+                        className="flex-1 font-mono text-caption"
                       />
                       <label className="flex shrink-0 items-center gap-1 text-caption font-normal text-[var(--color-foreground-muted)]">
                         <input
@@ -882,7 +883,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                           onChange={e => updateEnv(i, { value: e.target.value })}
                           placeholder={t('admin.mcp.valuePlaceholder')}
                           aria-label={t('admin.mcp.envValueLabel', { count: i + 1 })}
-                          className="flex-1 text-xs"
+                          className="flex-1"
                         />
                       )}
                       <Button
@@ -906,7 +907,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 </Label>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {placeholders.length === 0 ? (
-                    <span className="text-xs text-[var(--color-foreground-subtle)]">
+                    <span className="text-caption text-[var(--color-foreground-subtle)]">
                       {t('admin.mcp.noneDetected')}
                     </span>
                   ) : (
@@ -953,7 +954,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                   {SUPPORTED_ENGINES.map(engine => (
                     <label
                       key={engine}
-                      className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-1 text-xs cursor-pointer"
+                      className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-1 text-caption cursor-pointer"
                     >
                       <input
                         type="checkbox"
@@ -976,11 +977,11 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
               </div>
               <div>
                 <Label htmlFor="mcp-config-adv">config_per_engine (JSON)</Label>
-                <textarea
+                <Textarea
                   id="mcp-config-adv"
                   value={advanced.configText}
                   onChange={e => setAdvanced(prev => ({ ...prev, configText: e.target.value }))}
-                  className="w-full min-h-[200px] rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2 font-mono text-sm"
+                  className="min-h-[200px] font-mono"
                 />
               </div>
             </>
@@ -988,7 +989,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
         </div>
 
         {error && (
-          <p className="px-1 pb-2 text-xs text-[var(--color-danger)] whitespace-pre-wrap">
+          <p className="px-1 pb-2 text-caption text-[var(--color-danger)] whitespace-pre-wrap">
             {error}
           </p>
         )}

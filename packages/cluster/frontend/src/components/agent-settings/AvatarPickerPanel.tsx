@@ -108,7 +108,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
           avatarValue={draft.value}
           data-testid="avatar-picker-preview"
         />
-        <div className="text-sm text-[var(--color-foreground-muted)]">
+        <div className="text-caption text-[var(--color-foreground-muted)]">
           {agent?.name ?? ''}
         </div>
       </div>
@@ -143,7 +143,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
                   aria-pressed={selected}
                   data-testid={`avatar-picker-emoji-${e}`}
                 >
-                  <span className="text-xl leading-none" aria-hidden="true">
+                  <span className="text-lead leading-none" aria-hidden="true">
                     {e}
                   </span>
                 </button>
@@ -170,6 +170,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
                   onClick={() => setDraft({ kind: 'lucide', value: name })}
                   aria-pressed={selected}
                   title={name}
+                  aria-label={name}
                   data-testid={`avatar-picker-lucide-${name}`}
                 >
                   <Icon className="h-5 w-5 text-[var(--color-foreground)]" />
@@ -181,7 +182,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
 
         <TabsContent value="reset" className="pt-3">
           <div className="flex flex-col items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-background)] p-3">
-            <p className="text-sm text-[var(--color-foreground-muted)]">
+            <p className="text-caption text-[var(--color-foreground-muted)]">
               {t('admin.avatar.resetDescription')}
             </p>
             <Button
@@ -197,7 +198,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
       </Tabs>
 
       {error ? (
-        <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+        <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-caption text-[var(--color-warning)]">
           {error}
         </div>
       ) : null}

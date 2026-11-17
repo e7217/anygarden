@@ -33,7 +33,7 @@ export default function TaskAssignmentCard({ meta, title, assignee }: Props) {
   return (
     <div
       data-testid="task-assignment-card"
-      className="inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm shadow-whisper"
+      className="inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-caption shadow-whisper"
     >
       <ClipboardList
         className="h-3.5 w-3.5 shrink-0 text-[var(--color-brand-text)]"

@@ -48,7 +48,7 @@ export default function AuthenticatedArtifactLink({ href, children, ...props }: 
         if (scope.active && currentScope.current === scope) setPending(false)
       }
     }}>{children}</a>
-    {error && <span role="alert" className="ml-2 text-xs text-[var(--color-danger)]">
+    {error && <span role="alert" className="ml-2 text-badge text-[var(--color-danger)]">
       {error === EXPIRED
         ? t('chat.attachmentExpired')
         : t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '500' })}

@@ -47,10 +47,10 @@ export default function TurnCancelControl({ requestIds, label, text, onCancel }:
         className="gap-1.5 text-[var(--color-foreground-muted)] hover:text-[var(--color-danger)]"
       >
         <Square aria-hidden="true" />
-        {text && <span className="text-caption">{text}</span>}
+        {text && <span className="text-caption font-medium">{text}</span>}
       </Button>
       {failed && (
-        <span role="alert" className="text-caption text-[var(--color-danger)]">
+        <span role="alert" className="text-caption font-medium text-[var(--color-danger)]">
           {t('chat.stopAgentTurnFailed')}
         </span>
       )}

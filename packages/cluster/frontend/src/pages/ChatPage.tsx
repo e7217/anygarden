@@ -66,7 +66,7 @@ export default function ChatPage() {
   if (roomId && !currentRoom && status !== 'ready') {
     return (
       <PageShell title="Anygarden">
-        <div className="p-4 text-sm">
+        <div className="p-4 text-caption">
           {status === 'error' ? <><p role="alert">{t('federation.room.discoveryFailed')}</p><Button className="mt-2" variant="outline" onClick={() => void refetch()}>{t('federation.room.retry')}</Button></> : <p role="status">{t('common.loading')}</p>}
         </div>
       </PageShell>
@@ -772,7 +772,7 @@ function LocalChatPage() {
             <WorkspaceAttachmentBanner
               attachments={currentRoom.workspace_attachments ?? []}
             />
-            {messageContextError && <p role="alert" className="px-4 py-2 text-sm text-[var(--color-danger)]">{t('tasks.requestFailed', { status: messageContextError.match(/HTTP (\d+)/)?.[1] ?? '500' })}</p>}
+            {messageContextError && <p role="alert" className="px-4 py-2 text-caption text-[var(--color-danger)]">{t('tasks.requestFailed', { status: messageContextError.match(/HTTP (\d+)/)?.[1] ?? '500' })}</p>}
             <ChatArea
               messages={messages}
               loading={historyLoading}
@@ -887,7 +887,6 @@ function LocalChatPage() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="min-h-11 min-w-11"
                 onClick={() => setSidebarOpen(true)}
                 aria-label={t('chat.openSidebar')}
               >
@@ -901,13 +900,13 @@ function LocalChatPage() {
                   <MessageSquare className="h-8 w-8 text-[var(--color-foreground-muted)]" />
                 </div>
                 <h2 className="text-lead text-[var(--color-foreground)]">{t('chat.welcome')}</h2>
-                <p className="mt-2 text-sm text-[var(--color-foreground-muted)]">
+                <p className="mt-2 text-caption text-[var(--color-foreground-muted)]">
                   {projects.length === 0
                     ? t('chat.emptyProjectDescription')
                     : t('chat.emptyRoomDescription')}
                 </p>
                 <Button
-                  className="mt-6 min-h-11"
+                  className="mt-6"
                   onClick={() => {
                     if (projects.length === 0) requestCreateProject(value => value + 1)
                     else requestCreateRoom(value => value + 1)
@@ -919,7 +918,7 @@ function LocalChatPage() {
                 {projects.length > 0 && (
                   <Button
                     variant="ghost"
-                    className="mt-2 min-h-11 md:hidden"
+                    className="mt-2 md:hidden"
                     onClick={() => setSidebarOpen(true)}
                   >
                     {t('chat.browseRooms')}

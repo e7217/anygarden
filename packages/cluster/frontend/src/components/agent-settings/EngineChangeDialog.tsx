@@ -107,10 +107,10 @@ export default function EngineChangeDialog({ open, onOpenChange, currentEngine, 
               </Select>
             )}
           </div>
-          <p className="rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 text-xs leading-relaxed text-[var(--color-foreground-muted)]">
+          <p className="rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 text-caption leading-relaxed text-[var(--color-foreground-muted)]">
             {t('admin.engineChange.notice')}
           </p>
-          {error && <p role="alert" className="text-xs text-[var(--color-danger)]">{error}</p>}
+          {error && <p role="alert" className="text-caption text-[var(--color-danger)]">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>{t('common.cancel')}</Button>

@@ -156,12 +156,12 @@ function AdminBudgetsContent() {
       </header>
 
       {status === 'error' && (
-        <div role="alert" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-danger-soft)] p-3 text-caption text-[var(--color-danger)]">
+        <div role="alert" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-danger-soft)] p-3 text-caption font-medium text-[var(--color-danger)]">
           {t('admin.budgets.loadFailed', { status: error?.status ?? 0 })}
         </div>
       )}
       {actionError && (
-        <div role="alert" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-danger-soft)] p-3 text-caption text-[var(--color-danger)]">
+        <div role="alert" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-danger-soft)] p-3 text-caption font-medium text-[var(--color-danger)]">
           {actionError}
         </div>
       )}
@@ -174,7 +174,7 @@ function AdminBudgetsContent() {
           <ul className="divide-y divide-[var(--color-border)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-whisper">
             {overview.paused_agents.map(agent => (
               <li key={`paused-${agent.agent_id}`} data-testid={`budget-paused-${agent.agent_id}`} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="flex min-w-0 items-start gap-2 text-caption text-[var(--color-foreground)]">
+                <p className="flex min-w-0 items-start gap-2 text-caption font-medium text-[var(--color-foreground)]">
                   <CircleSlash className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-danger)]" aria-hidden="true" />
                   <span className="min-w-0 break-words">{t('admin.budgets.pausedAgent', { name: agent.name })}</span>
                 </p>
@@ -206,11 +206,11 @@ function AdminBudgetsContent() {
           {t('admin.budgets.policies')}
         </h2>
         {status === 'loading' && policies.length === 0 ? (
-          <p role="status" className="text-caption text-[var(--color-foreground-muted)]">{t('admin.budgets.loading')}</p>
+          <p role="status" className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('admin.budgets.loading')}</p>
         ) : policies.length === 0 ? (
           <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] px-6 py-10 text-center">
             <Gauge className="mx-auto mb-3 h-8 w-8 text-[var(--color-foreground-subtle)]" strokeWidth={1.5} aria-hidden="true" />
-            <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.budgets.empty')}</p>
+            <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('admin.budgets.empty')}</p>
             <Button size="sm" className="mt-4" onClick={() => setEditor('new')}>
               <Plus className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
               {t('admin.budgets.newPolicy')}
@@ -291,12 +291,12 @@ function PolicyRow({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h3 className="min-w-0 break-words text-caption font-semibold text-[var(--color-foreground)]">{scope}</h3>
             <HealthBadge health={health} />
-            <span className="inline-flex items-center rounded-[var(--radius-pill)] border border-[var(--color-border)] px-2 py-0.5 text-badge text-[var(--color-foreground)]">
+            <span className="inline-flex items-center rounded-[var(--radius-pill)] border border-[var(--color-border)] px-2 py-0.5 text-badge font-semibold text-[var(--color-foreground)]">
               {policy.hard_stop_enabled ? t('admin.budgets.hardStopOn') : t('admin.budgets.hardStopOff')}
             </span>
           </div>
           <div>
-            <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2 text-caption">
+            <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2 text-caption font-medium">
               <span className="text-[var(--color-foreground)]">
                 {t('admin.budgets.usageOf', { observed: formatNumber(observed), ceiling: formatNumber(policy.token_ceiling) })}
               </span>
@@ -343,7 +343,7 @@ function IncidentRow({
         <p className="text-caption font-medium text-[var(--color-foreground)]">
           {hard ? t('admin.budgets.incidentHard') : t('admin.budgets.incidentSoft')}
         </p>
-        <p className="break-words text-caption text-[var(--color-foreground-muted)]">
+        <p className="break-words text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('admin.budgets.incidentDetail', { scope, observed, time })}
         </p>
       </div>
@@ -433,8 +433,8 @@ function PolicyDialog({ policy, scopeText, agents, rooms, onClose, onCreate, onU
     }
   }
 
-  const errorText = 'text-caption text-[var(--color-danger)]'
-  const hintText = 'text-caption text-[var(--color-foreground-muted)]'
+  const errorText = 'text-caption font-medium text-[var(--color-danger)]'
+  const hintText = 'text-caption font-medium text-[var(--color-foreground-muted)]'
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
@@ -459,8 +459,8 @@ function PolicyDialog({ policy, scopeText, agents, rooms, onClose, onCreate, onU
             </div>
           ) : (
             <div className="space-y-1.5">
-              <p className="text-sm font-semibold text-[var(--color-foreground)]">{t('admin.budgets.scope')}</p>
-              <p className="text-caption text-[var(--color-foreground)]">{scopeText}</p>
+              <p className="text-caption font-semibold text-[var(--color-foreground)]">{t('admin.budgets.scope')}</p>
+              <p className="text-caption font-medium text-[var(--color-foreground)]">{scopeText}</p>
             </div>
           )}
 
@@ -546,7 +546,7 @@ function PolicyDialog({ policy, scopeText, agents, rooms, onClose, onCreate, onU
               aria-expanded={advancedOpen}
               aria-controls={ids.advanced}
               onClick={() => setAdvancedOpen(open => !open)}
-              className="flex min-h-[var(--control-sm-height)] items-center gap-1 rounded-[var(--radius-sm)] text-sm font-medium text-[var(--color-brand-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+              className="flex min-h-[var(--control-sm-height)] items-center gap-1 rounded-[var(--radius-sm)] text-caption font-medium text-[var(--color-brand-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
             >
               {advancedOpen
                 ? <ChevronDown className="h-4 w-4" aria-hidden="true" />

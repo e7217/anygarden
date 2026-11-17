@@ -52,7 +52,7 @@ export default function PageShell({ title, children, scroll = true }: PageShellP
           >
             <Menu className="h-5 w-5" />
           </Button>
-          <span className="text-sm font-semibold tracking-tight">{title}</span>
+          <span className="text-caption font-semibold tracking-tight">{title}</span>
         </div>
         {scroll ? <div className="flex-1 overflow-auto">{children}</div> : children}
       </main>

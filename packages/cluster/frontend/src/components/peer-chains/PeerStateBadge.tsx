@@ -36,7 +36,7 @@ export default function PeerStateBadge({ state, title }: { state: AnyState; titl
   const Icon = look.icon
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1 text-badge ${look.tone}`}
+      className={`inline-flex shrink-0 items-center gap-1 text-badge font-semibold ${look.tone}`}
       title={title ?? undefined}
       data-state={state}
     >

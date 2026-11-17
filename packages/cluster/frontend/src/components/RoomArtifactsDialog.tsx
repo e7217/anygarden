@@ -164,16 +164,16 @@ export default function RoomArtifactsDialog({
           </DialogDescription>
         </DialogHeader>
         {error && (
-          <p className="text-xs text-[var(--color-destructive)]" role="alert">
+          <p className="text-caption text-[var(--color-destructive)]" role="alert">
             {error}
           </p>
         )}
         {loading ? (
-          <p className="text-sm text-[var(--color-foreground-subtle)]">
+          <p className="text-caption text-[var(--color-foreground-subtle)]">
             {t('common.loading')}
           </p>
         ) : items.length === 0 ? (
-          <p className="text-sm text-[var(--color-foreground-subtle)]">
+          <p className="text-caption text-[var(--color-foreground-subtle)]">
             {t('rooms.noArtifacts')}
           </p>
         ) : (
@@ -186,7 +186,7 @@ export default function RoomArtifactsDialog({
                   {item.purged_at ? (
                     <div className="flex h-32 w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] px-3 text-center">
                       <ImageOff className="h-6 w-6 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
-                      <p className="text-caption text-[var(--color-foreground-muted)]">{t('chat.attachmentExpired')}</p>
+                      <p className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('chat.attachmentExpired')}</p>
                     </div>
                   ) : isImageMime(item.mime) && roomId ? (
                     <ArtifactImagePreview
@@ -201,7 +201,7 @@ export default function RoomArtifactsDialog({
                   )}
                   <div className="min-w-0">
                     <p
-                      className="truncate text-sm text-[var(--color-foreground)]"
+                      className="truncate text-caption text-[var(--color-foreground)]"
                       title={item.filename}
                     >
                       {item.filename}
@@ -210,11 +210,11 @@ export default function RoomArtifactsDialog({
                       {formatBytes(item.size_bytes)} · {item.mime}
                     </p>
                     {item.produced_by_agent_id && (
-                      <p className="mt-1 break-all text-xs text-[var(--color-foreground-muted)]">
+                      <p className="mt-1 break-all text-badge text-[var(--color-foreground-muted)]">
                         {t('rooms.agent')}: {item.produced_by_agent_id}
                       </p>
                     )}
-                    <p className="mt-1 truncate font-mono text-xs text-[var(--color-foreground-subtle)]" title={item.sha256}>
+                    <p className="mt-1 truncate font-mono text-badge text-[var(--color-foreground-subtle)]" title={item.sha256}>
                       SHA-256: {item.sha256.slice(0, 12)}…
                     </p>
                   </div>

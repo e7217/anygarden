@@ -87,7 +87,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
           role="group"
           data-drawer-popup
           aria-label={t('navigation.adminNavigation')}
-          className="absolute bottom-full -right-[calc(var(--control-icon-size)+0.25rem)] z-50 mb-1 max-h-[calc(100dvh-5rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 shadow-lg"
+          className="absolute bottom-full -right-[calc(var(--control-icon-size)+0.25rem)] z-50 mb-1 max-h-[calc(100dvh-5rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 shadow-deep"
         >
           {links.map((link, index) => {
             const Icon = link.icon
@@ -105,7 +105,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
                   setOpen(false)
                   onGo(link.path)
                 }}
-                className={`flex min-h-[var(--control-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-sm font-medium transition-colors ${
+                className={`flex min-h-[var(--control-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-caption font-medium transition-colors ${
                   active
                     ? 'bg-[var(--color-surface-elevated)] shadow-whisper text-[var(--color-foreground)]'
                     : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'

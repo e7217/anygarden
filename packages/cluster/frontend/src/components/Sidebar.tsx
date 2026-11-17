@@ -13,6 +13,7 @@ import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
@@ -513,9 +514,12 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* Everything from the overview link to the agents list is navigation;
+          the footer (preferences, admin, logout) stays outside. */}
+      <nav aria-label={t('workspace.navigation')} className="flex min-h-0 flex-1 flex-col">
       {/* #1023 — the overview (agent links + live state) is the home screen. */}
-      <div className="px-2"><button type="button" onClick={() => go('/agents/links')} aria-current={location.pathname === '/agents/links' ? 'page' : undefined} data-testid="sidebar-agent-links" className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-sm font-medium ${location.pathname === '/agents/links' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Workflow className="h-4 w-4 shrink-0" />{t('agentLinks.navLabel')}</button></div>
-      <div className="px-2 pb-2"><button type="button" onClick={() => go('/inbox')} aria-current={location.pathname === '/inbox' ? 'page' : undefined} data-testid="sidebar-inbox" className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-sm font-medium ${location.pathname === '/inbox' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Inbox className="h-4 w-4 shrink-0" />{t('inbox.title')}</button></div>
+      <div className="px-2"><button type="button" onClick={() => go('/agents/links')} aria-current={location.pathname === '/agents/links' ? 'page' : undefined} data-testid="sidebar-agent-links" className={`flex min-h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-caption font-medium ${location.pathname === '/agents/links' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Workflow className="h-4 w-4 shrink-0" />{t('agentLinks.navLabel')}</button></div>
+      <div className="px-2 pb-2"><button type="button" onClick={() => go('/inbox')} aria-current={location.pathname === '/inbox' ? 'page' : undefined} data-testid="sidebar-inbox" className={`flex min-h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-caption font-medium ${location.pathname === '/inbox' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Inbox className="h-4 w-4 shrink-0" />{t('inbox.title')}</button></div>
 
       {/* Projects & agents split (#928). Each section scrolls on its own
           under a fixed header, so a long room tree no longer pushes the
@@ -543,7 +547,7 @@ export default function Sidebar({
               aria-expanded={!projectsCollapsed}
               aria-controls="sidebar-projects-list"
               data-testid="sidebar-projects-toggle"
-              className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+              className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge font-semibold uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
             >
               <span className="min-w-0 truncate">{t('chat.projects')}</span>
               {projectsCollapsed
@@ -570,7 +574,7 @@ export default function Sidebar({
                   trigger reorder logic. */}
               {pinnedRooms.length > 0 && (
                 <div className="mb-2">
-                  <div className="flex items-center gap-1 px-2 py-1 text-badge uppercase text-[var(--color-foreground-muted)]">
+                  <div className="flex items-center gap-1 px-2 py-1 text-badge font-semibold uppercase text-[var(--color-foreground-muted)]">
                     <Pin className="h-3 w-3" />
                     {t('chat.pinned')}
                   </div>
@@ -651,7 +655,7 @@ export default function Sidebar({
                               }}
                               aria-expanded={expandedProjects.has(project.id)}
                               data-testid={`sidebar-project-${project.id}`}
-                              className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-left text-[var(--color-foreground)]"
+                              className="text-caption font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-left text-[var(--color-foreground)]"
                             >
                               <span className="truncate">{project.name}</span>
                             </button>
@@ -719,7 +723,7 @@ export default function Sidebar({
               </DndContext>
 
               {projects.length === 0 && (
-                <p className="text-caption text-[var(--color-foreground-muted)] px-2 py-4 text-center">
+                <p className="text-caption font-medium text-[var(--color-foreground-muted)] px-2 py-4 text-center">
                   {t('chat.noProjects')}
                 </p>
               )}
@@ -762,7 +766,7 @@ export default function Sidebar({
                   onClick={toggleAgents}
                   aria-expanded={!agentsCollapsed}
                   aria-controls="sidebar-agents-list"
-                  className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+                  className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-1 px-2 text-badge font-semibold uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                 >
                   <span className="min-w-0 truncate">{t('chat.agents')}</span>
                   {agentsCollapsed
@@ -828,6 +832,7 @@ export default function Sidebar({
           </>
         )}
       </div>
+      </nav>
 
       {/* New Project dialog — opened from the projects section header. */}
       <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
@@ -882,16 +887,15 @@ export default function Sidebar({
           <div className="space-y-4 py-2">
             {roomNeedsProjectChoice && (
               <div className="space-y-2">
-                <label htmlFor="sidebar-new-room-project" className="block text-sm font-medium">{t('chat.project')}</label>
-                <select
+                <label htmlFor="sidebar-new-room-project" className="block text-caption font-medium">{t('chat.project')}</label>
+                <Select
                   id="sidebar-new-room-project"
                   value={roomProjectId}
                   onChange={(event) => setRoomProjectId(event.target.value)}
-                  className="h-11 md:h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 text-sm"
                 >
                   <option value="">{t('chat.selectProject')}</option>
                   {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
-                </select>
+                </Select>
               </div>
             )}
             <Input
@@ -926,7 +930,7 @@ export default function Sidebar({
             const roomCount = (rooms[deleteProjectTarget.id] ?? []).length
             return (
               // The consequence text doubles as the dialog's description.
-              <DialogDescription asChild className="space-y-2 py-2 text-sm text-[var(--color-foreground)]">
+              <DialogDescription asChild className="space-y-2 py-2 text-caption text-[var(--color-foreground)]">
               <div>
                 {roomCount === 0 ? (
                   <p>{t('chat.deleteProjectEmptyPrompt', { name: deleteProjectTarget.name })}</p>
@@ -1435,7 +1439,7 @@ function AgentDMListAdmin({
                   // is never lost, only toggled with the user's intent.
                   <span className="ml-auto flex shrink-0 items-center gap-1.5 group-hover:hidden">
                     {agentHasUpdates && <UpdateDot />}
-                    <span className="rounded-full bg-[var(--color-surface-hover)] px-1.5 text-badge text-[var(--color-foreground-muted)]">
+                    <span className="rounded-full bg-[var(--color-surface-hover)] px-1.5 text-badge font-semibold text-[var(--color-foreground-muted)]">
                       {agentDms.length}
                     </span>
                   </span>
@@ -1494,13 +1498,13 @@ function AgentDMListAdmin({
                       <button
                         onClick={() => onGo(`/rooms/${dm.id}`)}
                         data-testid={`sidebar-dm-${dm.id}`}
-                        className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-2 px-2 py-1 text-sm font-medium transition-colors"
+                        className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-2 px-2 py-1 text-caption font-medium transition-colors"
                       >
                         <MessageSquare className="h-3 w-3 shrink-0" />
                         <span className="min-w-0 truncate">{label}</span>
                         {dm.ephemeral && (
                           <span
-                            className="shrink-0 rounded-full border border-[var(--color-border-strong)] px-1.5 text-badge text-[var(--color-foreground-muted)]"
+                            className="shrink-0 rounded-full border border-[var(--color-border-strong)] px-1.5 text-badge font-semibold text-[var(--color-foreground-muted)]"
                             title={t('chat.temporarySession')}
                           >
                             {t('chat.temporaryShort')}

@@ -173,7 +173,7 @@ function TaskDialogBody({
       <TaskStateDetails task={task} participants={participants} now={now} onNavigate={onNavigate} t={t} />
 
       {readOnly ? (
-        <p className="text-sm text-[var(--color-foreground-muted)]">{t('tasks.readOnly')}</p>
+        <p className="text-caption text-[var(--color-foreground-muted)]">{t('tasks.readOnly')}</p>
       ) : (
         <div className="grid min-w-0 gap-4 border-t border-[var(--color-border)] pt-4">
           <div className="grid gap-2">
@@ -199,7 +199,7 @@ function TaskDialogBody({
             </Select>
           </div>
           <div className="grid gap-2">
-            <span className="text-sm font-semibold">{t('tasks.status')}</span>
+            <span className="text-caption font-semibold">{t('tasks.status')}</span>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="outline" onClick={onCycle} disabled={busy} data-testid="right-rail-task-dialog-cycle">
                 {nextAction}
@@ -266,7 +266,7 @@ function TaskStateDetails({ task, participants, now, onNavigate, t }: { task: Ta
   const finished = task.status === 'done'
 
   return (
-    <div data-testid={`right-rail-task-details-${task.id}`} className="grid min-w-0 gap-4 text-sm [overflow-wrap:anywhere]">
+    <div data-testid={`right-rail-task-details-${task.id}`} className="grid min-w-0 gap-4 text-caption [overflow-wrap:anywhere]">
       {task.execution_id && (
         <div className="grid gap-2">
           <Link data-testid={`right-rail-task-room-${task.id}`} to={`/rooms/${task.room_id}`} onClick={onNavigate} className="inline-flex min-h-8 items-center text-[var(--color-brand-text)] underline">
@@ -284,13 +284,13 @@ function TaskStateDetails({ task, participants, now, onNavigate, t }: { task: Ta
       {!finished && timeline}
       {hasTaskRecovery(task.recovery) && (
         <section className="grid gap-1">
-          <h3 className="text-sm font-semibold">{t('contextRail.processingDetails')}</h3>
+          <h3 className="text-caption font-semibold">{t('contextRail.processingDetails')}</h3>
           <TaskRecoveryState recovery={task.recovery} taskId={task.id} inputRevision={task.input_revision} hideHistory />
         </section>
       )}
       {task.status === 'blocked' && (task.blocked_by?.length ?? 0) > 0 && (
         <section data-testid={`right-rail-task-blockers-${task.id}`} className="grid gap-1 text-[var(--color-foreground-muted)]">
-          <h3 className="text-sm font-semibold text-[var(--color-foreground)]">{t('tasks.waitingForWork')}</h3>
+          <h3 className="text-caption font-semibold text-[var(--color-foreground)]">{t('tasks.waitingForWork')}</h3>
           {task.blocked_by!.map(blocker => (
             <p key={blocker.task_id}>
               <Link to={`/rooms/${blocker.room_id}`} onClick={onNavigate} className="inline-flex min-h-8 items-center text-[var(--color-brand-text)] underline">{blocker.title}</Link> · {statusLabel(blocker.status)}
@@ -299,32 +299,32 @@ function TaskStateDetails({ task, participants, now, onNavigate, t }: { task: Ta
         </section>
       )}
       {task.execution_objective?.trim() && (
-        <section><h3 className="mb-1 text-sm font-semibold">{t('tasks.originalRequest')}</h3><MarkdownContent content={task.execution_objective} /></section>
+        <section><h3 className="mb-1 text-caption font-semibold">{t('tasks.originalRequest')}</h3><MarkdownContent content={task.execution_objective} /></section>
       )}
       {originalRequest && <Link data-testid={`right-rail-task-source-${task.id}`} to={originalRequest} onClick={onNavigate} className="inline-flex min-h-8 items-center text-[var(--color-brand-text)] underline">{t('tasks.openOriginalRequest')}</Link>}
       {task.parent_task_title && <p className="text-[var(--color-foreground-muted)]">{t('tasks.parentTask')}: {task.parent_task_title}</p>}
       {task.spec?.trim() && (
-        <section><h3 className="mb-1 text-sm font-semibold">{t('tasks.instructions')}</h3><MarkdownContent content={task.spec} /></section>
+        <section><h3 className="mb-1 text-caption font-semibold">{t('tasks.instructions')}</h3><MarkdownContent content={task.spec} /></section>
       )}
       {task.result_markdown?.trim() && (
         <section>
-          <h3 className="mb-1 text-sm font-semibold">{t('tasks.result')}</h3>
-          {task.result_version != null && task.result_version > 0 && <p className="mb-1 text-xs text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: task.result_version })}</p>}
+          <h3 className="mb-1 text-caption font-semibold">{t('tasks.result')}</h3>
+          {task.result_version != null && task.result_version > 0 && <p className="mb-1 text-badge text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: task.result_version })}</p>}
           <MarkdownContent content={task.result_markdown} />
         </section>
       )}
       {finished && timeline}
       {dependencies.length > 0 && (
         <section>
-          <h3 className="mb-1 text-sm font-semibold">{t('tasks.sourceResults')}</h3>
+          <h3 className="mb-1 text-caption font-semibold">{t('tasks.sourceResults')}</h3>
           <div className="space-y-2">
             {dependencies.map(source => (
               <div key={source.task_id} className="min-w-0 border-l-2 border-[var(--color-border)] pl-2">
                 <p className="font-medium">{source.title}</p>
-                <p className="break-all text-xs text-[var(--color-foreground-muted)]">{t('tasks.sourceTask')}: <code>{source.task_id}</code></p>
-                {source.room_id && <p className="break-all text-xs text-[var(--color-foreground-muted)]">{t('tasks.sourceRoom')}: <code>{source.room_id}</code></p>}
-                {source.result_version != null && <p className="text-xs text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: source.result_version })}</p>}
-                {source.result_sha256 && <p className="truncate font-mono text-xs text-[var(--color-foreground-muted)]" title={source.result_sha256}>SHA-256: {source.result_sha256.slice(0, 12)}…</p>}
+                <p className="break-all text-badge text-[var(--color-foreground-muted)]">{t('tasks.sourceTask')}: <code>{source.task_id}</code></p>
+                {source.room_id && <p className="break-all text-badge text-[var(--color-foreground-muted)]">{t('tasks.sourceRoom')}: <code>{source.room_id}</code></p>}
+                {source.result_version != null && <p className="text-badge text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: source.result_version })}</p>}
+                {source.result_sha256 && <p className="truncate font-mono text-badge text-[var(--color-foreground-muted)]" title={source.result_sha256}>SHA-256: {source.result_sha256.slice(0, 12)}…</p>}
                 {source.result_markdown?.trim() && <div className="mt-1"><MarkdownContent content={source.result_markdown} /></div>}
               </div>
             ))}
@@ -332,8 +332,8 @@ function TaskStateDetails({ task, participants, now, onNavigate, t }: { task: Ta
         </section>
       )}
       {schedule && (
-        <section className="space-y-1 text-xs text-[var(--color-foreground-muted)]">
-          <h3 className="text-sm font-semibold text-[var(--color-foreground)]">{t('tasks.schedule')}</h3>
+        <section className="space-y-1 text-badge text-[var(--color-foreground-muted)]">
+          <h3 className="text-caption font-semibold text-[var(--color-foreground)]">{t('tasks.schedule')}</h3>
           <p className="break-all">{t('tasks.goalSource')}: <code>{schedule.goal_id}</code></p>
           {schedule.scheduled_for && <p>{t('tasks.scheduledFor')}: <time dateTime={schedule.scheduled_for}>{formatDate(new Date(schedule.scheduled_for), { dateStyle: 'medium', timeStyle: 'short', timeZone: schedule.timezone })}</time></p>}
           <p>{t('tasks.timezone')}: <span>{schedule.timezone}</span></p>
@@ -426,7 +426,7 @@ function TaskTimeline({ task, participants, now, t }: { task: Task; participants
 
   return (
     <section data-testid={`right-rail-task-timeline-${task.id}`} className="grid gap-2">
-      <h3 className="text-sm font-semibold">{t('tasks.timeline')}</h3>
+      <h3 className="text-caption font-semibold">{t('tasks.timeline')}</h3>
       <ol className="grid">
         {events.map((event, index) => {
           const last = index === events.length - 1
@@ -443,8 +443,8 @@ function TaskTimeline({ task, participants, now, t }: { task: Task; participants
                 {event.detail && <span className="font-normal text-[var(--color-foreground-muted)]"> · {event.detail}</span>}
               </span>
               {event.at
-                ? <time dateTime={event.at} className="pt-0.5 text-xs tabular-nums text-[var(--color-foreground-muted)]">{formatStamp(formatDate, event.at, now)}</time>
-                : <span className="pt-0.5 text-xs text-[var(--color-foreground-muted)]">{t('tasks.event.now')}</span>}
+                ? <time dateTime={event.at} className="pt-0.5 text-badge tabular-nums text-[var(--color-foreground-muted)]">{formatStamp(formatDate, event.at, now)}</time>
+                : <span className="pt-0.5 text-badge text-[var(--color-foreground-muted)]">{t('tasks.event.now')}</span>}
             </li>
           )
         })}

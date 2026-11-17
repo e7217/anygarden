@@ -169,7 +169,7 @@ export default function GoalForm({
   return (
     <div className="flex flex-col gap-3 p-3">
       <div className="flex flex-col gap-1">
-        <label htmlFor="goal-title" className="text-caption text-[var(--color-foreground-muted)]">
+        <label htmlFor="goal-title" className="text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('goals.title')}
         </label>
         <Input
@@ -181,7 +181,7 @@ export default function GoalForm({
       </div>
 
       <div className="flex flex-col gap-1">
-        <label htmlFor="goal-assignee" className="text-caption text-[var(--color-foreground-muted)]">
+        <label htmlFor="goal-assignee" className="text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('goals.agent')}
         </label>
         <Select
@@ -205,14 +205,14 @@ export default function GoalForm({
           ))}
         </Select>
         {roomAgents.length === 1 && (
-          <p className="text-xs text-[var(--color-foreground-muted)]">
+          <p className="text-caption text-[var(--color-foreground-muted)]">
             {t('goals.singleAgent')}
           </p>
         )}
       </div>
 
       <div className="flex flex-col gap-1">
-        <label htmlFor="goal-spec" className="text-caption text-[var(--color-foreground-muted)]">
+        <label htmlFor="goal-spec" className="text-caption font-medium text-[var(--color-foreground-muted)]">
           {t('goals.instructions')}
         </label>
         <Textarea
@@ -225,10 +225,10 @@ export default function GoalForm({
       </div>
 
       <fieldset className="flex flex-col gap-1">
-        <legend className="text-xs font-medium text-[var(--color-foreground-muted)]">
+        <legend className="text-badge font-medium text-[var(--color-foreground-muted)]">
           {t('goals.schedule')}
         </legend>
-        <div className="flex flex-wrap gap-3 text-sm">
+        <div className="flex flex-wrap gap-3 text-caption">
           {(['cron', 'interval', 'manual'] as const).map((choice) => (
             <label key={choice} className="flex min-h-[var(--control-height)] items-center gap-2">
               <input
@@ -265,10 +265,10 @@ export default function GoalForm({
       </fieldset>
 
       <details className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
-        <summary className="min-h-[var(--control-sm-height)] cursor-pointer content-center text-sm font-medium text-[var(--color-foreground)]">{t('goals.advanced')}</summary>
+        <summary className="min-h-[var(--control-sm-height)] cursor-pointer content-center text-caption font-medium text-[var(--color-foreground)]">{t('goals.advanced')}</summary>
         <div className="mt-3 flex flex-col gap-3">
           <div className="flex flex-col gap-1">
-            <label htmlFor="goal-report-room" className="text-caption text-[var(--color-foreground-muted)]">{t('goals.reportRoom')}</label>
+            <label htmlFor="goal-report-room" className="text-caption font-medium text-[var(--color-foreground-muted)]">{t('goals.reportRoom')}</label>
             <Input
               id="goal-report-room"
               value={reportRoomId}
@@ -276,15 +276,15 @@ export default function GoalForm({
               placeholder={t('goals.reportRoomPlaceholder')}
               className="font-mono"
             />
-            <p className="text-xs text-[var(--color-foreground-muted)]">{t('goals.reportRoomHelp')}</p>
+            <p className="text-caption text-[var(--color-foreground-muted)]">{t('goals.reportRoomHelp')}</p>
           </div>
           <fieldset className="flex flex-col gap-1">
-            <legend className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('goals.recording')}</legend>
-            <label className="flex min-h-[var(--control-height)] items-start gap-2 py-1 text-sm">
+            <legend className="text-badge font-medium text-[var(--color-foreground-muted)]">{t('goals.recording')}</legend>
+            <label className="flex min-h-[var(--control-height)] items-start gap-2 py-1 text-caption">
               <input type="radio" name="materialize" value="interesting_only" checked={materialize === 'interesting_only'} onChange={() => setMaterialize('interesting_only')} />
               <span><span className="block font-medium">{t('goals.interestingOnly')}</span><span className="text-caption font-normal text-[var(--color-foreground-muted)]">{t('goals.interestingOnlyDescription')}</span></span>
             </label>
-            <label className="flex min-h-[var(--control-height)] items-start gap-2 py-1 text-sm">
+            <label className="flex min-h-[var(--control-height)] items-start gap-2 py-1 text-caption">
               <input type="radio" name="materialize" value="full" checked={materialize === 'full'} onChange={() => setMaterialize('full')} />
               <span><span className="block font-medium">{t('goals.full')}</span><span className="text-caption font-normal text-[var(--color-foreground-muted)]">{t('goals.fullDescription')}</span></span>
             </label>

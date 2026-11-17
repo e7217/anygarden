@@ -518,10 +518,16 @@ export function useAgents() {
       return true;
     });
     if (!hasTransitional) return;
-    const timer = window.setInterval(() => {
-      void fetchAgents().catch(() => {});
-    }, TRANSITIONAL_POLL_MS);
-    return () => window.clearInterval(timer);
+    // A hidden tab skips its polls and catches up when shown again.
+    const tick = () => {
+      if (document.visibilityState !== 'hidden') void fetchAgents().catch(() => {});
+    };
+    const timer = window.setInterval(tick, TRANSITIONAL_POLL_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
   }, [agents, fetchAgents]);
 
   return {
