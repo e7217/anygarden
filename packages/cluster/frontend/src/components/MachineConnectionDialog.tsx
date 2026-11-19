@@ -70,7 +70,8 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
     }
   }
 
-  function commandBlock(value: string, name: string) {
+  // A code with no spaces (the link code) wraps instead of scrolling: it is one token to copy, not a command to read.
+  function commandBlock(value: string, name: string, wrap = false) {
     return (
       <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)]">
         <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-1">
@@ -80,7 +81,7 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
             {copied === name ? t('common.copied') : t('common.copy')}
           </Button>
         </div>
-        <pre className="overflow-x-auto p-3 text-badge leading-relaxed"><code>{value}</code></pre>
+        <pre className={wrap ? 'whitespace-pre-wrap break-all p-3 text-badge leading-relaxed' : 'overflow-x-auto p-3 text-badge leading-relaxed'}><code>{value}</code></pre>
       </div>
     )
   }
@@ -92,7 +93,8 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
           <DialogTitle>{t('admin.machines.connectionTitle', { name: machine.name })}</DialogTitle>
           <DialogDescription>{t('admin.machines.connectionDescription')}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-5 text-caption">
+        {/* min-w-0: a long command must not widen the dialog's grid column past the viewport. */}
+        <div className="min-w-0 space-y-5 text-caption">
           {refreshWarning && <p role="alert" className="rounded-[var(--radius-md)] border border-[var(--color-warning)] p-3 text-[var(--color-warning)]">{refreshWarning}</p>}
           <section className="space-y-2">
             <h3 className="font-semibold">{t('admin.machines.installStep')}</h3>
@@ -112,7 +114,7 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
               <div className="space-y-2">
                 <h4 className="font-medium">{t('admin.machines.linkCodeTitle')}</h4>
                 <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeHint')}</p>
-                {commandBlock(machineLinkCode(serverUrl, machine.id, token, machine.name), t('admin.machines.linkCode'))}
+                {commandBlock(machineLinkCode(serverUrl, machine.id, token, machine.name), t('admin.machines.linkCode'), true)}
               </div>
             ) : !token && <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.linkCodeNeedsToken')}</p>}
             {token ? (
