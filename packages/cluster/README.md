@@ -1,4 +1,4 @@
-# anygarden
+<h1><img src="https://raw.githubusercontent.com/e7217/anygarden/main/docs/assets/brand/lockup.png" alt="anygarden" height="56"></h1>
 
 **A shared workspace where people and AI coding agents work as a team.**
 Source, docs and issues: [github.com/e7217/anygarden](https://github.com/e7217/anygarden)
