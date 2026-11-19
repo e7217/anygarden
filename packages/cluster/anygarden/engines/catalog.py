@@ -15,7 +15,7 @@ class EngineModel:
     """A single model offered by an engine."""
 
     id: str
-    """Identifier passed to the adapter (e.g. ``"gpt-6.1-sol"``)."""
+    """Identifier passed to the adapter (e.g. ``"gpt-6.2-sol"``)."""
 
     label: str
     """Human-friendly display name."""
@@ -112,6 +112,15 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # catalog keeps codex's list. Codex describes terra only generically, so
     # gpt-6.1-sol stays the default.
     #
+    # GPT-6.2 sol and astra (2026-11-17) top codex 0.170.0's list: sol is its
+    # "go-to model for coding and everyday work", astra its "most capable",
+    # and gpt-6.1-sol and gpt-6-astra become "previous generation". Both keep
+    # the GPT-6.1 reasoning levels. Live-verified (low and ultra; minimal
+    # rejected) against codex 0.170.0 on 2026-11-19 (#1055), and gpt-6.2-sol
+    # is now the default. Codex 0.164.0 gets "not supported when using Codex
+    # with a ChatGPT account" for the 6.2 ids, so machines need a newer codex.
+    # The models follow codex's own list order.
+    #
     # The same 2026-09-30 check realigned the older models with codex's own
     # lists: the backend now rejects ``minimal`` for every model (gpt-5.5
     # answers "Supported values are: none, low, medium, high, xhigh"), and
@@ -125,8 +134,23 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # already pinned to them.
     "codex-cli": EngineCatalogEntry(
         engine="codex-cli",
-        default_model="gpt-6.1-sol",
+        default_model="gpt-6.2-sol",
         models=(
+            EngineModel(
+                id="gpt-6.2-sol",
+                label="GPT-6.2 Sol",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
+            ),
+            EngineModel(
+                id="gpt-6.2-astra",
+                label="GPT-6.2 Astra",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
+            ),
+            EngineModel(
+                id="gpt-6.1-terra",
+                label="GPT-6.1 Terra",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
+            ),
             EngineModel(
                 id="gpt-6.1-sol",
                 label="GPT-6.1 Sol",
@@ -135,11 +159,6 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             EngineModel(
                 id="gpt-6-astra",
                 label="GPT-6 Astra",
-                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
-            ),
-            EngineModel(
-                id="gpt-6.1-terra",
-                label="GPT-6.1 Terra",
                 reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
             ),
             EngineModel(

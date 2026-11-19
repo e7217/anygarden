@@ -47,6 +47,8 @@ class TestCatalog:
         assert get_engine_entry("nonexistent") is None
 
     def test_is_valid_model(self) -> None:
+        assert is_valid_model("codex-cli", "gpt-6.2-sol") is True
+        assert is_valid_model("codex-cli", "gpt-6.2-astra") is True
         assert is_valid_model("codex-cli", "gpt-6.1-sol") is True
         assert is_valid_model("codex-cli", "gpt-6.1-terra") is True
         assert is_valid_model("codex-cli", "gpt-6-sol") is True
@@ -87,8 +89,13 @@ class TestCatalog:
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6.1-terra") is True
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6-luna") is False
         assert is_valid_reasoning_effort("codex-cli", "max", model="gpt-6-luna") is True
+        # #1055 — GPT-6.2 sol/astra keep ``ultra``.
+        assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6.2-sol") is True
+        assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6.2-astra") is True
         # The backend rejects ``minimal`` for every catalog model.
         for model in (
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
             "gpt-6.1-sol",
             "gpt-6-astra",
             "gpt-6.1-terra",
@@ -208,12 +215,14 @@ class TestEngineModelsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["engine"] == "codex-cli"
-        assert data["default_model"] == "gpt-6.1-sol"
+        assert data["default_model"] == "gpt-6.2-sol"
         model_ids = [m["id"] for m in data["models"]]
-        assert model_ids[:5] == [
+        assert model_ids[:7] == [
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
+            "gpt-6.1-terra",
             "gpt-6.1-sol",
             "gpt-6-astra",
-            "gpt-6.1-terra",
             "gpt-6-sol",
             "gpt-6-luna",
         ]
@@ -272,6 +281,10 @@ class TestEngineModelsEndpoint:
         assert "max" not in by_id["gpt-5.5"]
         assert "max" in by_id["gpt-5.6-sol"]
         assert "ultra" in by_id["gpt-6-sol"]
+        assert "ultra" in by_id["gpt-6.2-sol"]
+        assert "minimal" not in by_id["gpt-6.2-sol"]
+        assert "ultra" in by_id["gpt-6.2-astra"]
+        assert "minimal" not in by_id["gpt-6.2-astra"]
         assert "ultra" in by_id["gpt-6.1-sol"]
         assert "minimal" not in by_id["gpt-6.1-sol"]
         assert "ultra" in by_id["gpt-6.1-terra"]
