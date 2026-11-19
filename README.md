@@ -1,4 +1,9 @@
-# Anygarden
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/e7217/anygarden/main/docs/assets/brand/lockup-dark.png">
+    <img src="https://raw.githubusercontent.com/e7217/anygarden/main/docs/assets/brand/lockup.png" alt="Anygarden" height="56">
+  </picture>
+</h1>
 
 [![PyPI](https://img.shields.io/pypi/v/anygarden)](https://pypi.org/project/anygarden/)
 [![CI](https://github.com/e7217/anygarden/actions/workflows/ci.yml/badge.svg)](https://github.com/e7217/anygarden/actions/workflows/ci.yml)
