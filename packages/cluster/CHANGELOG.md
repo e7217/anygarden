@@ -4,6 +4,10 @@
 
 ### Added
 
+- The codex-cli engine offers GPT-6.2 Sol (`gpt-6.2-sol`) and GPT-6.2 Astra
+  (`gpt-6.2-astra`) (#1055), released 2026-11-17 and listed first by codex
+  0.170.0. Both were checked against live `codex exec` calls (low and ultra
+  accepted, minimal rejected).
 - The codex-cli engine offers `gpt-6.1-terra` (#996), which codex 0.164.0
   added to its model list. It was checked against a live `codex exec` call;
   the default model stays `gpt-6.1-sol`.
@@ -53,6 +57,12 @@
 
 ### Changed
 
+- The codex-cli default model is now `gpt-6.2-sol` (was `gpt-6.1-sol`)
+  (#1055). Agents left on the default model switch to it as well.
+  **Update Codex CLI to 0.170.0 or later on every machine first:** codex
+  0.164.0 is refused with "not supported when using Codex with a ChatGPT
+  account". Agents pinned to a model keep it, and older models remain
+  available.
 - An agent's instructions now live on its machine's disk (#908). The user
   part of `AGENTS.md` and the files under `skills/` are no longer
   overwritten on every start, so edits by the agent itself survive a
