@@ -9,11 +9,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.auth.dependencies import Identity
+from anygarden.auth.dependencies import ACCOUNT_DISABLED_DETAIL, Identity
 from anygarden.auth.invite_token import verify_invite_token
 from anygarden.auth.limiter import FailureLimiter
 from anygarden.auth.jwt import create_guest_token, create_user_token
 from anygarden.auth.password import hash_password, verify_password
+from anygarden.auth.settings import (
+    MAX_PASSWORD_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    registration_open,
+)
 from anygarden.db.models import Participant, Room, RoomInviteLink, User
 from anygarden.dependencies import forbid_guest, get_db
 from anygarden.observability.metrics import invites_used_total
@@ -46,8 +51,10 @@ def _login_limiter(request: Request) -> LoginFailureLimiter:
 
 
 class RegisterRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=3, max_length=255, pattern=r"^\S+@\S+$")
+    password: str = Field(
+        ..., min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH
+    )
 
 
 class RegisterResponse(BaseModel):
@@ -79,6 +86,16 @@ class MeResponse(BaseModel):
 
 class SetupStatusResponse(BaseModel):
     needs_first_account: bool
+    # #1058 — false once an admin closes sign-up; the login page then
+    # hides "Create account". Always true while no account exists.
+    registration_open: bool = True
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(
+        ..., min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH
+    )
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -93,7 +110,10 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
     the page can already register and become the admin.
     """
     has_user = (await db.execute(select(exists(select(User.id))))).scalar()
-    return SetupStatusResponse(needs_first_account=not has_user)
+    return SetupStatusResponse(
+        needs_first_account=not has_user,
+        registration_open=not has_user or await registration_open(db),
+    )
 
 
 
@@ -104,6 +124,15 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new user account."""
+    # #1058 — the first account can always register (it becomes the
+    # admin); after that an admin may close sign-up.
+    if not await registration_open(db):
+        has_user = (await db.execute(select(exists(select(User.id))))).scalar()
+        if has_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Registration is closed",
+            )
     # Check email uniqueness
     existing = await db.execute(select(User).where(User.email == body.email))
     if existing.scalar_one_or_none() is not None:
@@ -116,6 +145,8 @@ async def register(
         email=body.email,
         password_hash=hash_password(body.password),
         is_admin=False,
+        # Registering signs the person in.
+        last_login_at=datetime.now(timezone.utc),
     )
     db.add(user)
     await db.flush()
@@ -172,6 +203,13 @@ async def login(
             detail="Invalid email or password",
         )
     limiter.reset(key)
+    if user.disabled_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ACCOUNT_DISABLED_DETAIL,
+        )
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.commit()
 
     config = request.app.state.config
     token = create_user_token(
@@ -197,7 +235,11 @@ async def dev_token(
     if not config.dev:
         raise HTTPException(status_code=404, detail="Not found")
 
-    result = await db.execute(select(User).where(User.is_admin.is_(True)).limit(1))
+    result = await db.execute(
+        select(User)
+        .where(User.is_admin.is_(True), User.disabled_at.is_(None))
+        .limit(1)
+    )
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=503, detail="No admin user")
@@ -230,6 +272,46 @@ async def me(
         id=identity.claims.user_id,
         email=identity.claims.email,
         is_admin=identity.claims.is_admin,
+    )
+
+
+@router.post("/password", response_model=LoginResponse)
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change the caller's password (#1058).
+
+    Every other session of the account ends; the response carries a
+    fresh token so the caller stays signed in.
+    """
+    # A personal API key must not be able to take over the account.
+    if identity.kind != "user" or identity.api_key_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sign in with your password to change it",
+        )
+    user = await db.get(User, identity.id)
+    if user is None or not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    user.password_hash = hash_password(body.new_password)
+    user.credentials_changed_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    token = create_user_token(
+        user_id=user.id,
+        email=user.email,
+        is_admin=user.is_admin,
+        secret=request.app.state.config.jwt_secret,
+    )
+    return LoginResponse(
+        token=token,
+        user=LoginUserOut(id=user.id, email=user.email, is_admin=user.is_admin),
     )
 
 

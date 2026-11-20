@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 
 from anygarden.api.v1.agents import router as agents_api_router
 from anygarden.api.v1.budgets import router as budgets_router
+from anygarden.api.v1.users import router as admin_users_router
 from anygarden.api.v1.campaigns import router as campaigns_router
 from anygarden.workspace.router import drafts_router as workspace_drafts_router
 from anygarden.workspace.router import router as workspace_actions_router
@@ -2058,6 +2059,7 @@ def create_app(
     # router cannot change runtime behaviour until an admin enables a
     # policy.
     app.include_router(budgets_router)
+    app.include_router(admin_users_router)
 
     # #420 — expose the Prometheus metrics defined in
     # ``observability.metrics`` (previously defined but never scrapeable

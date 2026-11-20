@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { ChevronUp, KeyRound, SlidersHorizontal } from 'lucide-react'
+import { ChevronUp, KeyRound, LockKeyhole, SlidersHorizontal } from 'lucide-react'
 import ApiKeysDialog from '@/components/ApiKeysDialog'
+import ChangePasswordDialog from '@/components/ChangePasswordDialog'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { LocaleToggle } from '@/i18n/LocaleToggle'
 import { ThemeToggle } from '@/theme/ThemeToggle'
@@ -16,6 +17,7 @@ export default function SidebarPreferencesMenu({ email, serverVersion, isAdmin =
   const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const [apiKeysOpen, setApiKeysOpen] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
   const menuId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -95,10 +97,22 @@ export default function SidebarPreferencesMenu({ email, serverVersion, isAdmin =
               <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" />
               {t('apiKeys.menuItem')}
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                setPasswordOpen(true)
+              }}
+              className="flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-badge font-medium text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+            >
+              <LockKeyhole className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {t('account.changePassword')}
+            </button>
           </div>
         </div>
       )}
       <ApiKeysDialog open={apiKeysOpen} onOpenChange={setApiKeysOpen} isAdmin={isAdmin} />
+      <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
     </div>
   )
 }

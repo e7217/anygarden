@@ -36,6 +36,9 @@ from anygarden.db.models import (
 # writing it on every call would turn read-only polling into DB writes.
 API_KEY_LAST_USED_RESOLUTION = timedelta(seconds=60)
 
+# #1058 — the login page shows a specific message for this detail.
+ACCOUNT_DISABLED_DETAIL = "Account disabled"
+
 
 @dataclass(frozen=True, slots=True)
 class Identity:
@@ -131,13 +134,33 @@ async def get_identity(
         # #782 — ``is_admin`` comes from the DB, not the token, so a
         # removed admin or deleted account stops working immediately
         # instead of when the 24h JWT expires.
-        is_admin = (
-            await db.execute(select(User.is_admin).where(User.id == claims.user_id))
-        ).scalar_one_or_none()
-        if is_admin is None:
+        row = (
+            await db.execute(
+                select(
+                    User.is_admin, User.disabled_at, User.credentials_changed_at
+                ).where(User.id == claims.user_id)
+            )
+        ).one_or_none()
+        if row is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
+            )
+        is_admin, disabled_at, credentials_changed_at = row
+        # #1058 — a suspended account and sessions older than the last
+        # password change stop working at once.
+        if disabled_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=ACCOUNT_DISABLED_DETAIL,
+            )
+        if credentials_changed_at is not None and (
+            claims.issued_at_ms is None
+            or claims.issued_at_ms < credentials_changed_at.timestamp() * 1000
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired after a password change",
             )
         if is_admin != claims.is_admin:
             claims = replace(claims, is_admin=is_admin)
@@ -189,7 +212,7 @@ async def _identity_from_api_key(db: AsyncSession, token: str) -> Identity:
         if not verify_api_key_hash(token, key.token_hash):
             continue
         user = await db.get(User, key.user_id)
-        if user is None or user.is_anonymous:
+        if user is None or user.is_anonymous or user.disabled_at is not None:
             break
         if key.last_used_at is None or now - key.last_used_at >= API_KEY_LAST_USED_RESOLUTION:
             key.last_used_at = now

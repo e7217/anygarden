@@ -15,15 +15,19 @@ export default function LoginForm() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState('login')
+  const [registrationOpen, setRegistrationOpen] = useState(true)
 
   // #902 — a fresh node has no account to log in to; open on Create account.
+  // #1058 — once an admin closes sign-up, only Log in remains.
   useEffect(() => {
     let active = true
     apiFetch('/api/v1/auth/setup')
       .then(async response => {
         if (!response.ok) return
-        const body = await response.json() as { needs_first_account?: boolean }
-        if (active && body.needs_first_account) setTab('register')
+        const body = await response.json() as { needs_first_account?: boolean; registration_open?: boolean }
+        if (!active) return
+        if (body.needs_first_account) setTab('register')
+        else if (body.registration_open === false) setRegistrationOpen(false)
       })
       .catch(() => {})
     return () => { active = false }
@@ -36,8 +40,9 @@ export default function LoginForm() {
     try {
       await login(email, password)
       window.location.href = '/'
-    } catch {
-      setError(t('auth.loginFailed'))
+    } catch (err) {
+      setError(err instanceof Error && err.message === 'Account disabled'
+        ? t('auth.accountDisabled') : t('auth.loginFailed'))
     }
     setLoading(false)
   }
@@ -50,8 +55,14 @@ export default function LoginForm() {
       await register(email, password)
       window.location.href = '/'
     } catch (err) {
-      setError(err instanceof Error && err.message === 'Email already registered'
-        ? t('auth.emailRegistered') : t('auth.registerFailed'))
+      const message = err instanceof Error ? err.message : ''
+      if (message === 'Registration is closed') {
+        setRegistrationOpen(false)
+        setTab('login')
+        setError(t('auth.registrationClosed'))
+      } else {
+        setError(message === 'Email already registered' ? t('auth.emailRegistered') : t('auth.registerFailed'))
+      }
     }
     setLoading(false)
   }
@@ -64,10 +75,12 @@ export default function LoginForm() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="login">{t('auth.login')}</TabsTrigger>
-          <TabsTrigger value="register">{t('auth.register')}</TabsTrigger>
-        </TabsList>
+        {registrationOpen && (
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="login">{t('auth.login')}</TabsTrigger>
+            <TabsTrigger value="register">{t('auth.register')}</TabsTrigger>
+          </TabsList>
+        )}
 
         {error && (
           <div role="alert" className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 p-3 text-caption text-[var(--color-danger)]">
@@ -102,6 +115,9 @@ export default function LoginForm() {
             <Button type="submit" size="lg" className="w-full" disabled={loading}>
               {loading ? t('auth.signingIn') : t('auth.signIn')}
             </Button>
+            {!registrationOpen && (
+              <p className="text-center text-caption text-[var(--color-foreground-muted)]">{t('auth.registrationClosed')}</p>
+            )}
           </form>
         </TabsContent>
 
@@ -127,8 +143,10 @@ export default function LoginForm() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
-                minLength={6}
+                minLength={8}
+                aria-describedby="reg-password-hint"
               />
+              <p id="reg-password-hint" className="text-caption text-[var(--color-foreground-muted)]">{t('auth.passwordHint')}</p>
             </div>
             <Button type="submit" size="lg" className="w-full" disabled={loading}>
               {loading ? t('auth.creatingAccount') : t('auth.register')}

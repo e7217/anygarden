@@ -55,15 +55,15 @@ async def test_setup_reports_needs_first_account_until_someone_registers(
 ):
     resp = await auth_env.get("/api/v1/auth/setup")
     assert resp.status_code == 200
-    assert resp.json() == {"needs_first_account": True}
+    assert resp.json() == {"needs_first_account": True, "registration_open": True}
 
     await auth_env.post(
         "/api/v1/auth/register",
-        json={"email": "first@example.com", "password": "s3cret!"},
+        json={"email": "first@example.com", "password": "s3cret!!"},
     )
 
     resp = await auth_env.get("/api/v1/auth/setup")
-    assert resp.json() == {"needs_first_account": False}
+    assert resp.json() == {"needs_first_account": False, "registration_open": True}
 
 
 # ── Registration ─────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ async def test_setup_reports_needs_first_account_until_someone_registers(
 async def test_register_success(auth_env: AsyncClient):
     resp = await auth_env.post(
         "/api/v1/auth/register",
-        json={"email": "alice@example.com", "password": "s3cret!"},
+        json={"email": "alice@example.com", "password": "s3cret!!"},
     )
     assert resp.status_code == 201
     data = resp.json()
@@ -82,7 +82,7 @@ async def test_register_success(auth_env: AsyncClient):
 
 @pytest.mark.req("AUTH-01")
 async def test_register_duplicate_email(auth_env: AsyncClient):
-    payload = {"email": "alice@example.com", "password": "s3cret!"}
+    payload = {"email": "alice@example.com", "password": "s3cret!!"}
     await auth_env.post("/api/v1/auth/register", json=payload)
     resp = await auth_env.post("/api/v1/auth/register", json=payload)
     assert resp.status_code == 409
@@ -92,7 +92,7 @@ async def test_register_duplicate_email(auth_env: AsyncClient):
 async def test_register_first_user_is_admin(auth_env: AsyncClient):
     resp = await auth_env.post(
         "/api/v1/auth/register",
-        json={"email": "first@example.com", "password": "s3cret!"},
+        json={"email": "first@example.com", "password": "s3cret!!"},
     )
     assert resp.status_code == 201
     token = resp.json()["token"]
@@ -109,7 +109,7 @@ async def test_register_second_user_not_admin(auth_env: AsyncClient):
     # First user (admin)
     await auth_env.post(
         "/api/v1/auth/register",
-        json={"email": "first@example.com", "password": "s3cret!"},
+        json={"email": "first@example.com", "password": "s3cret!!"},
     )
 
     # Second user (not admin)
@@ -131,7 +131,7 @@ async def test_register_second_user_not_admin(auth_env: AsyncClient):
 
 
 async def test_login_success(auth_env: AsyncClient):
-    payload = {"email": "login@example.com", "password": "s3cret!"}
+    payload = {"email": "login@example.com", "password": "s3cret!!"}
     await auth_env.post("/api/v1/auth/register", json=payload)
     resp = await auth_env.post("/api/v1/auth/login", json=payload)
     assert resp.status_code == 200
@@ -142,7 +142,7 @@ async def test_login_success(auth_env: AsyncClient):
 
 @pytest.mark.req("AUTH-02")
 async def test_login_wrong_password(auth_env: AsyncClient):
-    payload = {"email": "wrong-pw@example.com", "password": "s3cret!"}
+    payload = {"email": "wrong-pw@example.com", "password": "s3cret!!"}
     await auth_env.post("/api/v1/auth/register", json=payload)
     resp = await auth_env.post(
         "/api/v1/auth/login",
@@ -166,7 +166,7 @@ async def test_login_nonexistent_email(auth_env: AsyncClient):
 async def test_me_authenticated(auth_env: AsyncClient):
     reg = await auth_env.post(
         "/api/v1/auth/register",
-        json={"email": "me@example.com", "password": "s3cret!"},
+        json={"email": "me@example.com", "password": "s3cret!!"},
     )
     token = reg.json()["token"]
 

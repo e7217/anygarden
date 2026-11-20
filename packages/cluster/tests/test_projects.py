@@ -50,7 +50,7 @@ async def _register_and_get_token(client: AsyncClient) -> str:
     """Helper: register a user and return the JWT."""
     resp = await client.post(
         "/api/v1/auth/register",
-        json={"email": "proj-user@example.com", "password": "s3cret!"},
+        json={"email": "proj-user@example.com", "password": "s3cret!!"},
     )
     assert resp.status_code == 201
     return resp.json()["token"]
