@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import {
-  BookOpen, Gauge, Network, Plug, Server, Settings, Share2, Waypoints,
+  BookOpen, Gauge, Network, Plug, Server, Settings, Share2, Users, Waypoints,
 } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 import type { MessageKey } from '@/i18n/messages'
@@ -13,6 +13,7 @@ interface SidebarAdminMenuProps {
 
 const links: { labelKey: MessageKey; path: string; icon: typeof Server; children?: boolean; experimental?: boolean }[] = [
   { labelKey: 'navigation.machines', path: '/admin/machines', icon: Server },
+  { labelKey: 'navigation.users', path: '/admin/users', icon: Users },
   { labelKey: 'navigation.skills', path: '/admin/skills', icon: BookOpen },
   { labelKey: 'navigation.mcpServers', path: '/admin/mcp-templates', icon: Plug },
   { labelKey: 'navigation.usage', path: '/admin/usage', icon: Waypoints, children: true },

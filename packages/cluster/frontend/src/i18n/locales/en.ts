@@ -15,7 +15,8 @@ import { taskRecoveryEn } from '../catalogs/taskRecovery?locale=en'
 import { budgetsEn } from '../catalogs/budgets?locale=en'
 import { campaignsEn } from '../catalogs/campaigns?locale=en'
 import { apiKeysEn } from '../catalogs/apiKeys?locale=en'
+import { usersEn } from '../catalogs/users?locale=en'
 import { agentLinksEn } from '../catalogs/agentLinks?locale=en'
 import { peerChainsEn } from '../catalogs/peerChains?locale=en'
 
-export const en = { ...agentSetupEn, ...coreEn, ...chatEn, ...adminEn, ...guestEn, ...federationEn, ...roomsEn, ...workflowsEn, ...inboxEn, ...projectExecutionsEn, ...taskRecoveryEn, ...budgetsEn, ...campaignsEn, ...apiKeysEn, ...agentLinksEn, ...peerChainsEn } as const
+export const en = { ...agentSetupEn, ...coreEn, ...chatEn, ...adminEn, ...guestEn, ...federationEn, ...roomsEn, ...workflowsEn, ...inboxEn, ...projectExecutionsEn, ...taskRecoveryEn, ...budgetsEn, ...campaignsEn, ...apiKeysEn, ...usersEn, ...agentLinksEn, ...peerChainsEn } as const

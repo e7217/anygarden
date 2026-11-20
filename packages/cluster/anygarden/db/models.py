@@ -244,6 +244,31 @@ class User(Base):
     # auth handler, not the DB.
     display_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    # #1058 — an admin suspends an account instead of deleting it: rooms,
+    # messages and tasks keep pointing at the row. A suspended account
+    # cannot log in, and its sessions and API keys stop working.
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
+    # Set when the password changes; sessions issued earlier are rejected.
+    credentials_changed_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True
+    )
+
+
+class ServerSetting(Base):
+    """Node-wide settings an admin changes at runtime (#1058).
+
+    Key/value so the next setting needs no migration. ``value`` holds
+    JSON; readers fall back to their own default when a key is absent.
+    """
+
+    __tablename__ = "server_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
 
 
 class Agent(Base):

@@ -108,7 +108,7 @@ async def test_only_first_registration_is_admin_even_when_concurrent(env):
     assert len(admins) == 1
 
     later = await env["client"].post(
-        "/api/v1/auth/register", json={"email": "late@anygarden.io", "password": "pw"}
+        "/api/v1/auth/register", json={"email": "late@anygarden.io", "password": "late-password"}
     )
     assert later.status_code == 201
     me = await env["client"].get(

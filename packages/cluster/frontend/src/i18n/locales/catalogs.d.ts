@@ -16,6 +16,7 @@ declare module '*?locale=en' {
   export const budgetsEn: typeof import('../catalogs/budgets').budgetsEn
   export const campaignsEn: typeof import('../catalogs/campaigns').campaignsEn
   export const apiKeysEn: typeof import('../catalogs/apiKeys').apiKeysEn
+  export const usersEn: typeof import('../catalogs/users').usersEn
   export const agentLinksEn: typeof import('../catalogs/agentLinks').agentLinksEn
   export const peerChainsEn: typeof import('../catalogs/peerChains').peerChainsEn
 }
@@ -34,6 +35,7 @@ declare module '*?locale=ko' {
   export const budgetsKo: typeof import('../catalogs/budgets').budgetsKo
   export const campaignsKo: typeof import('../catalogs/campaigns').campaignsKo
   export const apiKeysKo: typeof import('../catalogs/apiKeys').apiKeysKo
+  export const usersKo: typeof import('../catalogs/users').usersKo
   export const agentLinksKo: typeof import('../catalogs/agentLinks').agentLinksKo
   export const peerChainsKo: typeof import('../catalogs/peerChains').peerChainsKo
 }

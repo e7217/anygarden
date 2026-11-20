@@ -34,3 +34,22 @@ it('[AUTH-10] falls back to Log in when the setup check fails', async () => {
   await waitFor(() => expect(mocks.setup).toHaveBeenCalled())
   expect(selectedTab()).toHaveTextContent('Log in')
 })
+
+it('[AUTH-20] hides Create account once an admin closes sign-up', async () => {
+  mocks.setup.mockResolvedValue({
+    ok: true,
+    json: async () => ({ needs_first_account: false, registration_open: false }),
+  })
+  render(<LoginForm />)
+  expect(await screen.findByText(/Sign-up is closed on this server/)).toBeInTheDocument()
+  expect(screen.queryByRole('tab', { name: 'Create account' })).not.toBeInTheDocument()
+})
+
+it('[AUTH-20] keeps Create account for the first account even if sign-up is closed', async () => {
+  mocks.setup.mockResolvedValue({
+    ok: true,
+    json: async () => ({ needs_first_account: true, registration_open: true }),
+  })
+  render(<LoginForm />)
+  await waitFor(() => expect(selectedTab()).toHaveTextContent('Create account'))
+})

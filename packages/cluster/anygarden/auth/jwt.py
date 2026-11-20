@@ -24,6 +24,12 @@ class UserClaims:
     user_id: str
     email: str
     is_admin: bool
+    # #1058 — when the token was issued, in epoch milliseconds (``iat``
+    # alone is whole seconds, too coarse to tell a session from one
+    # issued right after a password change). Sessions issued before the
+    # account's last password change are rejected. ``None`` for claims
+    # built from an API key, which has its own revocation.
+    issued_at_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +62,7 @@ def create_user_token(
         "email": email,
         "is_admin": is_admin,
         "iat": now,
+        "iat_ms": int(now.timestamp() * 1000),
         "exp": now + timedelta(hours=expire_hours),
     }
     return jwt.encode(payload, secret, algorithm="HS256")
@@ -89,6 +96,14 @@ def create_guest_token(
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
+def _issued_at_ms(payload: dict) -> int | None:
+    if isinstance(payload.get("iat_ms"), int):
+        return payload["iat_ms"]
+    # Tokens issued before #1058 carry only whole-second ``iat``.
+    iat = payload.get("iat")
+    return iat * 1000 if isinstance(iat, int) else None
+
+
 def verify_user_token(token: str, *, secret: str) -> UserClaims:
     """Decode and validate a registered-user JWT.
 
@@ -107,6 +122,7 @@ def verify_user_token(token: str, *, secret: str) -> UserClaims:
         user_id=payload["sub"],
         email=payload["email"],
         is_admin=payload.get("is_admin", False),
+        issued_at_ms=_issued_at_ms(payload),
     )
 
 
@@ -151,4 +167,5 @@ def decode_any_user_token(token: str, *, secret: str) -> UserClaims | GuestClaim
         user_id=payload["sub"],
         email=payload["email"],
         is_admin=payload.get("is_admin", False),
+        issued_at_ms=_issued_at_ms(payload),
     )

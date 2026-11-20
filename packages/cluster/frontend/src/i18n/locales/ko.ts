@@ -16,7 +16,8 @@ import { taskRecoveryKo } from '../catalogs/taskRecovery?locale=ko'
 import { budgetsKo } from '../catalogs/budgets?locale=ko'
 import { campaignsKo } from '../catalogs/campaigns?locale=ko'
 import { apiKeysKo } from '../catalogs/apiKeys?locale=ko'
+import { usersKo } from '../catalogs/users?locale=ko'
 import { agentLinksKo } from '../catalogs/agentLinks?locale=ko'
 import { peerChainsKo } from '../catalogs/peerChains?locale=ko'
 
-export const ko: Record<MessageKey, string> = { ...agentSetupKo, ...coreKo, ...chatKo, ...adminKo, ...guestKo, ...federationKo, ...roomsKo, ...workflowsKo, ...inboxKo, ...projectExecutionsKo, ...taskRecoveryKo, ...budgetsKo, ...campaignsKo, ...apiKeysKo, ...agentLinksKo, ...peerChainsKo }
+export const ko: Record<MessageKey, string> = { ...agentSetupKo, ...coreKo, ...chatKo, ...adminKo, ...guestKo, ...federationKo, ...roomsKo, ...workflowsKo, ...inboxKo, ...projectExecutionsKo, ...taskRecoveryKo, ...budgetsKo, ...campaignsKo, ...apiKeysKo, ...usersKo, ...agentLinksKo, ...peerChainsKo }
