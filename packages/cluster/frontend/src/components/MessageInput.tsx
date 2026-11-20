@@ -229,6 +229,8 @@ export default function MessageInput({
   // them so the drop hint doesn't flicker while moving over the chips.
   const dragDepth = useRef(0)
   const [dragActive, setDragActive] = useState(false)
+  // Focus anywhere in the composer box (textarea, + menu, buttons).
+  const [composerFocused, setComposerFocused] = useState(false)
   const { files: roomFiles, refresh: refreshRoomFiles } = useRoomFiles(roomId ?? null)
 
   const autoResize = useCallback(() => {
@@ -609,7 +611,11 @@ export default function MessageInput({
   const updateMentionPosition = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
-    setPopoverPos({ top: el.offsetHeight + 4, left: 0 })
+    // Anchor above the textarea's top edge — on phones the action row
+    // sits below it, so the textarea is not flush with the box bottom.
+    const box = el.offsetParent as HTMLElement | null
+    const fromBottom = box ? box.clientHeight - el.offsetTop : el.offsetHeight
+    setPopoverPos({ top: fromBottom + 4, left: 0 })
   }, [])
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -676,6 +682,13 @@ export default function MessageInput({
       m => m.token.startsWith('<@user:') && value.includes(m.displayText),
     )
     && !mentionUsers.some(o => value.includes(`@${o.display}`))
+
+  // Phones put the text on its own full-width row (actions below) once the
+  // composer is in use, so a narrow screen still gets room to type.
+  const composerExpanded = composerFocused
+    || value.length > 0
+    || attachments.length > 0
+    || addMenuOpen
 
   return (
     <div data-testid="message-composer" className="min-h-[var(--footer-min-height)] border-t border-[var(--color-border)] bg-[var(--color-surface)] py-3">
@@ -745,7 +758,14 @@ export default function MessageInput({
             ))}
           </div>
         )}
-        <div data-testid="composer-box" className="relative flex w-full items-end gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[var(--color-brand-focus)] focus-within:ring-2 focus-within:ring-[var(--color-brand-focus)]/35">
+        <div
+          data-testid="composer-box"
+          data-expanded={composerExpanded || undefined}
+          onFocus={() => setComposerFocused(true)}
+          onBlur={e => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setComposerFocused(false)
+          }}
+          className="group/composer relative flex w-full flex-wrap items-end gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[var(--color-brand-focus)] focus-within:ring-2 focus-within:ring-[var(--color-brand-focus)]/35">
           {mention && filtered.length > 0 && (
             <MentionPopover
               options={filtered}
@@ -767,6 +787,9 @@ export default function MessageInput({
               />
               <button
                 type="button"
+                // Keep focus in the textarea so a tap doesn't collapse the
+                // expanded phone layout under the finger.
+                onMouseDown={e => e.preventDefault()}
                 onClick={() => setAddMenuOpen(open => !open)}
                 disabled={disabled || uploading}
                 title={t('chat.addMenu')}
@@ -821,17 +844,18 @@ export default function MessageInput({
             // both the empty box (:placeholder-shown) and ::placeholder are
             // nowrap/hidden/ellipsis, and drops it while focused (the text
             // is then clipped, still on one line). Typed text still wraps.
-            className="min-h-[var(--control-icon-size)] flex-1 resize-none bg-transparent px-2 py-[calc((var(--control-icon-size)-1.5rem)/2)] text-body leading-6 md:text-caption text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] placeholder-shown:overflow-hidden placeholder-shown:text-ellipsis placeholder-shown:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-[var(--control-icon-size)] min-w-0 flex-1 resize-none max-md:group-data-[expanded]/composer:order-first max-md:group-data-[expanded]/composer:basis-full bg-transparent px-2 py-[calc((var(--control-icon-size)-1.5rem)/2)] text-body leading-6 md:text-caption text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] placeholder-shown:overflow-hidden placeholder-shown:text-ellipsis placeholder-shown:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           />
           <button
             type="button"
+            onMouseDown={e => e.preventDefault()}
             onClick={handleSend}
             disabled={
               disabled || uploading || (!value.trim() && attachments.length === 0)
             }
             title={t('chat.sendMessage')}
             aria-label={t('chat.sendMessage')}
-            className="flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] text-[var(--color-on-brand)] transition-colors hover:bg-[var(--color-brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-hover)] disabled:text-[var(--color-foreground-subtle)]"
+            className="ml-auto flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] text-[var(--color-on-brand)] transition-colors hover:bg-[var(--color-brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-hover)] disabled:text-[var(--color-foreground-subtle)]"
           >
             <ArrowUp className="h-4 w-4" />
           </button>

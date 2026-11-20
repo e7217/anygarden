@@ -312,3 +312,38 @@ test.describe('composer placeholder (#867)', () => {
     expect(height).toBeGreaterThan(oneLine + 1)
   })
 })
+
+test.describe('phone composer rows', () => {
+  const textarea = (page: Page) => composerBox(page).locator('textarea')
+  const send = (page: Page) => composerBox(page).getByRole('button', { name: 'Send message' })
+
+  test('the text takes its own row once the composer is in use at 375px', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 })
+    await openRoom(page)
+    const idleText = await box(textarea(page))
+    const idleSend = await box(send(page))
+    expect(idleText.y + idleText.height).toBeGreaterThan(idleSend.y)
+
+    await textarea(page).focus()
+    const text = await box(textarea(page))
+    const sendBox = await box(send(page))
+    const container = await box(composerBox(page))
+    expect(text.y + text.height).toBeLessThanOrEqual(sendBox.y + 1)
+    expect(text.width).toBeGreaterThan(container.width - 24)
+
+    // Typed text keeps the layout after the keyboard closes.
+    await textarea(page).fill('hello')
+    await textarea(page).blur()
+    const kept = await box(send(page))
+    expect(kept.y).toBeGreaterThanOrEqual(text.y + text.height - 1)
+  })
+
+  test('desktop keeps one row while focused', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await openRoom(page)
+    await textarea(page).focus()
+    const text = await box(textarea(page))
+    const sendBox = await box(send(page))
+    expect(text.y + text.height).toBeGreaterThan(sendBox.y)
+  })
+})
